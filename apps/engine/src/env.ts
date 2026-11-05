@@ -32,6 +32,8 @@ const BaseEnv = z.object({
   NEARAI_ROUTER_MODEL: z.string().default('z-ai/glm-5.3-flash'),
   NEARAI_EMBEDDING_MODEL: z.string().default('Qwen/Qwen3-Embedding-0.6B'),
 
+  COMPOSIO_API_KEY: optionalStr,
+
   NEAR_NETWORK: z.enum(['mainnet', 'testnet']).default('testnet'),
   NEAR_APP_ACCOUNT_ID: z.string().default('penny.near'),
   NEAR_RELAYER_ACCOUNT_ID: optionalStr,

@@ -8,6 +8,7 @@ import { MoodService } from './brain/mood.ts';
 import { ReflectionService } from './brain/reflection.ts';
 import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
+import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
 import { buildRoutes } from './http/routes.ts';
@@ -39,6 +40,7 @@ export type EngineDeps = {
   embedder: Embedder;
   market: MarketPort;
   registry: ToolRegistry;
+  connectors?: ConnectorPort;
   log: Logger;
   publicBaseUrl: string;
   webhookSecret: string | undefined;
@@ -94,6 +96,7 @@ export function createEngine(d: EngineDeps) {
     router: d.models.router,
     chat: d.models.chat,
     registry: d.registry,
+    ...(d.connectors ? { connectors: d.connectors } : {}),
     bots: repos.bots,
     messages: repos.messages,
     users: repos.users,

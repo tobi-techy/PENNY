@@ -67,7 +67,11 @@ export type TestEngine = {
 };
 
 export async function makeEngine(
-  opts: { router?: LanguageModel; chat?: LanguageModel } = {},
+  opts: {
+    router?: LanguageModel;
+    chat?: LanguageModel;
+    connectors?: import('../src/connectors/composio.ts').ConnectorPort;
+  } = {},
 ): Promise<TestEngine> {
   const db = await createPgliteDb();
   const chain = new FakeChain();
@@ -86,6 +90,7 @@ export async function makeEngine(
       embedder: new FakeEmbedder(),
       market: new FakeMarket(() => clock.now),
       registry: createRegistry(),
+      ...(opts.connectors ? { connectors: opts.connectors } : {}),
       log: createLogger('silent'),
       publicBaseUrl: 'https://penny.test',
       webhookSecret: WEBHOOK_SECRET,

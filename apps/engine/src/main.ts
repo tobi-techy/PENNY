@@ -6,6 +6,7 @@ import { FakeEmbedder } from './brain/memory.ts';
 import { NearAiEmbedder, nearAiModels } from './brain/model.ts';
 import { createRegistry, FakeMarket } from './brain/tools.ts';
 import { LangfuseTracer, noopTracer } from './brain/tracing.ts';
+import { ComposioConnector } from './connectors/composio.ts';
 import { createPgliteDb, createPostgresDb } from './db/client.ts';
 import { loadEnv } from './env.ts';
 import { createLogger } from './lib/logger.ts';
@@ -79,6 +80,7 @@ const engine = createEngine({
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
   market: new FakeMarket(),
   registry: createRegistry(),
+  ...(env.COMPOSIO_API_KEY ? { connectors: new ComposioConnector(env.COMPOSIO_API_KEY) } : {}),
   log,
   publicBaseUrl: env.PUBLIC_BASE_URL,
   webhookSecret: env.SPECTRUM_WEBHOOK_SECRET,
@@ -98,7 +100,13 @@ await engine.services.bots.seedBuiltIns(join(import.meta.dir, '..', '..', '..', 
 engine.services.scheduler.start(15_000);
 
 log.info(
-  { env: env.PENNY_ENV, dryRun: env.DRY_RUN, relayLive: env.relayLive, port: env.PORT },
+  {
+    env: env.PENNY_ENV,
+    dryRun: env.DRY_RUN,
+    relayLive: env.relayLive,
+    composio: Boolean(env.COMPOSIO_API_KEY),
+    port: env.PORT,
+  },
   'penny engine up',
 );
 
