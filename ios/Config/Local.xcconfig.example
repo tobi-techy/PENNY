@@ -1,0 +1,4 @@
+// Copy to Config/Local.xcconfig and fill in. This file is git-ignored.
+PENNY_TEAM_ID = ABCDE12345
+PENNY_BUNDLE_PREFIX = app.penny
+PENNY_ENGINE_HOST = your-engine.fly.dev

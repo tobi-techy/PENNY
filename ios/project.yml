@@ -1,0 +1,132 @@
+# XcodeGen spec for Penny iOS. Generate with:  xcodegen generate
+# Team id, bundle prefix and engine host live in Config/Local.xcconfig (see Config/Base.xcconfig).
+name: Penny
+
+options:
+  bundleIdPrefix: app.penny
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: $(PENNY_TEAM_ID)
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"            # Swift 5 language mode, built with the Swift 5.10+/6 compiler
+    TARGETED_DEVICE_FAMILY: "1"     # iPhone
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+
+packages:
+  PennyKit:
+    path: PennyKit
+
+targets:
+  PennyHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: PennyHost
+    dependencies:
+      - package: PennyKit
+        product: PennyCore
+      - package: PennyKit
+        product: PennyUI
+      - target: PennyMessages
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: Penny
+        PRODUCT_BUNDLE_IDENTIFIER: $(PENNY_BUNDLE_PREFIX).host
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: PennyHost/Info.plist
+      properties:
+        CFBundleDisplayName: Penny
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Dark
+        NSFaceIDUsageDescription: Penny uses Face ID to unlock your wallet key and approve each payment. The key never leaves this iPhone.
+        ITSAppUsesNonExemptEncryption: false
+        PennyKeychainAccessGroup: $(AppIdentifierPrefix)$(PENNY_BUNDLE_PREFIX).shared
+        PennyAppGroup: group.$(PENNY_BUNDLE_PREFIX).host
+        PennyEngineURL: https://$(PENNY_ENGINE_HOST)
+    entitlements:
+      path: PennyHost/PennyHost.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(PENNY_BUNDLE_PREFIX).shared
+        com.apple.security.application-groups:
+          - group.$(PENNY_BUNDLE_PREFIX).host
+
+  PennyMessages:
+    type: app-extension.messages
+    platform: iOS
+    sources:
+      - path: PennyMessages
+    dependencies:
+      - package: PennyKit
+        product: PennyCore
+      - package: PennyKit
+        product: PennyUI
+    settings:
+      base:
+        PRODUCT_NAME: PennyMessages
+        PRODUCT_BUNDLE_IDENTIFIER: $(PENNY_BUNDLE_PREFIX).host.messages
+        ASSETCATALOG_COMPILER_APPICON_NAME: iMessage App Icon
+    info:
+      path: PennyMessages/Info.plist
+      properties:
+        CFBundleDisplayName: Penny
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSFaceIDUsageDescription: Penny uses Face ID to unlock your wallet key and approve each payment. The key never leaves this iPhone.
+        PennyKeychainAccessGroup: $(AppIdentifierPrefix)$(PENNY_BUNDLE_PREFIX).shared
+        PennyAppGroup: group.$(PENNY_BUNDLE_PREFIX).host
+        PennyEngineURL: https://$(PENNY_ENGINE_HOST)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.message-payload-provider
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).MessagesViewController
+    entitlements:
+      path: PennyMessages/PennyMessages.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(PENNY_BUNDLE_PREFIX).shared
+        com.apple.security.application-groups:
+          - group.$(PENNY_BUNDLE_PREFIX).host
+
+schemes:
+  PennyHost:
+    build:
+      targets:
+        PennyHost: all
+        PennyMessages: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - package: PennyKit/PennyCoreTests
+    archive:
+      config: Release
+  PennyMessages:
+    build:
+      targets:
+        PennyMessages: all
+        PennyHost: all
+    run:
+      config: Debug
+      askForAppToLaunch: true
+      launchAutomaticallySubstyle: "2"

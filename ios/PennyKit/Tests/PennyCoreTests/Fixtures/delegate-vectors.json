@@ -1,0 +1,59 @@
+{
+  "prefix": 1073742190,
+  "source": "Generated with @near-js/transactions 1.x encodeDelegateAction / encodeSignedDelegate; ed25519 via node:crypto (deterministic). FunctionCall args bytes = RFC 8785 canonical JSON (UTF-8) of the args object. Prefix = 2^30 + 366 (NEP-461), see nearcore core/primitives/src/signable_message.rs",
+  "vectors": [
+    {
+      "name": "delegate-ft-transfer-call",
+      "description": "ft_transfer_call with JCS args, gas 30 Tgas, deposit 1 yocto",
+      "seedHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "publicKey": "ed25519:9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+      "publicKeyBase64Url": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+      "delegate": {
+        "senderId": "tobi.penny.near",
+        "receiverId": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+        "actions": [
+          {
+            "type": "FunctionCall",
+            "methodName": "ft_transfer_call",
+            "args": {
+              "amount": "50000000",
+              "msg": "{\"deposit\":\"abc\"}",
+              "receiver_id": "intents.near"
+            },
+            "gas": "30000000000000",
+            "deposit": "1"
+          }
+        ],
+        "nonce": "1234",
+        "maxBlockHeight": "123456789"
+      },
+      "signableMessageHex": "6e0100400f000000746f62692e70656e6e792e6e656172400000003137323038363238663834663564366164333366306461336262626562323766666362333938656163353031613331626436616432303131653336313333613101000000021000000066745f7472616e736665725f63616c6c500000007b22616d6f756e74223a223530303030303030222c226d7367223a227b5c226465706f7369745c223a5c226162635c227d222c2272656365697665725f6964223a22696e74656e74732e6e656172227d00e057eb481b000001000000000000000000000000000000d20400000000000015cd5b07000000000079b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+      "signableHashHex": "cf03d009cd01de0073832697f69f805f192eb3e053e413e9d5b96e02140081c6",
+      "signatureHex": "4d8a5916c8ffac948d9199c1844c15beec72a38589a1eb4dbb81cd4d0f5f4f39305b8db5421624454d45eaf7bd517271d42daf8002138134030cea6c567f0807",
+      "signedDelegateActionBase64": "DwAAAHRvYmkucGVubnkubmVhckAAAAAxNzIwODYyOGY4NGY1ZDZhZDMzZjBkYTNiYmJlYjI3ZmZjYjM5OGVhYzUwMWEzMWJkNmFkMjAxMWUzNjEzM2ExAQAAAAIQAAAAZnRfdHJhbnNmZXJfY2FsbFAAAAB7ImFtb3VudCI6IjUwMDAwMDAwIiwibXNnIjoie1wiZGVwb3NpdFwiOlwiYWJjXCJ9IiwicmVjZWl2ZXJfaWQiOiJpbnRlbnRzLm5lYXIifQDgV+tIGwAAAQAAAAAAAAAAAAAAAAAAANIEAAAAAAAAFc1bBwAAAAAAebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQATYpZFsj/rJSNkZnBhEwVvuxyo4WJoetNu4HNTQ9fTzkwW421QhYkRU1F6ve9UXJx1C2vgAITgTQDDOpsVn8IBw=="
+    },
+    {
+      "name": "delegate-transfer-near",
+      "description": "NEAR transfer of 1.5 NEAR (u128 > u64) to ada.near",
+      "seedHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "publicKey": "ed25519:9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj",
+      "publicKeyBase64Url": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+      "delegate": {
+        "senderId": "tobi.penny.near",
+        "receiverId": "ada.near",
+        "actions": [
+          {
+            "type": "Transfer",
+            "deposit": "1500000000000000000000000"
+          }
+        ],
+        "nonce": "98765432101",
+        "maxBlockHeight": "18446744073709551615"
+      },
+      "signableMessageHex": "6e0100400f000000746f62692e70656e6e792e6e656172080000006164612e6e6561720100000003000080716433b629a33d01000000000025e5e0fe16000000ffffffffffffffff0079b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+      "signableHashHex": "6e4995ca345a8d1c645ef9aeecc9db6eeb577a97f83ad353cef34e49a5a605cb",
+      "signatureHex": "9f65c937ff3e4da59bb874ccb59f67ce5adbf9cc1c6348bccb5f8fda47b37577e101dd0b2474deb3f451193ec1eec349875be892e0a8eb44085aecc60be6e800",
+      "signedDelegateActionBase64": "DwAAAHRvYmkucGVubnkubmVhcggAAABhZGEubmVhcgEAAAADAACAcWQztimjPQEAAAAAACXl4P4WAAAA//////////8AebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQAn2XJN/8+TaWbuHTMtZ9nzlrb+cwcY0i8y1+P2kezdXfhAd0LJHTes/RRGT7B7sNJh1vokuCo60QIWuzGC+boAA=="
+    }
+  ]
+}

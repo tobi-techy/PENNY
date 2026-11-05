@@ -1,0 +1,10 @@
+Config/Local.xcconfig
+*.xcodeproj
+*.xcworkspace
+PennyHost/Info.plist
+PennyMessages/Info.plist
+PennyHost/*.entitlements
+PennyMessages/*.entitlements
+.build/
+DerivedData/
+build/

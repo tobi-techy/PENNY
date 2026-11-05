@@ -1,0 +1,18 @@
+// Penny shared build settings.
+// Put YOUR values in Config/Local.xcconfig (git-ignored). Copy Local.xcconfig.example to start.
+
+// Apple Developer Team ID (10 characters, developer.apple.com > Membership).
+PENNY_TEAM_ID =
+
+// Bundle id prefix. app.penny.host may already be taken on App Store Connect; change it if so
+// (e.g. com.tobibuilder.penny). Derived ids:
+//   app:        $(PENNY_BUNDLE_PREFIX).host
+//   extension:  $(PENNY_BUNDLE_PREFIX).host.messages
+//   keychain:   $(AppIdentifierPrefix)$(PENNY_BUNDLE_PREFIX).shared
+//   app group:  group.$(PENNY_BUNDLE_PREFIX).host
+PENNY_BUNDLE_PREFIX = app.penny
+
+// Engine host only (no scheme; "//" starts a comment in xcconfig files). Always https.
+PENNY_ENGINE_HOST = penny-engine.example.com
+
+#include? "Local.xcconfig"
