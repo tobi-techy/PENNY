@@ -1,0 +1,32 @@
+{
+  "name": "@penny/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "5.2.8",
+    "@fontsource-variable/geist-mono": "5.2.7",
+    "@noble/curves": "2.4.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@near-js/crypto": "2.5.1",
+    "@near-js/transactions": "2.5.1",
+    "@noble/hashes": "2.4.0",
+    "@penny/chain": "workspace:*",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.1.0",
+    "typescript": "5.9.3",
+    "vite": "7.2.2"
+  }
+}
