@@ -1,4 +1,4 @@
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { bots, messages, moods, soulsChangelog } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
@@ -139,5 +139,23 @@ export class MessagesRepo {
       botId: m.botId ?? null,
       externalId: m.externalId ?? null,
     });
+  }
+
+  /** Most recent messages in a conversation, oldest first (for crew context). */
+  async recent(
+    conversationId: string,
+    limit = 20,
+  ): Promise<{ direction: 'inbound' | 'outbound'; text: string; createdAt: Date }[]> {
+    const rows = await this.db
+      .select({
+        direction: messages.direction,
+        text: messages.text,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(Math.min(Math.max(limit, 1), 50));
+    return rows.reverse();
   }
 }

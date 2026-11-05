@@ -6,14 +6,44 @@ import { newId } from '../lib/ids.ts';
 export class WebhookEventsRepo {
   constructor(private readonly db: Db) {}
 
-  /** True if this is the first time we see the event (dedupe). */
-  async claim(id: string, event: string): Promise<boolean> {
+  /**
+   * True if this delivery should be processed. A fresh insert claims it.
+   * An existing row blocks only while it is processed, or claimed recently;
+   * a stale unprocessed claim (crash or failed run) is reclaimable so a
+   * redelivery can finish the work instead of being dropped as a duplicate.
+   */
+  async claim(
+    id: string,
+    event: string,
+    staleAfterMs = 5 * 60_000,
+    now = new Date(),
+  ): Promise<boolean> {
     const r = await this.db
       .insert(webhookEvents)
-      .values({ id, event })
+      .values({ id, event, receivedAt: now })
       .onConflictDoNothing()
       .returning({ id: webhookEvents.id });
-    return r.length === 1;
+    if (r.length === 1) return true;
+    const [row] = await this.db
+      .select()
+      .from(webhookEvents)
+      .where(eq(webhookEvents.id, id))
+      .limit(1);
+    if (!row || row.processedAt) return false;
+    if (now.getTime() - row.receivedAt.getTime() < staleAfterMs) return false;
+    const reclaimed = await this.db
+      .update(webhookEvents)
+      .set({ receivedAt: now, error: null })
+      .where(and(eq(webhookEvents.id, id), isNull(webhookEvents.processedAt)))
+      .returning({ id: webhookEvents.id });
+    return reclaimed.length === 1;
+  }
+
+  /** Release a claim after a failed run so redelivery reprocesses it. */
+  async release(id: string): Promise<void> {
+    await this.db
+      .delete(webhookEvents)
+      .where(and(eq(webhookEvents.id, id), isNull(webhookEvents.processedAt)));
   }
 
   async markProcessed(id: string, error?: string): Promise<void> {
@@ -61,6 +91,11 @@ export class IdempotencyRepo {
       .update(idempotencyKeys)
       .set({ responseStatus: status, responseBody: body })
       .where(and(eq(idempotencyKeys.scope, scope), eq(idempotencyKeys.key, key)));
+  }
+
+  /** Drop old idempotency rows so the table does not grow forever. */
+  async prune(olderThan: Date): Promise<void> {
+    await this.db.delete(idempotencyKeys).where(lt(idempotencyKeys.createdAt, olderThan));
   }
 
   /** Let a failed attempt be retried with the same key. */

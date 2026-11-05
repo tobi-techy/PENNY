@@ -94,11 +94,8 @@ const engine = createEngine({
 });
 
 await engine.services.bots.seedBuiltIns(join(import.meta.dir, '..', '..', '..', 'souls'));
-setInterval(() => {
-  engine.services.approvals
-    .expireDue()
-    .catch((e: unknown) => log.error({ err: (e as Error).name }, 'expiry sweep failed'));
-}, 15_000);
+// Phase 1 scheduler: approval expiry, webhook/idempotency pruning, weekly reflection.
+engine.services.scheduler.start(15_000);
 
 log.info(
   { env: env.PENNY_ENV, dryRun: env.DRY_RUN, relayLive: env.relayLive, port: env.PORT },

@@ -55,7 +55,7 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     return;
   }
 
-  const r = await d.crew.handle(user.id, space, text);
+  const r = await d.crew.handle(user.id, space, text, { conversationId });
   await d.messaging.sendText(space, r.text);
   await d.messages.add({ conversationId, direction: 'outbound', text: r.text });
 }

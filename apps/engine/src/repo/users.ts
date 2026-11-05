@@ -10,6 +10,14 @@ export type DeviceRow = typeof devices.$inferSelect;
 export class UsersRepo {
   constructor(private readonly db: Db) {}
 
+  async listIds(limit = 100): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: users.id })
+      .from(users)
+      .limit(Math.min(Math.max(limit, 1), 500));
+    return rows.map((r) => r.id);
+  }
+
   async byId(id: string): Promise<UserRow | null> {
     const [r] = await this.db.select().from(users).where(eq(users.id, id)).limit(1);
     return r ?? null;
