@@ -1,0 +1,6 @@
+{
+  "description": "RFC 8785 section 3.2.3: keys sorted by UTF-16 code units (emoji surrogates sort before U+FB33)",
+  "input": "{\"\\u20ac\":\"Euro Sign\",\"\\r\":\"Carriage Return\",\"\\ufb33\":\"Hebrew Letter Dalet With Dagesh\",\"1\":\"One\",\"\\ud83d\\ude00\":\"Emoji: Grinning Face\",\"\\u0080\":\"Control\",\"\\u00f6\":\"Latin Small Letter O With Diaeresis\"}",
+  "canonical": "{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\":\"Control\",\"ö\":\"Latin Small Letter O With Diaeresis\",\"€\":\"Euro Sign\",\"😀\":\"Emoji: Grinning Face\",\"דּ\":\"Hebrew Letter Dalet With Dagesh\"}",
+  "sha256Base64Url": "XjIVVtIgGKllaZGp6U937BdfoZPlKiQp0xL4QZ7IsIw"
+}

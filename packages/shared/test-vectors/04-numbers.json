@@ -1,0 +1,6 @@
+{
+  "description": "ECMAScript number serialization: -0 -> 0, exponent thresholds, max safe integer",
+  "input": "[0,-0,1,-1,1.5,1e21,1e20,1e-7,0.000001,0.1,100,9007199254740991,-12.250]",
+  "canonical": "[0,0,1,-1,1.5,1e+21,100000000000000000000,1e-7,0.000001,0.1,100,9007199254740991,-12.25]",
+  "sha256Base64Url": "TQVu7SuhrWGn-xA9p67Y9foK6yI45J7H_t_hTBEVE98"
+}

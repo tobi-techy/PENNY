@@ -1,0 +1,6 @@
+{
+  "description": "Nested objects and arrays, empty containers, whitespace removed, array order kept",
+  "input": "{ \"b\": [ 3, {\"z\": {}, \"a\": []}, [ [ ] ] ], \"a\": { \"y\": { \"x\": { \"w\": null } }, \"c\": true } }",
+  "canonical": "{\"a\":{\"c\":true,\"y\":{\"x\":{\"w\":null}}},\"b\":[3,{\"a\":[],\"z\":{}},[[]]]}",
+  "sha256Base64Url": "TvAL29LHU8ST9f_oMLh3I_VP2Hm5OeF9Ek5-p35_RDc"
+}

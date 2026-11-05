@@ -1,0 +1,20 @@
+title = "penny gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "near-ed25519-private-key"
+description = "NEAR ed25519 secret key"
+regex = '''ed25519:[1-9A-HJ-NP-Za-km-z]{80,90}'''
+tags = ["near", "key"]
+
+[[rules]]
+id = "near-ai-cloud-key"
+description = "NEAR AI Cloud API key"
+regex = '''sk-[A-Za-z0-9]{32,}'''
+tags = ["nearai", "key"]
+
+[allowlist]
+description = "test fixtures use obviously fake values"
+paths = ['''packages/shared/test-vectors/.*''', '''\.env\.example$''']

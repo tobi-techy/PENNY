@@ -1,0 +1,6 @@
+{
+  "description": "planHash input for a send plan with a unicode note",
+  "input": "{\"plan\": {\"kind\": \"send\", \"asset\": \"USDC\", \"amount\": \"12.5\", \"to\": \"ada.penny.near\", \"note\": \"jollof money 🍛 – thanks\"}, \"actions\": [{\"type\": \"FunctionCall\", \"methodName\": \"ft_transfer\", \"args\": {\"receiver_id\": \"ada.penny.near\", \"amount\": \"12500000\"}, \"gas\": \"15000000000000\", \"deposit\": \"1\"}]}",
+  "canonical": "{\"actions\":[{\"args\":{\"amount\":\"12500000\",\"receiver_id\":\"ada.penny.near\"},\"deposit\":\"1\",\"gas\":\"15000000000000\",\"methodName\":\"ft_transfer\",\"type\":\"FunctionCall\"}],\"plan\":{\"amount\":\"12.5\",\"asset\":\"USDC\",\"kind\":\"send\",\"note\":\"jollof money 🍛 – thanks\",\"to\":\"ada.penny.near\"}}",
+  "sha256Base64Url": "8PBAFp6mOF0ml1Wy_zWt-s_2xNmOn3EB_yThJvascT8"
+}

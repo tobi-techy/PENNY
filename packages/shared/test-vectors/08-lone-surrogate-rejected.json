@@ -1,0 +1,5 @@
+{
+  "description": "Lone surrogate is not I-JSON and must be rejected",
+  "input": "{\"bad\":\"\\ud800\"}",
+  "expectError": true
+}

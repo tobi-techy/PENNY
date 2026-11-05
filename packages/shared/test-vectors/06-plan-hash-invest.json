@@ -1,0 +1,6 @@
+{
+  "description": "planHash input for an invest plan: {plan, actions}",
+  "input": "{\"plan\": {\"kind\": \"invest\", \"fromAsset\": \"USDC\", \"amountUsd\": \"50\", \"portfolioId\": \"eth-momentum\", \"quoteId\": \"q_123\"}, \"actions\": [{\"type\": \"FunctionCall\", \"methodName\": \"ft_transfer_call\", \"args\": {\"receiver_id\": \"intents.near\", \"amount\": \"50000000\", \"msg\": \"{\\\"deposit\\\":\\\"abc\\\"}\"}, \"gas\": \"30000000000000\", \"deposit\": \"1\"}]}",
+  "canonical": "{\"actions\":[{\"args\":{\"amount\":\"50000000\",\"msg\":\"{\\\"deposit\\\":\\\"abc\\\"}\",\"receiver_id\":\"intents.near\"},\"deposit\":\"1\",\"gas\":\"30000000000000\",\"methodName\":\"ft_transfer_call\",\"type\":\"FunctionCall\"}],\"plan\":{\"amountUsd\":\"50\",\"fromAsset\":\"USDC\",\"kind\":\"invest\",\"portfolioId\":\"eth-momentum\",\"quoteId\":\"q_123\"}}",
+  "sha256Base64Url": "q2XfvgGyrVKQkr5xNJARbeL6jLd4uuhW7GN7kX9ObQE"
+}

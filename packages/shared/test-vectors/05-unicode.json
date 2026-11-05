@@ -1,0 +1,6 @@
+{
+  "description": "Unicode passes through unescaped, control chars use lowercase \\u escapes",
+  "input": "{\"name\":\"Tobi \\ud83d\\ude42\",\"city\":\"Lagos\",\"caf\\u00e9\":\"na\\u00efve\",\"\\u0000ctl\":\"\\u001f\\t\",\"quote\":\"\\\"\\\\\"}",
+  "canonical": "{\"\\u0000ctl\":\"\\u001f\\t\",\"café\":\"naïve\",\"city\":\"Lagos\",\"name\":\"Tobi 🙂\",\"quote\":\"\\\"\\\\\"}",
+  "sha256Base64Url": "ahaFNSNDikdwAOhlqoHo-MDoxgp_jnwS-otFnh_dhDM"
+}
