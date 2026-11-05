@@ -1,2 +1,2 @@
 # PENNY
-Penny is a crew of AI money agents you just text on iMessage. Invest, send, pay bills and run errands, approved with Face ID, settled on NEAR.
+Penny is a crew of AI agents that run your money from iMessage. Text it like a friend, "put $50 somewhere safer" or "pay my DStv", and the crew gets to work: Invest builds a portfolio, Mail finds the bill, Guard checks your limits. Every move shows up as a card in your thread, and nothing happens until you approve it with Face ID. Your keys live on your phone, the agents have their own NEAR accounts, and money moves across chains through NEAR Intents. Penny has a soul too: it remembers you, has moods, and gets better every week.
