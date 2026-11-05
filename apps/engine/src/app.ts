@@ -1,0 +1,148 @@
+import type { LanguageModel } from 'ai';
+import { Hono } from 'hono';
+import { ApprovalService, type Clock } from './approvals/service.ts';
+import { BotService } from './brain/bots.ts';
+import { Crew } from './brain/crew.ts';
+import { type Embedder, MemoryService } from './brain/memory.ts';
+import { MoodService } from './brain/mood.ts';
+import type { MarketPort, ToolRegistry } from './brain/registry.ts';
+import { noopTracer, type Tracer } from './brain/tracing.ts';
+import type { Db } from './db/client.ts';
+import { EnrollService } from './devices/enroll.ts';
+import { buildRoutes } from './http/routes.ts';
+import {
+  type AppVars,
+  accessLog,
+  clientIp,
+  errorHandler,
+  RateLimiter,
+  rateLimit,
+  securityMiddleware,
+} from './http/security.ts';
+import { handleInbound } from './inbound.ts';
+import type { Logger } from './lib/logger.ts';
+import type { ChainPort } from './ports/chain.ts';
+import type { MessagingPort } from './ports/messaging.ts';
+import { ApprovalsRepo } from './repo/approvals.ts';
+import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
+import { GuardDecisionsRepo, IdempotencyRepo, WebhookEventsRepo } from './repo/infra.ts';
+import { LedgerRepo } from './repo/ledger.ts';
+import { UsersRepo } from './repo/users.ts';
+
+export type EngineDeps = {
+  db: Db;
+  chain: ChainPort;
+  messaging: MessagingPort;
+  models: { router: LanguageModel; chat: LanguageModel };
+  embedder: Embedder;
+  market: MarketPort;
+  registry: ToolRegistry;
+  log: Logger;
+  publicBaseUrl: string;
+  webhookSecret: string | undefined;
+  limits: { perIpPerMin: number; perUserPerMin: number; maxBodyBytes: number };
+  tracer?: Tracer;
+  now?: Clock;
+};
+
+export function createEngine(d: EngineDeps) {
+  const now = d.now ?? (() => new Date());
+  const repos = {
+    users: new UsersRepo(d.db),
+    approvals: new ApprovalsRepo(d.db),
+    ledger: new LedgerRepo(d.db),
+    bots: new BotsRepo(d.db),
+    moods: new MoodsRepo(d.db),
+    messages: new MessagesRepo(d.db),
+    webhookEvents: new WebhookEventsRepo(d.db),
+    idempotency: new IdempotencyRepo(d.db),
+    guardDecisions: new GuardDecisionsRepo(d.db),
+  };
+  const mood = new MoodService(repos.moods);
+  const memory = new MemoryService(d.db, d.embedder);
+
+  let approvals: ApprovalService | null = null;
+  const botService = new BotService({
+    bots: repos.bots,
+    users: repos.users,
+    guardDecisions: repos.guardDecisions,
+    registry: d.registry,
+    mood,
+    approvals: () => {
+      if (!approvals) throw new Error('approvals not ready');
+      return approvals;
+    },
+  });
+  approvals = new ApprovalService({
+    approvals: repos.approvals,
+    ledger: repos.ledger,
+    users: repos.users,
+    guardDecisions: repos.guardDecisions,
+    chain: d.chain,
+    messaging: d.messaging,
+    mood,
+    log: d.log,
+    publicBaseUrl: d.publicBaseUrl,
+    now,
+    onBotApproved: (id) => botService.onApprovalSettled(id),
+    onBotDeclined: (id) => botService.onApprovalDeclined(id),
+  });
+  const enroll = new EnrollService(repos.users, d.chain, now);
+  const crew = new Crew({
+    router: d.models.router,
+    chat: d.models.chat,
+    registry: d.registry,
+    bots: repos.bots,
+    users: repos.users,
+    approvals,
+    memory,
+    mood,
+    market: d.market,
+    botOps: {
+      draft: (u, p, s) => botService.draft(u, p, s),
+      confirm: (u, s) => botService.confirm(u, s),
+    },
+    tracer: d.tracer ?? noopTracer,
+    log: d.log,
+  });
+
+  const ipLimiter = new RateLimiter(d.limits.perIpPerMin, 60_000);
+  const userLimiter = new RateLimiter(d.limits.perUserPerMin, 60_000);
+  const app = new Hono<{ Variables: AppVars }>();
+  for (const m of securityMiddleware({ maxBodyBytes: d.limits.maxBodyBytes })) app.use('*', m);
+  app.use('*', accessLog(d.log));
+  app.use(
+    '/v1/*',
+    rateLimit(ipLimiter, (c) => `ip:${clientIp(c)}`),
+  );
+  app.onError(errorHandler(d.log));
+  app.notFound((c) => c.json({ error: 'not_found' }, 404));
+
+  const inboundDeps = {
+    users: repos.users,
+    messages: repos.messages,
+    crew,
+    enroll,
+    messaging: d.messaging,
+    userLimiter,
+    log: d.log,
+  };
+  app.route(
+    '/',
+    buildRoutes({
+      approvals,
+      enroll,
+      webhookEvents: repos.webhookEvents,
+      idempotency: repos.idempotency,
+      webhookSecret: d.webhookSecret,
+      onInbound: (evt) => handleInbound(inboundDeps, evt),
+      enrollLimiter: new RateLimiter(10, 60_000),
+      approvalLimiter: new RateLimiter(60, 60_000),
+      log: d.log,
+    }),
+  );
+
+  return { app, repos, services: { approvals, bots: botService, crew, enroll, mood, memory } };
+}
+
+export type Engine = ReturnType<typeof createEngine>;

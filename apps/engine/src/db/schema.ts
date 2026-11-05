@@ -1,0 +1,298 @@
+import { sql } from 'drizzle-orm';
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  vector,
+} from 'drizzle-orm/pg-core';
+
+/**
+ * Embedding width. ARCHITECTURE.md says vector(1536). NEAR AI Cloud's
+ * Qwen/Qwen3-Embedding-0.6B returns 1024 dims; the embedder zero-pads to 1536
+ * (cosine-preserving). PROPOSED: change the contract to 1024.
+ */
+export const EMBEDDING_DIM = 1536;
+
+const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
+const createdAt = () => ts('created_at').notNull().defaultNow();
+
+export const users = pgTable(
+  'users',
+  {
+    id: text('id').primaryKey(),
+    handle: text('handle').notNull(), // iMessage handle (E.164 or email)
+    slug: text('slug'), // <slug>.penny.near
+    accountId: text('account_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('users_handle_uq').on(t.handle), uniqueIndex('users_slug_uq').on(t.slug)],
+);
+
+export const devices = pgTable(
+  'devices',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    publicKey: text('public_key').notNull(), // base64url raw ed25519
+    appAttest: text('app_attest'),
+    enrolledAt: ts('enrolled_at').notNull().defaultNow(),
+    revokedAt: ts('revoked_at'),
+  },
+  (t) => [index('devices_user_idx').on(t.userId), uniqueIndex('devices_pk_uq').on(t.publicKey)],
+);
+
+export const enrollCodes = pgTable('enroll_codes', {
+  codeHash: text('code_hash').primaryKey(), // sha256 hex of the 8-char code
+  userId: text('user_id')
+    .notNull()
+    .references(() => users.id),
+  handle: text('handle').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  usedAt: ts('used_at'),
+  createdAt: createdAt(),
+});
+
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    spaceId: text('space_id').notNull(),
+    platform: text('platform').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('conversations_space_uq').on(t.spaceId)],
+);
+
+export const messages = pgTable(
+  'messages',
+  {
+    id: text('id').primaryKey(),
+    conversationId: text('conversation_id')
+      .notNull()
+      .references(() => conversations.id),
+    direction: text('direction', { enum: ['inbound', 'outbound'] }).notNull(),
+    botId: text('bot_id'),
+    externalId: text('external_id'),
+    text: text('text').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('messages_conv_idx').on(t.conversationId, t.createdAt)],
+);
+
+export const bots = pgTable(
+  'bots',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id), // null = built-in
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    soulMd: text('soul_md').notNull(),
+    mood: text('mood').notNull().default('idle'),
+    toolIds: text('tool_ids').array().notNull().default(sql`'{}'::text[]`),
+    permissions: jsonb('permissions')
+      .$type<{ canMoveMoney: boolean; perTxCap?: string; dailyCap?: string }>()
+      .notNull()
+      .default({ canMoveMoney: false }),
+    nearSubAccount: text('near_sub_account'),
+    status: text('status', {
+      enum: ['draft', 'pending_confirm', 'pending_approval', 'active', 'paused', 'archived'],
+    })
+      .notNull()
+      .default('draft'),
+    builtIn: boolean('built_in').notNull().default(false),
+    approvalId: text('approval_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    // one slug per owner; built-ins share the null owner
+    uniqueIndex('bots_owner_slug_uq').on(sql`coalesce(${t.userId}, '')`, t.slug),
+  ],
+);
+
+export const approvals = pgTable(
+  'approvals',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    botId: text('bot_id'),
+    kind: text('kind', { enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot'] }).notNull(),
+    plan: jsonb('plan').notNull(),
+    title: text('title').notNull(),
+    amountDisplay: text('amount_display').notNull(),
+    amountMicros: bigint('amount_micros', { mode: 'bigint' }).notNull().default(sql`0`),
+    facts: jsonb('facts').$type<{ label: string; value: string }[]>().notNull(),
+    signerId: text('signer_id').notNull(),
+    receiverId: text('receiver_id').notNull(),
+    actions: jsonb('actions').notNull(),
+    nonce: text('nonce').notNull(),
+    maxBlockHeight: text('max_block_height').notNull(),
+    expiresAt: ts('expires_at').notNull(),
+    status: text('status', {
+      enum: ['pending', 'signed', 'relayed', 'settled', 'failed', 'expired', 'cancelled'],
+    }).notNull(),
+    planHash: text('plan_hash').notNull(),
+    cardTokenHash: text('card_token_hash').notNull(),
+    txHash: text('tx_hash'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [index('approvals_user_idx').on(t.userId, t.createdAt)],
+);
+
+export const approvalEvents = pgTable(
+  'approval_events',
+  {
+    id: text('id').primaryKey(),
+    approvalId: text('approval_id')
+      .notNull()
+      .references(() => approvals.id),
+    fromStatus: text('from_status'),
+    toStatus: text('to_status').notNull(),
+    reason: text('reason'),
+    meta: jsonb('meta'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('approval_events_apr_idx').on(t.approvalId, t.createdAt)],
+);
+
+export const guardPolicies = pgTable('guard_policies', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => users.id),
+  perTxUsd: text('per_tx_usd').notNull().default('50'),
+  dailyUsd: text('daily_usd').notNull().default('100'),
+  allowlist: text('allowlist').array().notNull().default(sql`'{}'::text[]`),
+  blockNewRecipientsOverUsd: text('block_new_recipients_over_usd').notNull().default('20'),
+  maxApprovalsPer10Min: integer('max_approvals_per_10_min').notNull().default(5),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
+export const guardDecisions = pgTable(
+  'guard_decisions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    approvalId: text('approval_id'),
+    plan: jsonb('plan').notNull(),
+    decision: text('decision', {
+      enum: ['allow_with_approval', 'block', 'needs_more_info'],
+    }).notNull(),
+    reasons: jsonb('reasons').$type<string[]>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('guard_decisions_user_idx').on(t.userId, t.createdAt)],
+);
+
+export const ledgerEntries = pgTable(
+  'ledger_entries',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    approvalId: text('approval_id').references(() => approvals.id),
+    botId: text('bot_id'),
+    asset: text('asset').notNull(),
+    amountMicrosUsd: bigint('amount_micros_usd', { mode: 'bigint' }).notNull(),
+    recipient: text('recipient'),
+    status: text('status', { enum: ['reserved', 'settled', 'released'] }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('ledger_user_idx').on(t.userId, t.createdAt)],
+);
+
+export const memories = pgTable(
+  'memories',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    kind: text('kind').notNull(),
+    text: text('text').notNull(),
+    embedding: vector('embedding', { dimensions: EMBEDDING_DIM }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('memories_user_idx').on(t.userId)],
+);
+
+export const moods = pgTable(
+  'moods',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    botSlug: text('bot_slug').notNull().default('penny'),
+    mood: text('mood', {
+      enum: ['idle', 'thinking', 'win', 'wink', 'blocked', 'paused', 'done'],
+    }).notNull(),
+    reason: text('reason'),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.botSlug] })],
+);
+
+export const soulsChangelog = pgTable('souls_changelog', {
+  id: text('id').primaryKey(),
+  botId: text('bot_id').notNull(),
+  userId: text('user_id'),
+  diff: text('diff').notNull(),
+  reason: text('reason'),
+  createdAt: createdAt(),
+});
+
+export const idempotencyKeys = pgTable(
+  'idempotency_keys',
+  {
+    key: text('key').notNull(),
+    scope: text('scope').notNull(), // route + subject (approval id / ip)
+    requestHash: text('request_hash').notNull(),
+    responseStatus: integer('response_status'),
+    responseBody: jsonb('response_body'),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.scope, t.key] })],
+);
+
+export const webhookEvents = pgTable('webhook_events', {
+  id: text('id').primaryKey(), // `${webhookId}:${message.id}`
+  event: text('event').notNull(),
+  receivedAt: ts('received_at').notNull().defaultNow(),
+  processedAt: ts('processed_at'),
+  error: text('error'),
+});
+
+export const schema = {
+  users,
+  devices,
+  enrollCodes,
+  conversations,
+  messages,
+  bots,
+  approvals,
+  approvalEvents,
+  guardPolicies,
+  guardDecisions,
+  ledgerEntries,
+  memories,
+  moods,
+  soulsChangelog,
+  idempotencyKeys,
+  webhookEvents,
+};
