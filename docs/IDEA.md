@@ -1,6 +1,6 @@
 # Penny: the idea
 
-> Your money crew in iMessage. Text it like a friend, approve with Face ID, done.
+> A crew of AI agents in your iMessage that handles your life: money, inbox, posts, errands, and any bot you make. Text it like a friend. Anything that spends or acts in your name waits for your Face ID.
 
 Status: being built for the NEAR Hackathon (dev window 1 to 14 Nov 2026). This doc explains what Penny is, why it exists, how it works and what is planned. It is the "why and what". `DESIGN.md` is the "how it looks and feels". `ARCHITECTURE.md` and `SECURITY.md` are the binding technical contracts.
 
@@ -8,35 +8,39 @@ Status: being built for the NEAR Hackathon (dev window 1 to 14 Nov 2026). This d
 
 ## 1. The problem
 
-Managing money well takes a dozen apps and a lot of attention:
+Running your life online takes a dozen apps and a lot of attention:
 
-- An exchange to buy, a bridge to move, a wallet to sign, a bank app to pay bills, a spreadsheet to track.
-- Every crypto move asks you to pick a chain, a token, a route and a gas setting.
-- AI "agents" that promise to handle this usually want your keys or a blank cheque. You either trust a bot with everything or you do it all yourself.
+- Money: an exchange to buy, a bridge to move, a wallet to sign, a bank app to pay bills.
+- Admin: an inbox full of bills, receipts and things you meant to reply to.
+- Presence: posts to write and schedule, repos and notifications to keep up with.
+- Errands: splitting dinner, chasing a refund, booking something.
 
-Most people already live in one app all day: Messages. They text friends "send me $20" and "did you pay DStv?". Money talk already happens there. The tools to act on it do not.
+AI "agents" that promise to handle this are usually one generic chatbot, or they want your keys and passwords with a blank cheque. You either trust a bot with everything or you do it all yourself.
+
+Most people already live in one app all day: Messages. Life admin already gets talked about there. The tools to act on it do not live there.
 
 ## 2. The pitch
 
-Penny is a crew of AI agents that runs your money from iMessage.
+Penny is a **multi-agent crew** that lives in your iMessage. Each agent is a specialist with its own soul, tools, limits and NEAR account. Penny leads and hands work to the right one. Money is the hardest job they do, not the only one.
 
 You text in plain words:
 
-- "put $50 somewhere safer"
-- "pay my DStv"
-- "send ada $20 for lunch"
-- "split dinner with kemi and tolu"
-- "make me a bot that runs my X"
+- "put $50 somewhere safer" (Invest)
+- "pay my DStv" (Mail finds it, you approve)
+- "send ada $20 for lunch" / "split dinner with kemi and tolu" (Errand)
+- "what did I spend on food this month?" (Finance)
+- "draft a post about today's build" (your X bot)
+- "make me a bot that watches my GitHub" (Penny builds a new crew member)
 
-The crew works it out. Invest builds a portfolio, Mail finds the bill, Guard checks your limits. Every move lands in your thread as a live card. Nothing happens until you approve it with Face ID on your own phone. Your keys never leave your iPhone.
+The crew works it out, debates when it matters, and shows every result in your thread as a live card. Anything that moves money or acts in your name waits for Face ID on your own phone. Your keys never leave your iPhone.
 
-One line: **text a belief, get a portfolio. Text a chore, get it done. Your phone holds the keys.**
+One line: **one text, the right agent, your Face ID as the only key.**
 
 ## 3. Who it is for
 
-- Gen Z and young professionals who hold some crypto and some fiat, and want them to work without becoming a full-time trader.
+- Gen Z and young builders juggling money, inboxes, socials and side projects, who want help without handing over the keys.
 - People in markets like Nigeria where dollar savings, cross-border payments and bill payment are daily needs.
-- Anyone who wants an agent that can act, without handing over custody.
+- Anyone who wants agents that can act, with permission that is visible, scoped and revocable.
 
 ## 4. How it works (the 30-second version)
 
@@ -50,7 +54,7 @@ One line: **text a belief, get a portfolio. Text a chore, get it done. Your phon
 
 ## 5. The crew
 
-Each agent has its own NEAR sub-account, its own soul (personality file), its own tools and its own limits.
+Each agent has its own NEAR sub-account, its own soul (personality file), its own tools and its own limits. The built-in crew covers money and admin; custom bots cover everything else.
 
 | Agent | Shape | Job | Can move money |
 |---|---|---|---|

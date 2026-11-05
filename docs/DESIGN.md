@@ -9,7 +9,7 @@ Penny is **iMessage-first**. There is no feed, no dashboard, no tab bar to learn
 ## 1. Principles
 
 1. **Chat is the interface, cards are the proof.** The agent answers in one short line, then shows the real thing: the quote, the transfer, the bill it found.
-2. **Money never moves silently.** Every money move is a card, needs Face ID, and shows its steps and its receipt.
+2. **Nothing acts silently.** Every money move or action in your name (a post, an email, a new bot with write tools) is a card, needs Face ID, and shows its steps and its receipt.
 3. **One card, updated in place.** A move does not spam the thread with five messages. The same card goes from ask to approving to approved to done.
 4. **Buttons name the outcome.** "Approve with Face ID" on a card whose big number is the amount. Never "Submit" or "Confirm".
 5. **No naked numbers.** "$38 of $100 this week", "up $32 since Monday", "due Fri".
