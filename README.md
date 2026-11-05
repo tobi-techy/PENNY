@@ -1,2 +1,35 @@
 # PENNY
 Penny is a crew of AI agents that run your money from iMessage. Text it like a friend, "put $50 somewhere safer" or "pay my DStv", and the crew gets to work: Invest builds a portfolio, Mail finds the bill, Guard checks your limits. Every move shows up as a card in your thread, and nothing happens until you approve it with Face ID. Your keys live on your phone, the agents have their own NEAR accounts, and money moves across chains through NEAR Intents. Penny has a soul too: it remembers you, has moods, and gets better every week.
+
+Start here: `AGENT.md`, then `docs/IDEA.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/DESIGN.md`.
+
+## Repo
+
+```
+apps/engine/      Bun + Hono API (webhook, crew, Guard, approvals)
+packages/shared/  zod schemas, bigint money, RFC 8785 canonical JSON, planHash, test vectors
+packages/chain/   NEAR accounts, delegate actions + relayer, Intents, Glider
+ios/              PennyHost app + PennyMessages extension
+souls/            one SOUL file per built-in agent
+docs/             contracts and design
+```
+
+## Local run (dev, DRY_RUN)
+
+| Do | See |
+|---|---|
+| install Bun 1.4 (`curl -fsSL https://bun.sh/install \| bash`) | `bun --version` |
+| `bun install` | one root `bun.lock` |
+| `cp .env.example .env` | dev defaults, `DRY_RUN=1` |
+| `bun run typecheck` | no output = good |
+| `bun test` | all suites green, no network |
+| `bun run lint` | Biome clean |
+| `bun run dev` | engine on http://localhost:8787, `/healthz` → `{"ok":true}` |
+
+More: `apps/engine/README.md`. iOS: `ios/README.md`.
+
+## Safety defaults
+
+- `DRY_RUN=1` until someone explicitly says go. Live relay needs `PENNY_ENV=mainnet` **and** `DRY_RUN=0` **and** a relayer key; the env schema fails closed.
+- No user keys on the server. Ever.
+- Mood never overrides money rules.
