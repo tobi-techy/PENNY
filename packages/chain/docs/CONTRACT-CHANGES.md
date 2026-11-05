@@ -1,0 +1,12 @@
+# Proposed changes to ARCHITECTURE.md / SECURITY.md (from packages/chain, 5 Nov 2026)
+
+1. **Invest deposit is `ft_transfer`, not `ft_transfer_call`.** 1Click `ORIGIN_CHAIN` quotes want a plain transfer of `amountIn` to `depositAddress` (https://docs.near-intents.org/integration/distribution-channels/1click-api/quickstart/making-a-request). On NEAR that is `[storage_deposit {account_id: dep, registration_only:true} (0.00125 NEAR, only if unregistered), ft_transfer {receiver_id: dep, amount}]` on the token contract. `ft_transfer_call` is only for depositing into `intents.near` (verifier docs). The shared test vector 06 uses `ft_transfer_call`; it is fine as a hashing vector but not as the real action shape.
+2. **The relayer pays inner deposits.** "If the inner actions have an attached token balance, this is also paid for by the relayer" (https://docs.near.org/protocol/transactions/meta-tx). So `send` of native NEAR via a delegate `Transfer` would be paid by Penny. Proposal: drop `asset:'NEAR'` from `send` for v0.1 (or send wNEAR), and add to SECURITY.md: per-approval inner-deposit cap (default 0.01 NEAR, enforced in verify and relayer).
+3. **Device key binding.** `Approval` has no device key. The adapter takes `resolveDeviceKey(signerId)` (from `devices`) and requires an exact match. Engine should wire this.
+4. **Args bytes = RFC 8785 of `approval.actions[i].args`.** Verification is byte-for-byte, so Swift must JCS-encode `args` (not only the planHash input) when building the FunctionCall.
+5. **App account key.** Only `penny.near` can create `<slug>.penny.near`. Engine env has no `NEAR_APP_PRIVATE_KEY`; the adapter falls back to the relayer key when relayer == app account. Pick one: relayer = `penny.near`, or add `NEAR_APP_PRIVATE_KEY`.
+6. **Onboarding cost per user:** 0.002 NEAR account funding + 0.00125 NEAR USDC storage (app pays, second tx).
+7. **Signing window:** `prepareSigning` gives `maxBlockHeight = head + 200`; verify rejects > 600 ahead. Keep `expiresAt` ≤ 120 s as now.
+8. **1Click API key needed for live:** unauthenticated dry quotes work (and carry a 20 bps app fee in the echoed request); two unauthenticated non-dry quotes timed out at 25 s. Add `ONECLICK_API_KEY` to the mainnet-required env list.
+9. **`penny.near` already exists on mainnet** (19 NEAR, 1 full-access key, no contract, nonce 0). Confirm it is Tobi's before treating it as the app account.
+10. **Default RPC** `https://rpc.mainnet.fastnear.com` (used in NEAR Intents docs); override with `NEAR_RPC_URL`.
