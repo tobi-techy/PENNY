@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.p8
+*.pem
+*.key
+DerivedData/
+build/
+.DS_Store
