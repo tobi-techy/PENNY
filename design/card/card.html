@@ -1,0 +1,96 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:Geist;src:url(../../prototype/fonts/geist.woff2)}
+@font-face{font-family:GeistMono;src:url(../../prototype/fonts/geistmono.woff2)}
+*{box-sizing:border-box;margin:0}
+body{background:#fff;font-family:Geist,-apple-system,sans-serif;color:#111519;-webkit-font-smoothing:antialiased;padding:56px 48px 64px}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:40px}
+.eyebrow{font:10px/1.4 GeistMono;letter-spacing:.9px;text-transform:uppercase;color:#546475}
+h1{font-weight:400;font-size:38px;letter-spacing:-1.4px;margin-top:10px}
+.sub{color:#546475;font-size:14px;max-width:360px;line-height:1.7}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:22px}
+.col .eyebrow{margin-bottom:12px;display:flex;gap:8px}
+.col .eyebrow b{color:#0058B2;font-weight:400}
+.phone{background:#fff;border:1px solid #11151914;border-radius:24px;padding:18px 14px 20px;height:640px;position:relative;overflow:hidden;box-shadow:0 10px 30px #0120420a}
+.bar{display:flex;align-items:center;gap:8px;padding:0 4px 14px;border-bottom:1px solid #11151914;margin-bottom:14px}
+.av{width:28px;height:28px;border-radius:50%;background:#FF6B2C;display:grid;place-items:center}
+.av img{width:18px}
+.bar span{font-size:13px;font-weight:500}
+.b{max-width:78%;padding:8px 12px;border-radius:18px;font-size:13.5px;line-height:1.35;margin-bottom:6px;letter-spacing:-.1px}
+.me{background:#0A84FF;color:#fff;margin-left:auto;border-bottom-right-radius:6px}
+.pe{background:#E9E9EB;border-bottom-left-radius:6px}
+.card{width:236px;background:#080D14;border:1px solid #1E2A38;border-radius:18px;overflow:hidden;margin-top:8px;color:#F1F5FA;position:relative}
+canvas{display:block;width:100%;height:96px}
+.chip{position:absolute;top:10px;left:10px;width:26px;height:26px;border-radius:50%;background:#FF6B2C;display:grid;place-items:center}
+.chip img{width:16px}
+.cb{padding:12px 14px 12px}
+.tagrow{display:flex;justify-content:space-between;align-items:center}
+.tag{font:9.5px/1 GeistMono;letter-spacing:.8px;padding:5px 8px;border-radius:999px;background:#0A2E27;color:#8FE4CC;display:inline-flex;gap:6px;align-items:center}
+.tag.red{background:#3A1214;color:#FF9C9C}
+.timer{font:11px GeistMono;color:#B1C3D8}
+.meta{font-size:11.5px;color:#B1C3D8;margin-top:12px}
+.amt{font-size:30px;letter-spacing:-1.2px;margin-top:2px}
+.dl{margin-top:10px;border-top:1px solid #FFFFFF1A}
+.dl>div{display:flex;justify-content:space-between;font-size:11px;color:#B1C3D8;padding:7px 0;border-bottom:1px solid #FFFFFF12}
+.dl>div b{font-weight:400;color:#F1F5FA}
+.lim{height:3px;background:#1E2A38;border-radius:3px;margin-top:4px;overflow:hidden}.lim i{display:block;height:100%;width:50%;background:#6EA1D6}
+.btn{margin-top:12px;height:38px;border-radius:999px;background:#fff;color:#111519;font-size:12.5px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:8px}
+.btn.dim{background:#FFFFFF1F;color:#F1F5FA}
+.btn.ok{background:#0A2E27;color:#8FE4CC}
+.foot{text-align:center;font-size:11px;color:#B1C3D8;margin-top:10px}
+.steps{margin-top:12px}
+.steps div{display:flex;gap:8px;align-items:center;font-size:11.5px;color:#B1C3D8;padding:4px 0}
+.steps i{width:14px;height:14px;border-radius:50%;background:#008773;display:grid;place-items:center;font-style:normal;font-size:8px;color:#fff}
+.hud{position:absolute;left:50%;top:120px;transform:translateX(-50%);width:120px;height:120px;border-radius:28px;background:#111519f2;display:grid;place-items:center;box-shadow:0 12px 32px #01204240}
+.dimmed .card,.dimmed .b{filter:blur(.6px) brightness(.97)}
+.typing{display:inline-flex;gap:4px;background:#E9E9EB;padding:11px 13px;border-radius:18px;margin-top:8px}.typing i{width:6px;height:6px;border-radius:50%;background:#959FA9}
+.note{font-size:12px;color:#546475;line-height:1.6;margin-top:14px}
+</style></head><body>
+<div class="top"><div><div class="eyebrow">Penny · iMessage card · v1</div><h1>One card, four moments.</h1></div>
+<div class="sub">The card lands in your thread, asks once, and updates itself in place. Reflect palette, Geist, dithered art that shifts with Penny's mood.</div></div>
+<div class="row" id="row"></div>
+<script>
+const P='../../brand/assets/penny-white.svg';
+function head(){return `<div class="bar"><div class="av"><img src="${P}"></div><span>penny</span></div>`}
+const ask=`<div class="b me">put $50 of my usdc somewhere safer pls</div><div class="b pe">on it. moving $50 into ETH Momentum, it's the calmer one this week. approve below</div>`;
+const faceSvg=(c)=>`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M9 9v1M15 9v1M12 9v4h-1M9 16c1.6 1.3 4.4 1.3 6 0"/></svg>`;
+function card(state){
+ const tag = state==='done'?`<span class="tag">● SETTLED</span>`:`<span class="tag">↗ INVEST</span>`;
+ const timer = state==='done'?`<span class="timer">2:41 PM</span>`:`<span class="timer">${state==='ask'?'1:55':'1:49'}</span>`;
+ let action='';
+ if(state==='ask') action=`<div class="btn">${faceSvg('#111519')}Approve with Face ID</div>`;
+ if(state==='face') action=`<div class="btn dim">${faceSvg('#F1F5FA')}Approving with Face ID</div>`;
+ if(state==='ok') action=`<div class="btn ok">✓ Approved</div><div class="steps"><div><i>✓</i>Quote locked</div><div><i>✓</i>Guard: within your $100 day</div><div style="color:#F1F5FA"><i style="background:#3B7DC4">…</i>Swapping on NEAR Intents</div></div>`;
+ if(state==='done') action=`<div class="steps"><div><i>✓</i>Swapped 50 USDC</div><div><i>✓</i>Deposited 0.0148 ETH</div><div><i>✓</i>Fee $0.12</div></div>`;
+ const details = (state==='ask'||state==='face')?`<div class="dl"><div><span>Fee</span><b>$0.12</b></div><div style="display:block"><span style="display:flex;justify-content:space-between"><span>Today's limit</span><b>$50 of $100 left</b></span><div class="lim"><i></i></div></div></div>`:'';
+ return `<div class="card"><canvas data-s="${state}"></canvas><div class="chip"><img src="${P}"></div><div class="cb">
+ <div class="tagrow">${tag}${timer}</div><div class="meta">Swap · USDC → ETH Momentum</div><div class="amt">$50.00</div>${details}${action}
+ <div class="foot">${state==='done'?'View receipt ›':'View details ›'}</div></div></div>`;
+}
+const cols=[
+ ['01','Ask',ask+card('ask'),'One plain line from Penny, then the card. The timer is the quote expiring.'],
+ ['02','Face ID',ask+card('face')+`<div class="hud">${faceSvg('#8FE4CC').replace('width="16" height="16"','width="58" height="58"')}</div>`,'Face ID runs inside the bubble. No app switch, no link.'],
+ ['03','Approved',ask+card('ok'),'Same card, edited in place. Steps tick as the crew works.'],
+ ['04','Done',ask.replace('approve below','approve below')+card('done')+`<div class="b pe" style="margin-top:8px">done. $50 is in ETH Momentum. i'll check on it friday</div>`,'Card settles, art turns calm, Penny says one human line.'],
+];
+document.getElementById('row').innerHTML=cols.map(([n,t,body,note],i)=>`<div class="col"><div class="eyebrow"><b>${n}</b>${t}</div><div class="phone ${i==1?'dimmed':''}">${head()}${body}</div><div class="note">${note}</div></div>`).join('');
+// dither art
+const bayer=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+document.querySelectorAll('canvas').forEach(cv=>{
+ const s=cv.dataset.s, W=236*2,H=96*2; cv.width=W;cv.height=H; const x=cv.getContext('2d');
+ x.fillStyle='#080D14';x.fillRect(0,0,W,H);
+ const col = s==='done'?'#4FD57F':s==='ok'?'#8FE4CC':'#6EA1D6';
+ const px=4; x.fillStyle=col;
+ for(let yy=0;yy<H;yy+=px)for(let xx=0;xx<W;xx+=px){
+  const nx=xx/W, ny=yy/H;
+  // calm hill / wave, mood-driven
+  const amp = s==='done'?0.10:0.22;
+  const ridge = 0.62 - amp*Math.exp(-((nx-0.62)**2)/0.05) - 0.08*Math.sin(nx*9+ (s==='ok'?1:0));
+  let v = ny>ridge ? 0.85-(ny-ridge)*1.2 : 0.18*Math.exp(-((ny-ridge)**2)/0.004);
+  v *= (0.35+0.65*Math.exp(-((nx-0.6)**2)/0.12));
+  const th=(bayer[(yy/px)%4][(xx/px)%4]+0.5)/16;
+  if(v>th){x.globalAlpha=0.55+0.45*v;x.fillRect(xx,yy,px-1,px-1)}
+ }
+ x.globalAlpha=1; const g=x.createLinearGradient(0,H*0.55,0,H); g.addColorStop(0,'#080D1400');g.addColorStop(1,'#080D14');x.fillStyle=g;x.fillRect(0,0,W,H);
+});
+</script></body></html>

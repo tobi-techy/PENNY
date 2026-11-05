@@ -1,0 +1,79 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:Geist;src:url(../../prototype/fonts/geist.woff2)}
+@font-face{font-family:GeistMono;src:url(../../prototype/fonts/geistmono.woff2)}
+*{box-sizing:border-box;margin:0}
+body{background:#fff;font-family:Geist,sans-serif;color:#111519;-webkit-font-smoothing:antialiased;padding:56px 48px 64px;width:1360px}
+.top{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:40px}
+.eyebrow{font:10px/1.4 GeistMono;letter-spacing:.9px;text-transform:uppercase;color:#546475}
+h1{font-weight:400;font-size:38px;letter-spacing:-1.4px;margin-top:10px}
+.sub{color:#546475;font-size:14px;max-width:380px;line-height:1.7}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:40px 22px}
+.col .eyebrow{margin-bottom:12px;display:flex;gap:8px}.col .eyebrow b{color:#0058B2;font-weight:400}
+.card{width:100%;background:#080D14;border:1px solid #1E2A38;border-radius:18px;overflow:hidden;color:#F1F5FA;position:relative}
+canvas{display:block;width:100%;height:88px}
+.chip{position:absolute;top:10px;left:10px;width:26px;height:26px;border-radius:50%;display:grid;place-items:center}
+.chip img{width:16px}
+.cb{padding:12px 14px 12px}
+.tagrow{display:flex;justify-content:space-between;align-items:center}
+.tag{font:9.5px/1 GeistMono;letter-spacing:.8px;padding:5px 8px;border-radius:999px;display:inline-flex;gap:6px;align-items:center}
+.timer{font:11px GeistMono;color:#B1C3D8}
+.meta{font-size:11.5px;color:#B1C3D8;margin-top:12px}
+.amt{font-size:30px;letter-spacing:-1.2px;margin-top:2px}
+.amt.sm{font-size:21px;letter-spacing:-.6px;line-height:1.25}
+.dl{margin-top:10px;border-top:1px solid #FFFFFF1A}
+.dl>div{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#B1C3D8;padding:7px 0;border-bottom:1px solid #FFFFFF12;gap:8px}
+.dl>div b{font-weight:400;color:#F1F5FA}
+.pill{font:9px GeistMono;letter-spacing:.6px;padding:3px 6px;border-radius:999px}
+.opt{display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:9px 10px;border:1px solid #1E2A38;border-radius:12px;margin-top:6px;color:#F1F5FA}
+.opt span{color:#B1C3D8;font:11px GeistMono}
+.opt.on{border-color:#6EA1D6;background:#0E1A2A}
+.btn{margin-top:12px;height:38px;border-radius:999px;background:#fff;color:#111519;font-size:12.5px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:8px}
+.btns{display:flex;gap:8px}.btns .btn{flex:1}
+.btn.out{background:#11151999;color:#F1F5FA;border:1px solid #FFFFFF4D}
+.foot{text-align:center;font-size:11px;color:#B1C3D8;margin-top:10px}
+.who{display:flex;align-items:center;gap:8px}.who i{width:18px;height:18px;border-radius:50%;display:inline-block}
+.bar{height:3px;background:#1E2A38;border-radius:3px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%}
+.note{font-size:12px;color:#546475;line-height:1.6;margin-top:12px}
+</style></head><body>
+<div class="top"><div><div class="eyebrow">Penny · iMessage cards · family v1</div><h1>Eight cards, one shape.</h1></div>
+<div class="sub">Same anatomy every time: art, tag, what it is, the number, one or two facts, one action. The colour and the crew mark tell you who's asking.</div></div>
+<div class="grid" id="g"></div>
+<script>
+const A='../../brand/assets/';
+const C={blue:['#6EA1D6','#0E2238','#A9C8EA'],green:['#4FD57F','#0A2E1C','#8FE4B0'],orange:['#FEA247','#33210B','#FFC98E'],purple:['#B77DF8','#24163A','#D4B3FB'],pink:['#FA78B2','#3A1428','#FBB3D3'],red:['#FC5855','#3A1214','#FF9C9C'],mint:['#8FE4CC','#0A2E27','#8FE4CC']};
+const crew={penny:['penny-white.svg','#FF6B2C'],invest:['bot-invest.svg','#6CCBFF'],mail:['bot-mail.svg','#FFE45C'],guard:['bot-guard.svg','#F6A8F0'],finance:['bot-finance.svg','#5EE3A1']};
+const face=c=>`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M9 9v1M15 9v1M12 9v4h-1M9 16c1.6 1.3 4.4 1.3 6 0"/></svg>`;
+const F=t=>`<div class="btn">${face('#111519')}${t}</div>`;
+const cards=[
+ {n:'01',t:'Invest',c:'blue',who:'invest',tag:'↗ INVEST',right:'1:55',meta:'Swap · USDC → ETH Momentum',amt:'$50.00',
+  body:`<div class="dl"><div><span>Fee</span><b>$0.12</b></div><div><span>Today's limit</span><b>$50 of $100 left</b></div></div>`+F('Approve with Face ID'),foot:'View details ›',note:'Moves money into a portfolio. Quote timer, fee, what\'s left today.'},
+ {n:'02',t:'Send',c:'green',who:'penny',tag:'→ SEND',right:'instant',meta:'To Ada · ada.near',amt:'$20.00',
+  body:`<div class="dl"><div><span>Note</span><b>suya on friday</b></div><div><span>Fee</span><b>None</b></div></div>`+F('Send with Face ID'),foot:'Change amount ›',note:'Friend to friend. The note travels with the money.'},
+ {n:'03',t:'Pay a bill',c:'orange',who:'mail',tag:'✉ BILL',right:'due Fri',meta:'DStv Premium · found in Gmail',amt:'$18.40',
+  body:`<div class="dl"><div><span>Same as last month</span><b>Yes</b></div><div style="display:block"><span style="display:flex;justify-content:space-between"><span>Bills budget</span><b>$42 of $80 left</b></span><div class="bar"><i style="width:52%;background:#FEA247"></i></div></div></div>`+F('Pay with Face ID'),foot:'See the email ›',note:'Mail spots it, checks it against last month and your budget.'},
+ {n:'04',t:'Request or split',c:'purple',who:'penny',tag:'⇄ SPLIT',right:'3 people',meta:'Dinner at Nok',amt:'$64.00',
+  body:`<div class="dl"><div><span class="who"><i style="background:#FF6B2C"></i>You</span><b>$21.34 paid</b></div><div><span class="who"><i style="background:#6CCBFF"></i>Ada</span><b>$21.33 paid</b></div><div><span class="who"><i style="background:#F6A8F0"></i>Femi</span><span class="pill" style="background:#24163A;color:#D4B3FB">WAITING</span></div></div><div class="btn out">Nudge Femi</div>`,foot:'',note:'No Face ID, nothing leaves your wallet. One nudge, done kindly.'},
+ {n:'05',t:'Errand',c:'pink',who:'penny',tag:'✦ ERRAND',right:'3 bids',meta:'Car wash · Sat 10 AM, Lekki',amt:'$12.00',
+  body:`<div class="dl"><div><span>Best bid</span><b>SparkleCo · 4.9</b></div><div><span>Paid when</span><b>Job is done</b></div></div>`+F('Hire with Face ID'),foot:'See all bids ›',note:'Penny shops the task on Agent Market. Money is held until it\'s done.'},
+ {n:'06',t:'Guard block',c:'red',who:'guard',tag:'■ BLOCKED',right:'just now',meta:'Send · to new-wallet.near',amt:'$400.00',
+  body:`<div class="dl"><div><span>Why</span><b>Over your $100 day</b></div><div><span>Also</span><b>First time to this address</b></div></div><div class="btns"><div class="btn out">Not me</div><div class="btn">${face('#111519')}Allow once</div></div>`,foot:'',note:'Guard stops it and says why in plain words. You can still allow it once.'},
+ {n:'07',t:'Pick',c:'blue',who:'invest',tag:'◇ PICK ONE',right:'$50',meta:'Where should your $50 go?',amt:'Three that fit you',sm:1,
+  body:`<div class="opt on">Calm · ETH Momentum<span>+6.2% 30d</span></div><div class="opt">Balanced · Majors<span>+9.8% 30d</span></div><div class="opt">Bold · SOL Memes<span>+31% 30d</span></div>`,foot:'Why these? ›',note:'Invest\'s shortlist. Tap one and it turns into an Invest card.'},
+ {n:'08',t:'Weekly check-in',c:'mint',who:'finance',tag:'● YOUR WEEK',right:'Nov 2 to 8',meta:'Portfolio up this week',amt:'+$3.12',
+  body:`<div class="dl"><div style="display:block"><span style="display:flex;justify-content:space-between"><span>Spent</span><b>$142 of $200</b></span><div class="bar"><i style="width:71%;background:#8FE4CC"></i></div></div><div><span>Invested</span><b>$50</b></div><div><span>Late fees dodged</span><b>1</b></div></div><div class="btn out">See the full week</div>`,foot:'',note:'Finance\'s Sunday note. The one card that\'s just for reading.'},
+];
+document.getElementById('g').innerHTML=cards.map((k,i)=>{const [col,bg,fg]=C[k.c];const [svg,tile]=crew[k.who];
+return `<div class="col"><div class="eyebrow"><b>${k.n}</b>${k.t}</div><div class="card"><canvas data-c="${col}" data-i="${i}"></canvas><div class="chip" style="background:${tile}"><img src="${A+svg}"></div><div class="cb">
+<div class="tagrow"><span class="tag" style="background:${bg};color:${fg}">${k.tag}</span><span class="timer">${k.right}</span></div>
+<div class="meta">${k.meta}</div><div class="amt ${k.sm?'sm':''}">${k.amt}</div>${k.body}${k.foot?`<div class="foot">${k.foot}</div>`:''}</div></div><div class="note">${k.note}</div></div>`}).join('');
+const bayer=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+document.querySelectorAll('canvas').forEach(cv=>{const W=320*2,H=88*2;cv.width=W;cv.height=H;const x=cv.getContext('2d');x.fillStyle='#080D14';x.fillRect(0,0,W,H);
+ const i=+cv.dataset.i, px=4, cx=0.35+((i*0.17)%0.45), ph=i*1.3; x.fillStyle=cv.dataset.c;
+ for(let yy=0;yy<H;yy+=px)for(let xx=0;xx<W;xx+=px){const nx=xx/W,ny=yy/H;
+  const ridge=0.64-0.24*Math.exp(-((nx-cx)**2)/0.05)-0.07*Math.sin(nx*8+ph);
+  let v=ny>ridge?0.85-(ny-ridge)*1.2:0.16*Math.exp(-((ny-ridge)**2)/0.004);
+  v*=(0.35+0.65*Math.exp(-((nx-cx)**2)/0.14));
+  if(v>(bayer[(yy/px)%4][(xx/px)%4]+0.5)/16){x.globalAlpha=0.55+0.45*v;x.fillRect(xx,yy,px-1,px-1)}}
+ x.globalAlpha=1;const g=x.createLinearGradient(0,H*0.5,0,H);g.addColorStop(0,'#080D1400');g.addColorStop(1,'#080D14');x.fillStyle=g;x.fillRect(0,0,W,H);});
+</script></body></html>
