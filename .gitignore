@@ -1,4 +1,3 @@
-!.env.example
 # iOS
 *.key
 *.log
@@ -16,3 +15,4 @@ ios/*.xcodeproj/xcuserdata/
 ios/DerivedData/
 ios/build/
 node_modules/
+!.env.example
