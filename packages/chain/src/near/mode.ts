@@ -10,6 +10,12 @@ export interface ChainMode {
   env: PennyEnv;
   /** Defaults to true. Only an explicit false turns it off. */
   dryRun: boolean;
+  /**
+   * NEAR network the RPC points at. Testnet broadcasts are allowed when
+   * dryRun is off (that is what testnet is for); mainnet broadcasts still
+   * require env=mainnet at both config and call level.
+   */
+  network?: 'mainnet' | 'testnet';
 }
 
 export interface LiveRequest {
@@ -23,7 +29,11 @@ export function modeFromEnv(env: Record<string, string | undefined> = process.en
   const e = env.PENNY_ENV === 'mainnet' ? 'mainnet' : 'dev';
   // Only the exact string "0" turns dry-run off. Missing, "", "false", "no" all stay dry.
   const dryRun = env.DRY_RUN !== '0';
-  return { env: e, dryRun };
+  const network =
+    env.NEAR_NETWORK === 'testnet' || (env.NEAR_RPC_URL ?? '').includes('testnet')
+      ? 'testnet'
+      : 'mainnet';
+  return { env: e, dryRun, network };
 }
 
 export function isLive(
@@ -31,12 +41,9 @@ export function isLive(
   hasSignerKey: boolean,
   req: LiveRequest | undefined,
 ): boolean {
-  return (
-    mode.env === 'mainnet' &&
-    mode.dryRun === false &&
-    hasSignerKey &&
-    req !== undefined &&
-    req.dryRun === false &&
-    req.env === 'mainnet'
-  );
+  if (mode.dryRun !== false || !hasSignerKey || req?.dryRun !== false) return false;
+  // Testnet: broadcasting is the point; dryRun=0 + a signer is enough.
+  if (mode.network === 'testnet') return true;
+  // Mainnet (or unspecified network): both levels must say mainnet.
+  return mode.env === 'mainnet' && req.env === 'mainnet';
 }

@@ -1,6 +1,7 @@
 import { KeyType } from '@near-js/crypto';
 import {
   type Action,
+  actionCreators,
   createTransaction,
   Signature,
   SignedTransaction,
@@ -8,7 +9,12 @@ import {
 } from '@near-js/transactions';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { fromBase58, toBase58, toBase64 } from '../util/encoding.ts';
-import type { TxSigner } from './keys.ts';
+import { publicKeyFromString, type TxSigner } from './keys.ts';
+
+/** AddKey(FullAccess) for enrolling an additional device key on an account. */
+export function addKeyAction(publicKey: string): Action {
+  return actionCreators.addKey(publicKeyFromString(publicKey), actionCreators.fullAccessKey());
+}
 
 export interface BuiltTx {
   transaction: Transaction;

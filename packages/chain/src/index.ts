@@ -13,3 +13,4 @@ export * from './near/rpc.ts';
 export * from './near/tx.ts';
 export * from './near/types.ts';
 export { canonicalBytes, canonicalize } from './util/canonical.ts';
+export { fromBase58, toBase58, toBase64Url } from './util/encoding.ts';

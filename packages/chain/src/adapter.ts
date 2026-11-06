@@ -78,6 +78,8 @@ export interface ChainAdapterOptions {
   /** Enrolled device key for a NEAR account (from the devices table). When set, verify requires an exact match. */
   resolveDeviceKey?: (signerId: string) => Promise<string | null>;
   verifyPolicy?: VerifyPolicy;
+  /** Relayer inner-deposit ceiling (yocto). Relayer pays inner deposits, so set deliberately. */
+  relayerMaxInnerDepositYocto?: bigint;
   /** Blocks from head for a fresh signing window. Default 200 (~2-3 min). */
   signingWindowBlocks?: bigint;
   now?: () => Date;
@@ -118,6 +120,9 @@ export class ChainAdapter {
           relayerAccountId: o.relayerAccountId,
           relayerPublicKey: relayerPk,
           mode: this.mode,
+          ...(o.relayerMaxInnerDepositYocto !== undefined
+            ? { maxInnerDepositYocto: o.relayerMaxInnerDepositYocto }
+            : {}),
           ...(o.relayerSigner ? { signer: o.relayerSigner } : {}),
         })
       : null;
@@ -125,9 +130,9 @@ export class ChainAdapter {
 
   private liveRequest(): LiveRequest {
     // The adapter asks for live only when its own config is live; NearRelayer re-checks.
-    return this.mode.env === 'mainnet' && !this.mode.dryRun
-      ? { dryRun: false, env: 'mainnet' }
-      : { dryRun: true };
+    if (this.mode.dryRun) return { dryRun: true };
+    if (this.mode.network === 'testnet') return { dryRun: false, env: this.mode.env };
+    return this.mode.env === 'mainnet' ? { dryRun: false, env: 'mainnet' } : { dryRun: true };
   }
 
   get isLive(): boolean {

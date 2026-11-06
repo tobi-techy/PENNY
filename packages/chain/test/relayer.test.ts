@@ -61,7 +61,13 @@ function setup(opts: { usdcBalance?: string; relayerAmount?: string; registered?
 
 describe('mode gate', () => {
   test('defaults dry; only exact DRY_RUN=0 + mainnet + key + call-level request is live', () => {
-    expect(modeFromEnv({})).toEqual({ env: 'dev', dryRun: true });
+    expect(modeFromEnv({})).toEqual({ env: 'dev', dryRun: true, network: 'mainnet' });
+    // testnet broadcasts with DRY_RUN=0 + signer; mainnet still needs both levels
+    const tn = modeFromEnv({ NEAR_NETWORK: 'testnet', DRY_RUN: '0' });
+    expect(tn.network).toBe('testnet');
+    expect(isLive(tn, true, { dryRun: false, env: 'dev' })).toBe(true);
+    expect(isLive(tn, true, { dryRun: true })).toBe(false);
+    expect(isLive({ env: 'dev', dryRun: false, network: 'mainnet' }, true, { dryRun: false, env: 'dev' })).toBe(false);
     expect(modeFromEnv({ PENNY_ENV: 'mainnet', DRY_RUN: 'false' }).dryRun).toBe(true);
     const live = modeFromEnv({ PENNY_ENV: 'mainnet', DRY_RUN: '0' });
     expect(isLive(live, true, { dryRun: false, env: 'mainnet' })).toBe(true);
