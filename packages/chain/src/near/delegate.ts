@@ -230,6 +230,7 @@ export interface VerifyPolicy {
   /**
    * Total attached deposit ceiling (yoctoNEAR). The RELAYER pays inner deposits
    * (docs.near.org meta-tx), so this is a relayer-drain guard. Default 0.01 NEAR.
+   * Callers relaying Guard-approved amounts must raise it deliberately.
    */
   maxTotalDeposit?: bigint;
   /** Reject a maxBlockHeight more than this many blocks ahead of the chain. Default 600 (~10 min). */

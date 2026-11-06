@@ -23,6 +23,7 @@ import {
   type ChainMode,
   DEFAULT_MODE,
   isLive,
+  isTestnetRpcUrl,
   type LiveRequest,
   modeFromEnv,
 } from './near/mode.ts';
@@ -78,6 +79,8 @@ export interface ChainAdapterOptions {
   /** Enrolled device key for a NEAR account (from the devices table). When set, verify requires an exact match. */
   resolveDeviceKey?: (signerId: string) => Promise<string | null>;
   verifyPolicy?: VerifyPolicy;
+  /** Relayer inner-deposit ceiling (yocto). Relayer pays inner deposits, so set deliberately. */
+  relayerMaxInnerDepositYocto?: bigint;
   /** Blocks from head for a fresh signing window. Default 200 (~2-3 min). */
   signingWindowBlocks?: bigint;
   now?: () => Date;
@@ -100,7 +103,13 @@ export class ChainAdapter {
 
   constructor(private readonly o: ChainAdapterOptions) {
     this.rpc = o.rpc ?? new NearRpc({ url: MAINNET_RPC_URL });
-    this.mode = o.mode ?? DEFAULT_MODE;
+    const mode = o.mode ?? DEFAULT_MODE;
+    // Fail closed: a mode labelled testnet only keeps the testnet allowance when
+    // the RPC this adapter actually talks to is a testnet host.
+    this.mode =
+      mode.network === 'testnet' && !isTestnetRpcUrl(this.rpc.url)
+        ? { ...mode, network: 'mainnet' }
+        : mode;
     this.oneClick = o.oneClick ?? new OneClickClient();
     this.glider = o.glider;
     this.now = o.now ?? (() => new Date());
@@ -118,6 +127,9 @@ export class ChainAdapter {
           relayerAccountId: o.relayerAccountId,
           relayerPublicKey: relayerPk,
           mode: this.mode,
+          ...(o.relayerMaxInnerDepositYocto !== undefined
+            ? { maxInnerDepositYocto: o.relayerMaxInnerDepositYocto }
+            : {}),
           ...(o.relayerSigner ? { signer: o.relayerSigner } : {}),
         })
       : null;
@@ -125,9 +137,9 @@ export class ChainAdapter {
 
   private liveRequest(): LiveRequest {
     // The adapter asks for live only when its own config is live; NearRelayer re-checks.
-    return this.mode.env === 'mainnet' && !this.mode.dryRun
-      ? { dryRun: false, env: 'mainnet' }
-      : { dryRun: true };
+    if (this.mode.dryRun) return { dryRun: true };
+    if (this.mode.network === 'testnet') return { dryRun: false, env: this.mode.env };
+    return this.mode.env === 'mainnet' ? { dryRun: false, env: 'mainnet' } : { dryRun: true };
   }
 
   get isLive(): boolean {
