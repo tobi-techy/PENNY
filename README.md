@@ -22,6 +22,14 @@ souls/            one SOUL file per built-in agent
 docs/             contracts and design
 ```
 
+## What works today
+
+- **Crew in iMessage**: Penny routes asks to Invest, Guard, Mail, Finance, Errand and bots you create; souls, moods, memory, weekly reflection.
+- **Invest (NEAR Intents 1Click)**: "put $50 in SOL" -> live preview (est. out, rate, fee, min received, expiry) -> Guard -> firm quote -> Face ID card -> USDC deposit via NEP-366 delegate action -> card follows the swap (pending, processing, success / refunded / failed). ETH, SOL, NEAR. Real quotes and prices; mainnet broadcast stays off until explicitly enabled. See `docs/INVEST.md`.
+- **Send USDC / NEAR**: Guard-sized (live NEAR price), Face ID, relayed delegate action; relayer limit per approval comes from the approved amount, bounded by an env ceiling. Proven live on testnet.
+- **Guard**: per-tx, daily (mainnet launch caps clamped on both), new-recipient and velocity rules, run before every card and again before relay.
+- **Connectors**: Gmail/GitHub via Composio; writes need a Face ID card.
+
 ## Local run (dev, DRY_RUN)
 
 | Do | See |
