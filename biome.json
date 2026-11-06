@@ -8,7 +8,9 @@
       "!**/drizzle/meta",
       "!ios",
       "!packages/chain",
-      "!**/*.md"
+      "!**/*.md",
+      "!design",
+      "!brand"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },

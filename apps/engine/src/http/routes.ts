@@ -92,15 +92,15 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     const fresh = await d.webhookEvents.claim(dedupeKey, 'messages');
     if (!fresh) return c.json({ ok: true, duplicate: true });
 
-    // Acknowledge fast; process after the response. On failure the claim is
-    // released (not marked processed) so a redelivery reprocesses the event.
-    // A crash leaves a stale claim, which claim() reclaims after its TTL.
+    // Acknowledge fast; process after the response. On failure the row keeps
+    // the error (audit trail) but stays unprocessed, so a redelivery reclaims
+    // and reprocesses it. A crash leaves a stale claim, reclaimed after its TTL.
     queueMicrotask(() => {
       d.onInbound(parsed.data)
         .then(() => d.webhookEvents.markProcessed(dedupeKey))
         .catch(async (e: unknown) => {
           d.log.error({ err: (e as Error).name }, 'inbound processing failed, releasing claim');
-          await d.webhookEvents.release(dedupeKey).catch(() => {});
+          await d.webhookEvents.release(dedupeKey, (e as Error).name).catch(() => {});
         });
     });
     return c.json({ ok: true });
