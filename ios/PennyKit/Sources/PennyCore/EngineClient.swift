@@ -65,6 +65,13 @@ public struct EngineClient: Sendable {
         return try StatusOnly.parse(data)
     }
 
+    // POST /v1/approvals/:id/submit  {planSignature} for write / create_bot approvals
+    public func submitPlan(_ link: CardLink, signature: Data, idempotencyKey: String = UUID().uuidString) async throws -> ApprovalStatus {
+        let body = CanonicalJSON.data(.object(["planSignature": .string(signature.base64URLEncodedString())]))
+        let data = try await send("POST", "/v1/approvals/\(link.approvalId)/submit", cardToken: link.cardToken, body: body, idempotencyKey: idempotencyKey)
+        return try StatusOnly.parse(data)
+    }
+
     // POST /v1/approvals/:id/decline  {reason?}
     public func decline(_ link: CardLink, reason: String? = nil, idempotencyKey: String = UUID().uuidString) async throws -> ApprovalStatus {
         var fields: [String: JSONValue] = [:]

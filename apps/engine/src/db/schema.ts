@@ -129,7 +129,9 @@ export const approvals = pgTable(
       .notNull()
       .references(() => users.id),
     botId: text('bot_id'),
-    kind: text('kind', { enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot'] }).notNull(),
+    kind: text('kind', {
+      enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write'],
+    }).notNull(),
     plan: jsonb('plan').notNull(),
     title: text('title').notNull(),
     amountDisplay: text('amount_display').notNull(),

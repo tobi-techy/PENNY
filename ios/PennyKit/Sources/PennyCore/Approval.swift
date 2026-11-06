@@ -8,6 +8,11 @@ public enum ApprovalKind: String, Sendable, CaseIterable {
     case send
     case payBill = "pay_bill"
     case errand
+    case createBot = "create_bot"
+    case write
+
+    /// These approvals carry no NEAR actions; the device signs the plan message instead.
+    public var isPlanSigned: Bool { self == .createBot || self == .write }
 }
 
 public enum ApprovalStatus: String, Sendable {
@@ -118,6 +123,8 @@ public struct Approval: Equatable, Sendable {
         case .send: verb = "Send"
         case .payBill: verb = "Pay"
         case .errand: verb = "Hire for"
+        case .createBot: verb = "Approve"
+        case .write: verb = "Approve"
         }
         return "\(verb) \(amountDisplay) · \(title)"
     }
@@ -249,7 +256,7 @@ extension Approval {
         guard NearAccountID.isValid(signerId), NearAccountID.isValid(receiverId) else { throw PennyError.invalidResponse("approval account ids") }
 
         let actionsJSON = try o.array("actions")
-        guard (1...8).contains(actionsJSON.count) else { throw PennyError.invalidResponse("approval.actions") }
+        guard (kind.isPlanSigned ? 0 : 1)...8 ~= actionsJSON.count else { throw PennyError.invalidResponse("approval.actions") }
         let actions = try actionsJSON.map(parseAction)
 
         let nonce = try o.string("nonce")

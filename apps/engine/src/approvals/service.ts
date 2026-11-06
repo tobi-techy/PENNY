@@ -11,6 +11,7 @@ import {
   planApprovalMessage,
   planHash,
   planRecipient,
+  type WritePlan,
 } from '@penny/shared';
 import type { MoodService } from '../brain/mood.ts';
 import { evaluate, type GuardContext, type GuardResult } from '../guard/policy.ts';
@@ -65,6 +66,13 @@ export type ApprovalDeps = {
   log: Logger;
   publicBaseUrl: string;
   now: Clock;
+  /** Executes an approved write in an outside app (connector layer). */
+  executeWrite?: (
+    userId: string,
+    toolkit: string,
+    toolSlug: string,
+    args: Record<string, unknown>,
+  ) => Promise<unknown>;
   /** called when a create_bot approval settles */
   onBotApproved?: (approvalId: string) => Promise<void>;
   onBotDeclined?: (approvalId: string) => Promise<void>;
@@ -103,6 +111,8 @@ function titleFor(plan: IntentPlan): string {
       return 'Split';
     case 'create_bot':
       return `New bot · ${plan.name}`.slice(0, 80);
+    case 'write':
+      return plan.title.slice(0, 80);
   }
 }
 
@@ -311,6 +321,81 @@ export class ApprovalService {
     return { approvalId: id, cardToken: token, url };
   }
 
+  /**
+   * Face ID card for a write in an outside app. No money, no NEAR actions.
+   * The write itself runs in submit, after the device signature verifies.
+   */
+  async createWriteApproval(input: {
+    userId: string;
+    bot: BotRow | null;
+    plan: WritePlan;
+    space: SpaceRef;
+  }): Promise<CreateResult> {
+    const { userId, plan, bot } = input;
+    const user = await this.d.users.byId(userId);
+    const device = user ? await this.d.users.activeDevice(userId) : null;
+    if (!user?.accountId || !device) {
+      return {
+        decision: 'needs_more_info',
+        reasons: ['Finish setting up Penny on your iPhone first.'],
+      };
+    }
+    if (!this.d.executeWrite) {
+      return { decision: 'needs_more_info', reasons: ['That app is not connected yet.'] };
+    }
+    const now = this.d.now();
+    const { token, hash } = issueCardToken();
+    const id = newId('apr');
+    const actions: NearAction[] = [];
+    await this.d.approvals.create({
+      id,
+      userId,
+      botId: bot?.id ?? null,
+      kind: 'write',
+      plan,
+      title: titleFor(plan),
+      amountDisplay: 'no money',
+      amountMicros: 0n,
+      facts: [
+        { label: 'App', value: plan.toolkit.slice(0, 80) },
+        { label: 'Action', value: plan.toolSlug.slice(0, 80) },
+        { label: 'What', value: plan.summary.slice(0, 80) },
+      ],
+      signerId: user.accountId,
+      receiverId: user.accountId,
+      actions,
+      nonce: '0',
+      maxBlockHeight: '0',
+      expiresAt: new Date(now.getTime() + BOT_APPROVAL_TTL_MS),
+      status: 'pending',
+      planHash: planHash(plan, actions),
+      cardTokenHash: hash,
+    });
+    await this.d.guardDecisions.record({
+      userId,
+      approvalId: id,
+      plan,
+      decision: 'allow_with_approval',
+      reasons: ['write action requires Face ID approval'],
+    });
+    await this.d.mood.on(userId, 'approval_created');
+    const url = this.cardUrl(id, token);
+    await this.sendCard(id, input.space, {
+      approvalId: id,
+      url,
+      caption: titleFor(plan),
+      subcaption: 'needs your Face ID',
+      live: true,
+    });
+    return {
+      decision: 'allow_with_approval',
+      approvalId: id,
+      cardToken: token,
+      url,
+      reasons: ['write action requires Face ID approval'],
+    };
+  }
+
   private async sendCard(id: string, space: SpaceRef, card: ApprovalCard) {
     try {
       const handle = await this.d.messaging.sendCard(space, card);
@@ -364,7 +449,12 @@ export class ApprovalService {
 
   async status(id: string, token: string | null): Promise<ApprovalStatusResponse> {
     const row = await this.load(id, token, 'read');
-    return { id: row.id, status: row.status, txHash: row.txHash, steps: stepsFor(row.status) };
+    return {
+      id: row.id,
+      status: row.status,
+      txHash: row.txHash,
+      steps: stepsFor(row.status, row.kind),
+    };
   }
 
   private async expire(row: ApprovalRow) {
@@ -409,15 +499,18 @@ export class ApprovalService {
       await this.expire(row);
       throw new ApprovalError(410, 'expired', 'this approval has expired');
     }
-    return row.kind === 'create_bot' ? this.submitBot(row, body) : this.submitMoney(row, body);
+    return row.kind === 'create_bot' || row.kind === 'write'
+      ? this.submitPlanSigned(row, body)
+      : this.submitMoney(row, body);
   }
 
-  private async submitBot(
+  /** create_bot and write approvals: plain device signature over the plan message, no chain. */
+  private async submitPlanSigned(
     row: ApprovalRow,
     body: { signedDelegateAction: string } | { planSignature: string },
   ) {
     if (!('planSignature' in body))
-      throw new ApprovalError(400, 'wrong_body', 'bot approvals need planSignature');
+      throw new ApprovalError(400, 'wrong_body', 'this approval needs planSignature');
     const device = await this.d.users.activeDevice(row.userId);
     if (!device) throw new ApprovalError(403, 'no_device', 'no enrolled device');
     const msg = new TextEncoder().encode(planApprovalMessage(row.id, row.planHash));
@@ -434,10 +527,37 @@ export class ApprovalService {
       {},
       { deviceId: device.id },
     );
-    await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
-    await this.d.onBotApproved?.(row.id);
-    await this.d.mood.on(row.userId, 'bot_created');
-    await this.updateCard(row.id, 'live');
+    if (row.kind === 'create_bot') {
+      await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
+      await this.d.onBotApproved?.(row.id);
+      await this.d.mood.on(row.userId, 'bot_created');
+      await this.updateCard(row.id, 'live');
+      return { status: 'settled' };
+    }
+    // write: execute in the outside app now, exactly once, after Face ID.
+    const plan = row.plan as WritePlan;
+    try {
+      if (!this.d.executeWrite) throw new Error('connector unavailable');
+      await this.d.executeWrite(row.userId, plan.toolkit, plan.toolSlug, plan.arguments);
+    } catch (e) {
+      await this.d.approvals.transition(
+        row.id,
+        row.kind,
+        'signed',
+        'failed',
+        'write failed',
+        {},
+        {
+          error: (e as Error).name,
+        },
+      );
+      await this.d.mood.on(row.userId, 'approval_failed');
+      await this.updateCard(row.id, 'that did not go through. nothing was changed.');
+      return { status: 'failed' };
+    }
+    await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'write executed');
+    await this.d.mood.on(row.userId, 'approval_settled');
+    await this.updateCard(row.id, 'done ✓');
     return { status: 'settled' };
   }
 

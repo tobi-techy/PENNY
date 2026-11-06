@@ -2,6 +2,7 @@ import type { ToolRisk } from '@penny/shared';
 import { type Tool, tool } from 'ai';
 import type { z } from 'zod';
 import type { ApprovalService } from '../approvals/service.ts';
+import type { ConnectorPort } from '../connectors/composio.ts';
 import type { ToolInfo } from '../guard/bot-policy.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
 import type { BotRow } from '../repo/bots.ts';
@@ -30,6 +31,7 @@ export type ToolContext = {
   bot: BotRow;
   space: SpaceRef;
   approvals: ApprovalService;
+  connectors?: ConnectorPort;
   memory: MemoryService;
   mood: MoodService;
   market: MarketPort;

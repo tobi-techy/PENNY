@@ -53,4 +53,21 @@ public enum ApprovalSigning {
         }
         return try SignedDelegateAction(delegateAction: delegate, signature: signature)
     }
+
+    /// Plan-signed approvals (write, create_bot): sign `penny-approval:v1:<id>:<planHash>`
+    /// as raw UTF-8 bytes. The engine verifies this exact message with the enrolled key.
+    public static func signPlan(_ approval: Approval, with signer: MessageSigner, expectedAccountId: String?, now: Date = Date()) async throws -> Data {
+        guard approval.kind.isPlanSigned else { throw PennyError.invalidInput("not a plan-signed approval") }
+        guard approval.status == .pending else { throw PennyError.notPending }
+        guard approval.expiresAt > now else { throw PennyError.expired }
+        if let expectedAccountId, expectedAccountId != approval.signerId { throw PennyError.wrongAccount }
+        let message = Data("penny-approval:v1:\(approval.id):\(approval.planHash)".utf8)
+        let signature = try await signer.sign(message, reason: approval.faceIDReason)
+        let publicKey = try signer.publicKey()
+        let verifyKey = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey.raw)
+        guard verifyKey.isValidSignature(signature, for: message) else {
+            throw PennyError.invalidInput("signature self-check failed")
+        }
+        return signature
+    }
 }

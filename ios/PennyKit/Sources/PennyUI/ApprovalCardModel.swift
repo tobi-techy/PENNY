@@ -108,8 +108,14 @@ public final class ApprovalCardModel: ObservableObject {
         }
         phase = .approving
         do {
-            let signed = try await ApprovalSigning.sign(approval, with: signer, expectedAccountId: expectedAccountId)
-            let status = try await client.submit(link, signed: signed, idempotencyKey: "submit-\(approval.id)")
+            let status: ApprovalStatus
+            if approval.kind.isPlanSigned {
+                let signature = try await ApprovalSigning.signPlan(approval, with: signer, expectedAccountId: expectedAccountId)
+                status = try await client.submitPlan(link, signature: signature, idempotencyKey: "submit-\(approval.id)")
+            } else {
+                let signed = try await ApprovalSigning.sign(approval, with: signer, expectedAccountId: expectedAccountId)
+                status = try await client.submit(link, signed: signed, idempotencyKey: "submit-\(approval.id)")
+            }
             apply(status: status, steps: [StatusStep(label: "Signed on this iPhone", state: .done)])
             startPolling()
         } catch let error as PennyError {

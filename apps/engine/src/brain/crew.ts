@@ -156,6 +156,7 @@ export class Crew {
       bot,
       space,
       approvals: this.d.approvals,
+      ...(this.d.connectors ? { connectors: this.d.connectors } : {}),
       memory: this.d.memory,
       mood: this.d.mood,
       market: this.d.market,
@@ -169,7 +170,7 @@ export class Crew {
         const extra = await this.d.connectors.toolsFor(userId, bot.slug);
         Object.assign(tools, extra);
         connectorNote =
-          "\nConnected apps (via Composio): you may search and read the user's apps. If an app is not connected, use the connection tools and share the connect link. Send/post/create/update/delete actions are blocked until they go through an approval card - say what you want to do instead of retrying.";
+          '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app, share its link, then retry when the user says done. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';
       } catch {
         this.d.log.warn({ bot: bot.slug }, 'connector tools unavailable, continuing without them');
       }

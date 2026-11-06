@@ -88,6 +88,18 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
     now,
+    ...(d.connectors
+      ? {
+          executeWrite: (
+            userId: string,
+            toolkit: string,
+            slug: string,
+            args: Record<string, unknown>,
+          ) =>
+            d.connectors?.executeWrite(userId, toolkit, slug, args) ??
+            Promise.reject(new Error('no connector')),
+        }
+      : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
     onBotDeclined: (id) => botService.onApprovalDeclined(id),
   });

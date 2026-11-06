@@ -20,13 +20,15 @@ const TRANSITIONS: Record<ApprovalStatus, readonly ApprovalStatus[]> = {
  * create_bot approvals have no chain step: signed (device signature verified)
  * goes straight to settled. Money approvals can never skip the relay.
  */
+const NO_CHAIN_KINDS: readonly ApprovalKind[] = ['create_bot', 'write'];
+
 export function canTransition(
   from: ApprovalStatus,
   to: ApprovalStatus,
   kind: ApprovalKind = 'send',
 ): boolean {
-  if (kind === 'create_bot' && from === 'signed' && to === 'settled') return true;
-  if (kind === 'create_bot' && to === 'relayed') return false;
+  if (NO_CHAIN_KINDS.includes(kind) && from === 'signed' && to === 'settled') return true;
+  if (NO_CHAIN_KINDS.includes(kind) && to === 'relayed') return false;
   return TRANSITIONS[from].includes(to);
 }
 
@@ -55,8 +57,13 @@ export function assertTransition(
 export type StatusStep = { label: string; state: 'todo' | 'active' | 'done' | 'failed' };
 
 /** Step list for the live card. */
-export function stepsFor(status: ApprovalStatus): StatusStep[] {
-  const labels = ['Approved with Face ID', 'Sent to NEAR', 'Settled'];
+export function stepsFor(status: ApprovalStatus, kind: ApprovalKind = 'send'): StatusStep[] {
+  const labels =
+    kind === 'write'
+      ? ['Approved with Face ID', 'Done in the app', 'Finished']
+      : kind === 'create_bot'
+        ? ['Approved with Face ID', 'Bot switched on', 'Finished']
+        : ['Approved with Face ID', 'Sent to NEAR', 'Settled'];
   const doneCount: Record<ApprovalStatus, number> = {
     pending: 0,
     signed: 1,

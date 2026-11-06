@@ -8,8 +8,10 @@ import {
   PayBillPlan,
   SendPlan,
   SplitPlan,
+  WritePlan,
 } from '@penny/shared';
 import { z } from 'zod';
+import { billQuery, parseBillEmails } from '../connectors/composio.ts';
 import type { MarketPort, ToolContext, ToolDef } from './registry.ts';
 import { ToolRegistry } from './registry.ts';
 
@@ -90,10 +92,74 @@ export function builtinTools(): ToolDef<never>[] {
   });
   add({
     id: 'find_bills',
-    description: 'Find upcoming bills in connected email (read-only). Not connected in v0.1.',
+    description:
+      'Find bills, invoices and payment notices in connected Gmail (read-only). If it says not connected, call connect_app for gmail and share the link.',
     risk: 'read',
     input: empty,
-    execute: async () => ({ ok: false, error: 'email not connected yet' }),
+    execute: async (ctx) => {
+      if (!ctx.connectors) return { ok: false, error: 'email not connected yet' };
+      try {
+        const raw = await ctx.connectors.executeRead(
+          ctx.userId,
+          ctx.bot.slug,
+          'GMAIL_FETCH_EMAILS',
+          {
+            query: billQuery(),
+            max_results: 10,
+            verbose: false,
+          },
+        );
+        const bills = parseBillEmails(raw);
+        return { ok: true, count: bills.length, bills };
+      } catch (e) {
+        return { ok: false, error: (e as Error).name, hint: 'try connect_app gmail' };
+      }
+    },
+  });
+  add({
+    id: 'connect_app',
+    description:
+      'Check whether an outside app (gmail, github) is connected for this user. If not, returns a connect link to share with the user verbatim. After they authorize, retry the original task.',
+    risk: 'read',
+    input: z.object({ toolkit: z.enum(['gmail', 'github']) }).strict(),
+    execute: async (ctx, i) => {
+      if (!ctx.connectors) return { ok: false, error: 'connectors not configured' };
+      const r = await ctx.connectors.connect(ctx.userId, i.toolkit);
+      if (r.status === 'connected') return { ok: true, connected: true, toolkit: i.toolkit };
+      if (r.status === 'link')
+        return {
+          ok: false,
+          connected: false,
+          toolkit: i.toolkit,
+          connectUrl: r.redirectUrl,
+          tellUser: `tap this to connect your ${i.toolkit}: ${r.redirectUrl} - then say done and I will retry.`,
+        };
+      return { ok: false, connected: false, error: r.reason };
+    },
+  });
+  add({
+    id: 'propose_write',
+    description:
+      'Propose a write in an outside app (send email, post comment, etc.). Creates a Face ID approval card; the write runs only if the user approves. Never use for money.',
+    risk: 'write',
+    input: WritePlan.omit({ kind: true }),
+    execute: async (ctx, i) => {
+      const r = await ctx.approvals.createWriteApproval({
+        userId: ctx.userId,
+        bot: ctx.bot,
+        plan: { kind: 'write', ...i },
+        space: ctx.space,
+      });
+      if (r.decision === 'allow_with_approval') {
+        return {
+          decision: r.decision,
+          approvalId: r.approvalId,
+          reasons: r.reasons,
+          cardSent: true,
+        };
+      }
+      return r;
+    },
   });
   add({
     id: 'remember',
