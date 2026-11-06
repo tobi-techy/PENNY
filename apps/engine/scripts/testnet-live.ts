@@ -16,6 +16,11 @@
  *   PENNY_LIVE_CONFIRM=1   (explicit opt-in to spending testnet funds)
  *   RECIPIENT=<funded testnet account to receive 0.1 NEAR> (default: app account)
  *
+ * PENNY_LIVE_SKIP_FACTORY=1 adds a temporary FullAccess "device" key to the
+ * funded app/relayer account itself (the inverse of production, where device
+ * keys live only on the user's own sub-account). The runner deletes that key
+ * at the end. Testnet only; never point this at a funded mainnet account.
+ *
  * Run from repo root: bun apps/engine/scripts/testnet-live.ts
  * The app account needs ~1 test NEAR (user account seed + gas). Get testnet
  * NEAR from the NEAR testnet faucet in your wallet, then re-run.
@@ -106,6 +111,7 @@ const deviceSecret = new Uint8Array(
 );
 const user = await engine.repos.users.findOrCreateByHandle('+15550100');
 const skipFactory = process.env.PENNY_LIVE_SKIP_FACTORY === '1';
+let tempDeviceKey: string | null = null;
 if (skipFactory) {
   // An implicit 64-char account cannot parent subaccounts (child ids would
   // exceed NEAR's 64-char limit), so use the funded account itself as the
@@ -116,9 +122,9 @@ if (skipFactory) {
   const nearPub = `ed25519:${toBase58(new Uint8Array(Buffer.from(devicePub, 'base64url')))}`;
   const keys = await adapter.rpc.viewAccessKeyList(appId);
   if (!keys.keys.some((k) => k.publicKey === nearPub)) {
-    const appKey = await adapter.rpc.viewAccessKey(appId, process.env.NEAR_APP_PUBLIC_KEY ?? '');
-    if (!appKey) fail('app access key not found');
     const signer = new KeyPairSigner(appId, process.env.NEAR_APP_PRIVATE_KEY ?? '');
+    const appKey = await adapter.rpc.viewAccessKey(appId, signer.publicKey.toString());
+    if (!appKey) fail('app access key not found');
     const built = buildTx({
       signerId: appId,
       signerPublicKey: signer.publicKey,
@@ -130,6 +136,7 @@ if (skipFactory) {
     const signed = await signTx(built, signer);
     await adapter.rpc.sendTx(signed.signedBase64, 'EXECUTED_OPTIMISTIC');
     console.log('added device key to app account:', nearPub);
+    tempDeviceKey = nearPub;
   }
   await engine.repos.users.setAccount(user.id, 'live', appId);
   await engine.repos.users.addDevice(user.id, devicePub);
@@ -204,5 +211,26 @@ console.log(
     ? 'LIVE TESTNET SEND: SETTLED ✓'
     : `LIVE TESTNET SEND: ${final.status} ✗`,
 );
+// Remove the temporary FullAccess device key from the app/relayer account.
+if (tempDeviceKey) {
+  try {
+    const { buildTx, deleteKeyAction, KeyPairSigner, signTx } = await import('@penny/chain');
+    const signer = new KeyPairSigner(appId, process.env.NEAR_APP_PRIVATE_KEY ?? '');
+    const appKey = await adapter.rpc.viewAccessKey(appId, signer.publicKey.toString());
+    if (!appKey) throw new Error('app access key not found');
+    const built = buildTx({
+      signerId: appId,
+      signerPublicKey: signer.publicKey,
+      receiverId: appId,
+      nonce: appKey.nonce + 1n,
+      actions: [deleteKeyAction(tempDeviceKey)],
+      blockHash: appKey.blockHash,
+    });
+    await adapter.rpc.sendTx((await signTx(built, signer)).signedBase64, 'EXECUTED_OPTIMISTIC');
+    console.log('removed temporary device key:', tempDeviceKey);
+  } catch (e) {
+    console.error(`WARN: remove ${tempDeviceKey} from ${appId} by hand:`, (e as Error).message);
+  }
+}
 await dbh.close();
 process.exit(final.status === 'settled' ? 0 : 1);

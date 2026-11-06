@@ -16,6 +16,11 @@ export function addKeyAction(publicKey: string): Action {
   return actionCreators.addKey(publicKeyFromString(publicKey), actionCreators.fullAccessKey());
 }
 
+/** DeleteKey, to remove a key added for a one-off run. */
+export function deleteKeyAction(publicKey: string): Action {
+  return actionCreators.deleteKey(publicKeyFromString(publicKey));
+}
+
 export interface BuiltTx {
   transaction: Transaction;
   /** base58(sha256(borsh(Transaction))) — the hash the network will report. */
