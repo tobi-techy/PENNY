@@ -322,7 +322,8 @@ export const EnrollBody = z
     enrollCode: EnrollCode,
     /** base64url, exactly 32 raw bytes (43 chars, unpadded) */
     publicKeyEd25519: Base64Url.length(43),
-    appAttest: z.string().max(8192).optional(),
+    appAttest: z.string().max(16_384).optional(),
+    appAttestChallengeId: z.string().min(3).max(64).optional(),
   })
   .strict();
 export type EnrollBody = z.infer<typeof EnrollBody>;

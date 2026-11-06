@@ -34,6 +34,9 @@ const BaseEnv = z.object({
 
   COMPOSIO_API_KEY: optionalStr,
 
+  /** "TEAMID.bundle.id" for App Attest verification, e.g. A1B2C3D4E5.app.penny.host */
+  APP_ATTEST_APP_ID: optionalStr,
+
   NEAR_NETWORK: z.enum(['mainnet', 'testnet']).default('testnet'),
   NEAR_APP_ACCOUNT_ID: z.string().default('penny.near'),
   NEAR_RELAYER_ACCOUNT_ID: optionalStr,

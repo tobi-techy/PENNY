@@ -29,11 +29,16 @@ extension EngineClient {
         _ signer: MessageSigner, message: String, accountId: String, timestamp: Int, reason: String
     ) async throws -> [String: JSONValue] {
         let signature = try await signer.sign(Data(message.utf8), reason: reason)
-        return [
+        var body: [String: JSONValue] = [
             "accountId": .string(accountId),
             "timestamp": .number(Double(timestamp)),
             "signature": .string(signature.base64URLEncodedString()),
         ]
+        // App Attest assertion over the same message when this device attested.
+        if let assertion = await AppAttestManager.shared.assertion(for: message) {
+            body["appAssertion"] = .string(assertion)
+        }
+        return body
     }
 
     /// Revoke a device (this one, or a lost one) so it can no longer sign.

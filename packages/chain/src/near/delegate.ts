@@ -1,4 +1,12 @@
-import { SCHEMA } from '@near-js/transactions';
+import { KeyType, PublicKey } from '@near-js/crypto';
+import {
+  actionCreators,
+  buildDelegateAction,
+  encodeSignedDelegate,
+  SCHEMA,
+  Signature,
+  SignedDelegate,
+} from '@near-js/transactions';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { deserialize, serialize } from 'borsh';
@@ -83,6 +91,45 @@ function decodeAction(v: unknown): DecodedAction {
   }
   if (k === 'transfer') return { type: 'Transfer', deposit: toBig(inner.deposit) };
   return { type: 'Other', kind: k };
+}
+
+/**
+ * Build + sign a NEP-366 SignedDelegateAction with a raw ed25519 secret key.
+ * Mirrors what the iPhone does (Borsh in PennyCore/delegate-vectors.json).
+ * Returns standard base64 (padded), ready for ApprovalService.submit.
+ */
+export function buildSignedDelegateAction(p: {
+  secretKey: Uint8Array;
+  senderId: string;
+  receiverId: string;
+  actions: NearActionSpec[];
+  nonce: bigint;
+  maxBlockHeight: bigint;
+}): string {
+  const raw = ed25519.getPublicKey(p.secretKey);
+  const actions = p.actions.map((a) =>
+    a.type === 'Transfer'
+      ? actionCreators.transfer(BigInt(a.deposit))
+      : actionCreators.functionCall(a.methodName, canonicalBytes(a.args), BigInt(a.gas), BigInt(a.deposit)),
+  );
+  const da = buildDelegateAction({
+    senderId: p.senderId,
+    receiverId: p.receiverId,
+    actions,
+    nonce: p.nonce,
+    maxBlockHeight: p.maxBlockHeight,
+    publicKey: new PublicKey({ keyType: KeyType.ED25519, data: raw }),
+  });
+  const message = new Uint8Array([
+    ...serialize(SCHEMA.DelegateActionPrefix, { prefix: NEP366_PREFIX }),
+    ...serialize(SCHEMA.DelegateAction, da),
+  ]);
+  const sig = ed25519.sign(sha256(message), p.secretKey);
+  const sd = new SignedDelegate({
+    delegateAction: da,
+    signature: new Signature({ keyType: KeyType.ED25519, data: sig }),
+  });
+  return Buffer.from(encodeSignedDelegate(sd)).toString('base64');
 }
 
 /** Decode a base64 (standard, padded) borsh NEP-366 SignedDelegateAction. Rejects non-canonical encodings. */

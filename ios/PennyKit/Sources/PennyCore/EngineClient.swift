@@ -91,12 +91,36 @@ public struct EngineClient: Sendable {
     // POST /v1/devices/enroll  {enrollCode, publicKeyEd25519}
     public func enroll(code: String, publicKey: NearPublicKey, idempotencyKey: String = UUID().uuidString) async throws -> EnrollResponse {
         guard EnrollCode.isValid(code) else { throw PennyError.invalidInput("enroll code") }
-        let body = CanonicalJSON.data(.object([
+        var fields: [String: JSONValue] = [
             "enrollCode": .string(code),
             "publicKeyEd25519": .string(publicKey.base64URL),
-        ]))
+        ]
+        // App Attest when the device supports it: challenge -> attest -> enroll.
+        // The engine verifies the attestation; absence is a dev-only path.
+        if AppAttestManager.shared.isSupported,
+           let challenge = try? await attestChallenge(code: code) {
+            let attestation = try await AppAttestManager.shared.attest(challengeB64: challenge.challenge)
+            fields["appAttest"] = .string(attestation)
+            fields["appAttestChallengeId"] = .string(challenge.challengeId)
+        }
+        let body = CanonicalJSON.data(.object(fields))
         let data = try await send("POST", "/v1/devices/enroll", cardToken: nil, body: body, idempotencyKey: idempotencyKey)
         return try EnrollResponse.parse(data)
+    }
+
+    public struct AttestChallenge: Sendable {
+        public let challengeId: String
+        public let challenge: String
+    }
+
+    public func attestChallenge(code: String) async throws -> AttestChallenge {
+        let body = CanonicalJSON.data(.object(["enrollCode": .string(code)]))
+        let data = try await send("POST", "/v1/devices/app-attest/challenge", cardToken: nil, body: body, idempotencyKey: nil)
+        let root = try JSONParser.parse(data)
+        guard let id = root["challengeId"]?.stringValue, let ch = root["challenge"]?.stringValue else {
+            throw PennyError.invalidResponse("attest challenge")
+        }
+        return AttestChallenge(challengeId: id, challenge: ch)
     }
 
     // GET /healthz

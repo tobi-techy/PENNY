@@ -214,12 +214,13 @@ final class DelegateActionTests: XCTestCase {
 final class ApprovalParsingTests: XCTestCase {
     let json = """
     {"id":"apr_01JC2ZK5Y8T3M4N5P6Q7R8S9TV","userId":"usr_01JC2ZK5Y8T3M4N5P6Q7R8S9TV","kind":"invest",
+     "plan":{"kind":"invest","fromAsset":"USDC","amountUsd":"50","portfolioId":"eth-momentum","quoteId":"q_1"},
      "title":"Swap · USDC → ETH Momentum","amountDisplay":"$50.00",
      "facts":[{"label":"Fee","value":"$0.12"},{"label":"Today's limit","value":"$50 of $100 left"}],
      "signerId":"tobi.penny.near","receiverId":"usdc.near",
      "actions":[{"type":"FunctionCall","methodName":"ft_transfer_call","args":{"receiver_id":"intents.near","amount":"50000000","msg":"{}"},"gas":"30000000000000","deposit":"1"}],
      "nonce":"1234","maxBlockHeight":"123456789","expiresAt":"2026-11-05T19:00:00.000Z","status":"pending",
-     "planHash":"\(String(repeating: "a", count: 43))"}
+     "planHash":"zFHz3XmzCjVgKCyFWHSGWeYKVWbi_zGLUgD3rJxZnAQ"}
     """
 
     func testParsesApproval() throws {
@@ -228,6 +229,13 @@ final class ApprovalParsingTests: XCTestCase {
         XCTAssertEqual(a.facts.count, 2)
         XCTAssertEqual(a.actions.count, 1)
         XCTAssertEqual(a.status, .pending)
+    }
+
+    func testRejectsTamperedPlanHash() {
+        // planHash computed over {plan, actions} on-device: tampering with the
+        // amount in transit must fail before Face ID ever signs.
+        let bad = json.replacingOccurrences(of: "\"amountUsd\":\"50\"", with: "\"amountUsd\":\"5000\"")
+        XCTAssertThrowsError(try Approval.parse(Data(bad.utf8)))
     }
 
     func testRejectsUnknownKeys() {

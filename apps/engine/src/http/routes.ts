@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   ApprovalId,
   DeclineBody,
@@ -12,6 +13,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { parseCardAuth } from '../approvals/card-token.ts';
 import { ApprovalError, type ApprovalService } from '../approvals/service.ts';
+import { verifyAssertion } from '../devices/appattest.ts';
 import { EnrollError, type EnrollService } from '../devices/enroll.ts';
 import { verifyEd25519 } from '../lib/crypto.ts';
 import type { Logger } from '../lib/logger.ts';
@@ -27,6 +29,8 @@ export type RouteDeps = {
   approvalsRepo: ApprovalsRepo;
   users: UsersRepo;
   enroll: EnrollService;
+  /** App Attest app id ("TEAMID.bundle.id"); assertions verified when set. */
+  attestAppId?: string;
   webhookEvents: WebhookEventsRepo;
   idempotency: IdempotencyRepo;
   webhookSecret: string | undefined;
@@ -120,6 +124,22 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     },
   );
 
+  r.post(
+    '/v1/devices/app-attest/challenge',
+    rateLimit(d.enrollLimiter, (c) => `attest:${clientIp(c)}`),
+    async (c) => {
+      const body = parseJson(
+        z.object({ enrollCode: z.string().min(4).max(32) }).strict(),
+        await c.req.text(),
+      );
+      if (!body) return c.json({ error: 'bad_request' }, 400);
+      const issued = await d.enroll.issueAttestChallenge(body.enrollCode);
+      // unknown/expired codes look the same as everywhere else
+      if (!issued) return c.json({ error: 'invalid_code' }, 401);
+      return c.json(issued);
+    },
+  );
+
   // ---- approvals (Authorization: Card <token>) ----
   const approvalsRL = rateLimit(d.approvalLimiter, (c) => `apr:${clientIp(c)}`);
   const idOf = (raw: string) => (ApprovalId.safeParse(raw).success ? raw : null);
@@ -168,6 +188,8 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
       accountId: z.string().min(3).max(128),
       timestamp: z.number().int().positive(),
       signature: z.string().min(43).max(128),
+      /** Required when the device has a verified App Attest credential. */
+      appAssertion: z.string().max(8192).optional(),
     })
     .strict();
   const nowSec = () => Math.floor(Date.now() / 1000);
@@ -177,6 +199,7 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     timestamp: number,
     signature: string,
     message: string,
+    appAssertion?: string,
   ): Promise<{ userId: string; device: DeviceRow } | null> {
     if (Math.abs(nowSec() - timestamp) > 300) return null;
     const user = await d.users.byAccountId(accountId);
@@ -185,6 +208,24 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     if (!device) return null;
     const sig = Buffer.from(signature, 'base64url');
     if (!verifyEd25519(device.publicKey, new TextEncoder().encode(message), sig)) return null;
+    // Verified App Attest devices must also present a fresh assertion over
+    // this exact message, with a strictly increasing counter.
+    if (device.appAttestVerified) {
+      if (!appAssertion || !d.attestAppId || !device.appAttestPublicKey) return null;
+      try {
+        const clientDataHash = new Uint8Array(createHash('sha256').update(message).digest());
+        const { counter } = verifyAssertion({
+          assertionB64: appAssertion,
+          publicKeyXY: device.appAttestPublicKey,
+          clientDataHash,
+          appId: d.attestAppId,
+          lastCounter: device.appAttestCounter,
+        });
+        if (!(await d.users.advanceAttestCounter(device.id, counter))) return null;
+      } catch {
+        return null;
+      }
+    }
     return { userId: user.id, device };
   }
 
@@ -200,6 +241,7 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
       body.timestamp,
       body.signature,
       deviceRevokeMessage(body.accountId, body.deviceId, body.timestamp),
+      body.appAssertion,
     );
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     // The signing device may revoke itself (lost-phone flow uses a second
@@ -235,6 +277,7 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
         body.blockNewRecipientsOverUsd,
         body.timestamp,
       ),
+      body.appAssertion,
     );
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const policy = await d.users.updatePolicy(auth.userId, {
@@ -254,6 +297,7 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
       body.timestamp,
       body.signature,
       historyRequestMessage(body.accountId, body.timestamp),
+      body.appAssertion,
     );
     if (!auth) return c.json({ error: 'unauthorized' }, 401);
     const rows = await d.approvalsRepo.listForUser(auth.userId, 20);

@@ -23,16 +23,20 @@ const adapter = chainAdapterFromEnv(process.env, { resolveDeviceKey: async () =>
 const chain = new RealChain(adapter);
 
 const user = process.env.PENNY_TEST_USER ?? 'penny.testnet';
-console.log('1. RPC block height:', await adapter.rpc.blockHeight());
-const built = await chain.buildActions(
-  { kind: 'send', asset: 'USDC', amount: '1', to: user },
-  user,
-);
-console.log(
-  '2. dry buildActions $1 USDC send ->',
-  built.receiverId,
-  `${built.actions.length} action(s)`,
-);
+console.log('1. RPC block height:', (await adapter.rpc.finalBlock()).height.toString());
+try {
+  const built = await chain.buildActions(
+    { kind: 'send', asset: 'NEAR', amount: '0.1', to: user },
+    user,
+  );
+  console.log(
+    '2. dry buildActions 0.1 NEAR send ->',
+    built.receiverId,
+    `${built.actions.length} action(s)`,
+  );
+} catch (e) {
+  console.log('2. buildActions needs funded account/keys:', (e as Error).message.slice(0, 120));
+}
 const guard = new GuardContract({
   rpc: adapter.rpc,
   contractId: guardContractId(user),

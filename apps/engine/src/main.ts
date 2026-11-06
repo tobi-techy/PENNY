@@ -29,6 +29,8 @@ if (env.PENNY_ENV === 'mainnet') {
   if (!env.NEAR_RELAYER_PRIVATE_KEY) problems.push('NEAR_RELAYER_PRIVATE_KEY missing');
   if (!env.NEAR_RPC_URL || env.NEAR_RPC_URL.includes('testnet'))
     problems.push('NEAR_RPC_URL is not a mainnet endpoint');
+  if (!env.APP_ATTEST_APP_ID)
+    problems.push('APP_ATTEST_APP_ID missing (App Attest would be unverified)');
   if (problems.length) {
     log.fatal({ problems }, 'mainnet boot refused');
     process.exit(1);
@@ -108,6 +110,8 @@ const engine = createEngine({
   market: new FakeMarket(),
   registry: createRegistry(),
   ...(env.COMPOSIO_API_KEY ? { connectors: new ComposioConnector(env.COMPOSIO_API_KEY) } : {}),
+  ...(env.APP_ATTEST_APP_ID ? { attestAppId: env.APP_ATTEST_APP_ID } : {}),
+  attestRequire: env.PENNY_ENV === 'mainnet',
   log,
   publicBaseUrl: env.PUBLIC_BASE_URL,
   ...(env.PENNY_ENV === 'mainnet' ? { mainnetMaxPerTxUsd: env.PENNY_MAINNET_MAX_PER_TX_USD } : {}),
