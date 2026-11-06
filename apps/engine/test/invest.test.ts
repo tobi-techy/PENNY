@@ -47,18 +47,16 @@ describe('invest preview', () => {
     const p = (await t.engine.services.approvals.previewInvest(u.userId, 'SOL', '50')) as {
       ok: true;
       facts: { label: string; value: string }[];
-      keylessFee: boolean;
       guard: { decision: string };
     };
     expect(p.ok).toBe(true);
     const f = Object.fromEntries(p.facts.map((x) => [x.label, x.value]));
-    expect(f['You pay']).toBe('50 USDC');
-    expect(f['You get (est.)']).toBe('0.499 SOL');
-    expect(f.Rate).toBe('1 SOL ≈ $100');
-    expect(f.Fee).toContain('0.2% no-partner-key fee');
-    expect(f['Min received']).toBe('0.49401 SOL (1% slippage)');
-    expect(f.Expires).toBe('in 120s');
-    expect(p.keylessFee).toBe(true);
+    expect(f['You pay']).toBe('$50');
+    expect(f["You'll get"]).toBe('about 0.499 SOL, at least 0.49401 SOL');
+    expect(f.Fee).toBe('$0.10');
+    expect(f.Price).toBe('1 SOL ≈ $100');
+    expect(f['Price good for']).toBe('2 min');
+    expect(f['Goes to']).toBe('your Penny wallet');
     expect(p.guard.decision).toBe('allow_with_approval');
     expect(t.messaging.cards.length).toBe(cards);
   });
@@ -83,18 +81,21 @@ describe('invest approval card', () => {
     expect(actions.map((a) => a.methodName)).toEqual(['storage_deposit', 'ft_transfer']);
     expect(actions[1]?.args).toEqual({ receiver_id: q?.depositAddress, amount: '10000000' });
     const labels = row.facts.map((f) => f.label);
+    // the iPhone shows the first three: pay, get (with minimum), fee
     expect(labels).toEqual([
       'You pay',
-      'You get (est.)',
-      'Rate',
+      "You'll get",
       'Fee',
-      'Min received',
-      'Expires',
+      'Price',
+      'Price good for',
       'Goes to',
       'Daily limit',
     ]);
+    expect(row.title).toBe('Buying $10 of SOL');
     expect(row.expiresAt.getTime() - t.clock.now.getTime()).toBeLessThanOrEqual(120_000);
-    expect(t.messaging.cards.at(-1)?.card.subcaption).toContain('SOL est. · tap to approve');
+    expect(t.messaging.cards.at(-1)?.card.subcaption).toBe(
+      "You'll get about 0.0998 SOL · tap to approve",
+    );
   });
 
   test('Guard block happens before any quote or card', async () => {
@@ -141,9 +142,41 @@ describe('approval re-checks the quote (re-card, never silently)', () => {
     expect(e.code).toBe('requoted');
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('expired');
     expect(t.messaging.cards.length).toBe(cards + 1);
-    expect(t.messaging.cards.at(-1)?.card.subcaption).toStartWith('fresh quote.');
-    expect(t.messaging.edits.at(-1)?.card.subcaption).toContain('quote expired');
+    expect(t.messaging.cards.at(-1)?.card.subcaption).toStartWith('New price.');
+    expect(t.messaging.edits.at(-1)?.card.subcaption).toBe(
+      'Price changed, check the new amount. Nothing moved.',
+    );
     expect(t.chain.relayCalls.length).toBe(relays);
+  });
+
+  test('expiry sweeper ran first: an approve tap still re-quotes, once', async () => {
+    const r = await invest('7.5');
+    const cards = t.messaging.cards.length;
+    t.clock.now = new Date(t.clock.now.getTime() + 121_000);
+    expect(await t.engine.services.approvals.expireDue()).toBeGreaterThanOrEqual(1);
+    expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('expired');
+    const e = await submitErr(r.approvalId, r.cardToken);
+    expect(e.code).toBe('requoted');
+    expect(t.messaging.cards.length).toBe(cards + 1);
+    const again = await submitErr(r.approvalId, r.cardToken);
+    expect(again.code).toBe('expired');
+    expect(t.messaging.cards.length).toBe(cards + 1);
+  });
+
+  test('decline on an expired invest card never buys a new quote', async () => {
+    const r = await invest('7.25');
+    const cards = t.messaging.cards.length;
+    const firm = t.invest.firmCalls;
+    t.clock.now = new Date(t.clock.now.getTime() + 121_000);
+    let err: ApprovalError | null = null;
+    try {
+      await t.engine.services.approvals.decline(r.approvalId, r.cardToken);
+    } catch (x) {
+      err = x as ApprovalError;
+    }
+    expect(err?.code).toBe('expired');
+    expect(t.messaging.cards.length).toBe(cards);
+    expect(t.invest.firmCalls).toBe(firm);
   });
 
   test('price moved beyond slippage -> cancelled, new card, nothing relayed', async () => {
@@ -156,7 +189,7 @@ describe('approval re-checks the quote (re-card, never silently)', () => {
     expect(e.code).toBe('requoted');
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('cancelled');
     expect(t.messaging.cards.length).toBe(cards + 1);
-    expect(t.messaging.cards.at(-1)?.card.subcaption).toStartWith('price moved, new quote.');
+    expect(t.messaging.cards.at(-1)?.card.subcaption).toStartWith('New price.');
     expect(t.chain.relayCalls.length).toBe(relays);
     expect(t.chain.verifyCalls).not.toContain(r.approvalId);
   });
@@ -187,7 +220,7 @@ describe('live swap status updates the card in place', () => {
   const lastEdit = (id: string) =>
     t.messaging.edits.filter((e) => e.handle.approvalId === id).at(-1);
 
-  test('Pending -> Processing -> Success, with explorer links; 1Click told about the deposit', async () => {
+  test('Sending -> Buying now -> Done, plain words, no links or hashes on the card; 1Click told', async () => {
     const { r, out, dep } = await relayedLive('HASH_OK');
     expect(out.status).toBe('relayed');
     expect(t.invest.notified.at(-1)).toEqual({
@@ -195,27 +228,33 @@ describe('live swap status updates the card in place', () => {
       depositAddress: dep,
       sender: u.accountId,
     });
-    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith('pending');
-    expect(lastEdit(r.approvalId)?.card.trailingCaption).toBe(
-      `explorer.near-intents.org/transactions/${dep} · nearblocks.io/txns/HASH_OK`,
-    );
+    expect(lastEdit(r.approvalId)?.card.subcaption).toBe('Sending…');
+    expect(lastEdit(r.approvalId)?.card.trailingCaption).toBeUndefined();
     t.invest.statuses.set(dep, 'PROCESSING');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith('processing');
+    expect(lastEdit(r.approvalId)?.card.subcaption).toBe('Buying now…');
     const edits = t.messaging.edits.length;
     await t.engine.services.approvals.refreshRelayed(); // unchanged state: no new edit
     expect(t.messaging.edits.length).toBe(edits);
     t.invest.statuses.set(dep, 'SUCCESS');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith('success ✓');
+    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith('Done');
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('settled');
+  });
+
+  test('1Click status down right after relay -> submit still answers relayed', async () => {
+    t.invest.statusError = new Error('HTTP 503');
+    const { r, out } = await relayedLive('HASH_503');
+    t.invest.statusError = null;
+    expect(out.status).toBe('relayed');
+    expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('relayed');
   });
 
   test('Refunded -> failed, ledger released, card says USDC is back', async () => {
     const { r, dep } = await relayedLive('HASH_REFUND');
     t.invest.statuses.set(dep, 'REFUNDED');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toBe('refunded · your USDC is back');
+    expect(lastEdit(r.approvalId)?.card.subcaption).toBe('Refunded to you');
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('failed');
     const res = (await t.db.db.execute(
       sql`select status from ledger_entries where approval_id = ${r.approvalId}`,
@@ -227,7 +266,7 @@ describe('live swap status updates the card in place', () => {
     const { r, dep } = await relayedLive('HASH_FAIL');
     t.invest.statuses.set(dep, 'FAILED');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith('failed');
+    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith("Didn't go through");
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('failed');
   });
 
@@ -238,6 +277,26 @@ describe('live swap status updates the card in place', () => {
     expect(formatUnits(11_066_177n, 9)).toBe('0.011066');
     expect(formatUnits(445_427_595_066_585n, 18)).toBe('0.000445');
     expect(formatUnits(12n, 18)).toBe('0.000000000000000012');
+  });
+});
+
+describe('plain words on every user-facing invest string', () => {
+  test('cards, rows, statuses and errors carry no chain or swap jargon', async () => {
+    const jargon =
+      /1click|intents|deposit|delegate|relayer|slippage|nonce|\bgas\b|base units|hash|\.near\b|blockchain|usdc|quote|est\./i;
+    const seen: string[] = [];
+    for (const c of t.messaging.cards) seen.push(c.card.caption, c.card.subcaption ?? '');
+    for (const e of t.messaging.edits)
+      seen.push(e.card.subcaption ?? '', e.card.trailingCaption ?? '');
+    const rows = (await t.db.db.execute(
+      sql`select title, facts from approvals where kind = 'invest'`,
+    )) as unknown as { rows: { title: string; facts: { label: string; value: string }[] }[] };
+    for (const r of rows.rows) {
+      seen.push(r.title);
+      for (const f of r.facts) seen.push(f.label, f.value);
+    }
+    expect(seen.length).toBeGreaterThan(20);
+    expect(seen.filter((x) => jargon.test(x))).toEqual([]);
   });
 });
 

@@ -178,7 +178,9 @@ export class FakeInvest implements InvestPort {
       ? { ok: false as const, reason: 'price_moved' as const, freshOut: fresh.amountOut }
       : { ok: true as const, freshOut: fresh.amountOut };
   }
+  statusError: Error | null = null;
   async status(depositAddress: string): Promise<SwapStatusView> {
+    if (this.statusError) throw this.statusError;
     const raw = this.statuses.get(depositAddress) ?? 'PENDING_DEPOSIT';
     return { state: mapSwapStatus(raw), raw };
   }
