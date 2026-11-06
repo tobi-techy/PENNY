@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash, sign as cryptoSign, generateKeyPairSync } from 'node:crypto';
-import { cborDecode, verifyAssertion, verifyAttestation } from '../src/devices/appattest.ts';
+import {
+  aaguidEnvironment,
+  cborDecode,
+  verifyAssertion,
+  verifyAttestation,
+} from '../src/devices/appattest.ts';
 
 // --- tiny CBOR encoder for fixtures ---
 type V = unknown;
@@ -120,5 +125,25 @@ describe('verifyAttestation rejection paths', () => {
         appId: 'T.app',
       }),
     ).toThrow();
+  });
+});
+
+describe('AAGUID environment', () => {
+  const txt = (s: string) => new TextEncoder().encode(s);
+  test('production is "appattest" + seven zero bytes', () => {
+    const prod = new Uint8Array(16);
+    prod.set(txt('appattest'));
+    expect(aaguidEnvironment(prod)).toBe('production');
+  });
+  test('development is "appattestdevelop", not production', () => {
+    expect(aaguidEnvironment(txt('appattestdevelop'))).toBe('development');
+  });
+  test('anything else is rejected', () => {
+    const junk = new Uint8Array(16);
+    junk.set(txt('appattest'));
+    junk[15] = 1;
+    expect(aaguidEnvironment(junk)).toBeNull();
+    expect(aaguidEnvironment(txt('appattestdev'))).toBeNull();
+    expect(aaguidEnvironment(new Uint8Array(16))).toBeNull();
   });
 });

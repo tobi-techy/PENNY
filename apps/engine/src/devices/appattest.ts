@@ -182,6 +182,19 @@ export type VerifiedAttestation = {
   environment: 'production' | 'development';
 };
 
+/**
+ * Apple's App Attest AAGUID is 16 bytes: "appattestdevelop" for development,
+ * or "appattest" followed by seven 0x00 bytes for production. Anything else
+ * (including a 16-byte value that merely starts with "appattest") is rejected.
+ */
+export function aaguidEnvironment(aaguid: Uint8Array): 'production' | 'development' | null {
+  if (aaguid.length !== 16) return null;
+  const head = new TextDecoder().decode(aaguid.subarray(0, 9));
+  if (head === 'appattest' && aaguid.subarray(9).every((b) => b === 0)) return 'production';
+  if (new TextDecoder().decode(aaguid) === 'appattestdevelop') return 'development';
+  return null;
+}
+
 export function verifyAttestation(input: {
   attestationB64: string;
   challenge: Uint8Array;
@@ -218,13 +231,7 @@ export function verifyAttestation(input: {
   const auth = parseAuthData(authData, true);
   if (!sha256(input.appId).equals(Buffer.from(auth.rpIdHash))) throw new AttestError('rp_id');
   if (auth.counter !== 0) throw new AttestError('counter_not_zero');
-  const aaguidText = new TextDecoder().decode(auth.aaguid.subarray(0, 9));
-  const environment =
-    auth.aaguid.every((b, idx) => (idx < 16 ? true : b === 0)) && aaguidText === 'appattest'
-      ? 'production'
-      : new TextDecoder().decode(auth.aaguid) === 'appattestdevelop'
-        ? 'development'
-        : null;
+  const environment = aaguidEnvironment(auth.aaguid);
   if (!environment) throw new AttestError('aaguid');
 
   // 3) Nonce: SHA256(authData || SHA256(challenge)) in the cert extension.
