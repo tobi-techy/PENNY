@@ -7,6 +7,8 @@
  *
  * Run:    bun apps/engine/scripts/nearai-attestation-live.ts
  * Record: bun apps/engine/scripts/nearai-attestation-live.ts --record
+ * Reply:  bun apps/engine/scripts/nearai-attestation-live.ts --signature
+ *         (needs NEARAI_API_KEY: one tiny chat completion, then its TEE signature is verified)
  *         (writes the real report + collateral + NRAS replies to test/fixtures/nearai-attestation)
  */
 import { mkdirSync } from 'node:fs';
@@ -14,6 +16,7 @@ import { join } from 'node:path';
 import { getCollateral, PHALA_PCCS_URL, verify } from '@phala/dcap-qvl';
 import {
   AttestationService,
+  checkResponseSignature,
   newNonce,
   type QuoteVerifier,
   sha256Hex,
@@ -21,6 +24,7 @@ import {
 } from '../src/brain/attestation.ts';
 
 const record = process.argv.includes('--record');
+const checkSignature = process.argv.includes('--signature');
 const model = process.env.NEARAI_MODEL ?? 'z-ai/glm-5.3-flash';
 const baseURL = process.env.NEARAI_BASE_URL ?? 'https://cloud-api.near.ai/v1';
 const nonce = newNonce();
@@ -74,6 +78,49 @@ console.log(
     2,
   ),
 );
+
+if (checkSignature && status.verified) {
+  const key = process.env.NEARAI_API_KEY;
+  if (!key) {
+    console.error('--signature needs NEARAI_API_KEY');
+    process.exit(1);
+  }
+  const body = JSON.stringify({
+    model,
+    messages: [{ role: 'user', content: 'Reply with one word: ok' }],
+    max_tokens: 16,
+  });
+  const res = await fetch(`${baseURL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${key}`,
+      'x-no-aliasing': 'true',
+    },
+    body,
+  });
+  const respRaw = new Uint8Array(await res.arrayBuffer());
+  if (!res.ok) {
+    console.error(`completion failed: HTTP ${res.status}`);
+    process.exit(1);
+  }
+  const chatId = JSON.parse(Buffer.from(respRaw).toString('utf8')).id as string;
+  await new Promise((r) => setTimeout(r, 1500));
+  const sigRes = await fetch(
+    `${baseURL}/signature/${chatId}?model=${encodeURIComponent(model)}&signing_algo=ecdsa`,
+    { headers: { authorization: `Bearer ${key}` } },
+  );
+  const sig = await sigRes.json();
+  const kind = checkResponseSignature(
+    sig,
+    { chatId, requestSha256: sha256Hex(body), responseSha256: sha256Hex(respRaw) },
+    model,
+    status,
+  );
+  console.log(
+    JSON.stringify({ responseSignature: 'verified', kind, chatId, signer: sig.signing_address }),
+  );
+}
 
 if (record) {
   if (!reportRaw || !jwks) {

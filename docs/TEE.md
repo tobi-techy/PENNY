@@ -115,9 +115,14 @@ path), and `Crew.handle` returns `privacy: {verified, label, blocked}`.
 The engine itself was also booted with `NEARAI_ATTESTATION=warn` and `GET /v1/attestation`
 returned `verified: true`, `label: "private · verified in TEE"`, 8 GPUs, `UpToDate`.
 
-Pending a key: per-response signatures (`/v1/signature/{chat_id}`) need `NEARAI_API_KEY`, which was
-not in this environment. That path is implemented and unit tested against the documented format
-with generated keys (valid, bad signature, wrong bytes, wrong model, unattested signer). Without a
-key, `enforce` blocks money and mail turns (`signature_needs_api_key`). To finish the live check,
-set `NEARAI_API_KEY` in the engine env, run one chat completion and confirm a money turn passes in
-`warn` before switching to `enforce`.
+Per-response signature, 6 Nov 2026 13:45 UTC, with an API key
+(`bun apps/engine/scripts/nearai-attestation-live.ts --signature`): a fresh report verified
+(`reportHash` `ae5f8960fb7b6981`), one `glm-5.3-flash` completion (chat id
+`637c7ca1a26544628ef6a08fd452891a`), its `/v1/signature` came back `provider_tee`, signed by
+`0x3b753b4406613c5e70ae640508632b600424fa0c`, and `checkResponseSignature` verified it against the
+attested model signer and the exact request and response bytes.
+
+Default for the demo: `.env.example` ships `NEARAI_ATTESTATION=enforce`, so money and mail turns
+run only when the report and the reply signature verify. Set `NEARAI_API_KEY`, or every money and
+mail turn is refused (`signature_needs_api_key`). The code default stays `off`, so tests and bare
+boots without an env file are unchanged.

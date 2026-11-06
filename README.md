@@ -41,4 +41,4 @@ More: `apps/engine/README.md`. iOS: `ios/README.md`.
 - `DRY_RUN=1` until someone explicitly says go. Live relay needs `PENNY_ENV=mainnet` **and** `DRY_RUN=0` **and** a relayer key; the env schema fails closed.
 - No user keys on the server. Ever.
 - Mood never overrides money rules.
-- `NEARAI_ATTESTATION=off` by default. `enforce` blocks money and mail turns unless NEAR AI's TEE attestation and the response signature verify.
+- `NEARAI_ATTESTATION=enforce` in `.env.example` (code default `off`). `enforce` needs `NEARAI_API_KEY` and blocks money and mail turns unless NEAR AI's TEE attestation and the response signature verify.
