@@ -54,18 +54,21 @@ export function buildHistoryMessages(
   userText: string,
 ): { role: 'user' | 'assistant'; content: string }[] {
   const rows = history.slice(-MAX_HISTORY);
+  // The current message is usually already persisted as the newest inbound
+  // row (truncated to 1000 chars here). Drop it so it is re-added in full below.
+  const lastRow = rows[rows.length - 1];
+  if (lastRow?.direction === 'inbound' && lastRow.text === userText) rows.pop();
+  // Fill the char budget from the newest row backwards so the most recent
+  // context survives when a long conversation exceeds it.
   const out: { role: 'user' | 'assistant'; content: string }[] = [];
   let chars = 0;
-  for (const r of rows) {
+  for (const r of rows.slice().reverse()) {
     const content = r.text.slice(0, 1000);
+    if (chars + content.length > MAX_HISTORY_CHARS) break;
     chars += content.length;
-    if (chars > MAX_HISTORY_CHARS) break;
-    out.push({ role: r.direction === 'inbound' ? 'user' : 'assistant', content });
+    out.unshift({ role: r.direction === 'inbound' ? 'user' : 'assistant', content });
   }
-  const last = out[out.length - 1];
-  if (last?.role !== 'user' || last.content !== userText.slice(0, 1000)) {
-    out.push({ role: 'user', content: userText.slice(0, 4000) });
-  }
+  out.push({ role: 'user', content: userText.slice(0, 4000) });
   return out;
 }
 
@@ -128,7 +131,7 @@ export class Crew {
     let history: HistoryMessage[] = [];
     if (opts.conversationId && this.d.messages) {
       try {
-        history = await this.d.messages.recent(opts.conversationId, MAX_HISTORY);
+        history = await this.d.messages.recent(opts.conversationId, userId, MAX_HISTORY);
       } catch {
         this.d.log.warn('history load failed, continuing without it');
       }
