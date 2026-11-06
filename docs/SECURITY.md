@@ -16,8 +16,11 @@ User funds on `<slug>.penny.near`; relayer/app account keys; agent sub-account k
 | Relayer drained by gas griefing | Relay only delegate actions tied to a pending approval; per-user and global rate limits; gas cap per action |
 | Intents quote manipulation | Quote expiry ≤120 s, min-received checked against slippage bound, deposit address must come from 1Click quote response bound to approval |
 | Secrets leak | Env via zod schema; never logged (pino redact paths); no secrets in repo (gitleaks in CI); Glider key backend only |
-| Data leak | Memories private per user; Gmail scope read-only; PII minimised; inference via NEAR AI Cloud |
+| Data leak | Memories private per user; Gmail scope read-only; PII minimised; inference via NEAR AI Cloud, TEE attestation verified when `NEARAI_ATTESTATION` is on (docs/TEE.md) |
 | Supply chain | Lockfile committed; pinned versions; `bun audit`/osv-scanner in CI |
+
+## TEE attestation (NEAR AI Cloud)
+Inference runs on NEAR AI Cloud in Intel TDX + NVIDIA confidential-computing GPUs. With `NEARAI_ATTESTATION=warn|enforce` the engine verifies, with a fresh nonce, the gateway and model TDX quotes (Intel DCAP via dcap-qvl), nonce and signer binding, MRCONFIGID and RTMR3, the model id, and the GPUs (NVIDIA NRAS), then checks each money/mail turn's response signature against the attested key. `enforce` refuses money and mail tools when any of that fails. Default `off` changes nothing. Only the nonce, model id and vendor evidence go to verifiers. Limits and sources: `docs/TEE.md`.
 
 ## Rules for code
 - bigint for all base-unit math; no floats for money.

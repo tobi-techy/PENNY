@@ -10,7 +10,8 @@
       "!packages/chain",
       "!**/*.md",
       "!design",
-      "!brand"
+      "!brand",
+      "!**/test/fixtures"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },

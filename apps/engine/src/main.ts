@@ -3,6 +3,7 @@ import { chainAdapterFromEnv } from '@penny/chain';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createEngine, type Engine } from './app.ts';
+import { AttestationService } from './brain/attestation.ts';
 import { FakeEmbedder } from './brain/memory.ts';
 import { NearAiEmbedder, nearAiModels } from './brain/model.ts';
 import { createRegistry, FakeMarket } from './brain/tools.ts';
@@ -86,6 +87,19 @@ const nearCfg = env.NEARAI_API_KEY
     }
   : null;
 
+// NEAR AI TEE attestation (docs/TEE.md). Off by default: nothing below changes.
+const privacy =
+  env.NEARAI_ATTESTATION === 'off'
+    ? undefined
+    : new AttestationService({
+        mode: env.NEARAI_ATTESTATION,
+        baseURL: env.NEARAI_BASE_URL,
+        ...(env.NEARAI_API_KEY ? { apiKey: env.NEARAI_API_KEY } : {}),
+        model: env.NEARAI_MODEL,
+        ttlMs: env.NEARAI_ATTESTATION_TTL_SEC * 1000,
+        log,
+      });
+
 let engineRef: Engine | null = null;
 const chain: ChainPort = env.NEAR_RPC_URL
   ? new RealChain(
@@ -105,7 +119,13 @@ const engine = createEngine({
   db: dbh.db,
   chain,
   messaging,
-  models: nearCfg ? nearAiModels(nearCfg) : { router: offline(), chat: offline() },
+  models: nearCfg
+    ? nearAiModels(
+        nearCfg,
+        privacy ? { fetch: privacy.recorder.fetch, headers: { 'x-no-aliasing': 'true' } } : {},
+      )
+    : { router: offline(), chat: offline() },
+  ...(privacy ? { privacy } : {}),
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
   market: new FakeMarket(),
   registry: createRegistry(),
@@ -128,6 +148,8 @@ const engine = createEngine({
 });
 
 engineRef = engine;
+// Warm the attestation cache so the first money turn does not pay for it.
+if (privacy) void privacy.status();
 await engine.services.bots.seedBuiltIns(join(import.meta.dir, '..', '..', '..', 'souls'));
 // Phase 1 scheduler: approval expiry, webhook/idempotency pruning, weekly reflection.
 engine.services.scheduler.start(15_000);
@@ -138,6 +160,7 @@ log.info(
     dryRun: env.DRY_RUN,
     relayLive: env.relayLive,
     composio: Boolean(env.COMPOSIO_API_KEY),
+    teeAttestation: env.NEARAI_ATTESTATION,
     port: env.PORT,
   },
   'penny engine up',

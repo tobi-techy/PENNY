@@ -16,5 +16,5 @@ regex = '''sk-[A-Za-z0-9]{32,}'''
 tags = ["nearai", "key"]
 
 [allowlist]
-description = "test fixtures use obviously fake values"
-paths = ['''packages/shared/test-vectors/.*''', '''\.env\.example$''']
+description = "test fixtures use obviously fake values; nearai-attestation holds public TEE evidence (quotes, public signing keys, NVIDIA NRAS verdict JWTs), no secrets"
+paths = ['''packages/shared/test-vectors/.*''', '''\.env\.example$''', '''apps/engine/test/fixtures/nearai-attestation/.*''']

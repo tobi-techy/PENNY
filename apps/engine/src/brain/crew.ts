@@ -1,4 +1,4 @@
-import { generateText, type LanguageModel, stepCountIs, tool } from 'ai';
+import { generateText, type LanguageModel, stepCountIs, type Tool, tool } from 'ai';
 import { z } from 'zod';
 import type { ApprovalService } from '../approvals/service.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
@@ -6,6 +6,12 @@ import type { Logger } from '../lib/logger.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
 import type { BotRow, BotsRepo, MessagesRepo } from '../repo/bots.ts';
 import type { UsersRepo } from '../repo/users.ts';
+import {
+  type AttestationStatus,
+  PRIVATE_MODE_UNAVAILABLE,
+  type PrivacyGate,
+  unverifiedStatus,
+} from './attestation.ts';
 import type { MemoryService } from './memory.ts';
 import type { MoodService } from './mood.ts';
 import type { BotOps, MarketPort, ToolRegistry } from './registry.ts';
@@ -41,9 +47,22 @@ export type CrewDeps = {
   botOps: BotOps;
   tracer: Tracer;
   log: Logger;
+  /** NEAR AI TEE attestation gate (NEARAI_ATTESTATION); absent or mode off = no change. */
+  privacy?: PrivacyGate;
 };
 
-export type CrewReply = { botSlug: string; text: string; toolCalls: string[] };
+/** Present only when NEARAI_ATTESTATION is warn or enforce. */
+export type CrewPrivacy = { verified: boolean; label: string; blocked: boolean };
+
+export type CrewReply = {
+  botSlug: string;
+  text: string;
+  toolCalls: string[];
+  privacy?: CrewPrivacy;
+};
+
+/** Registry tools that never touch money or mail; everything else is gated. */
+const UNGATED_READ_EXCEPTIONS = new Set(['find_bills']);
 
 export type HistoryMessage = { direction: 'inbound' | 'outbound'; text: string };
 
@@ -178,18 +197,30 @@ export class Crew {
         this.d.log.warn({ bot: bot.slug }, 'connector tools unavailable, continuing without them');
       }
     }
+    const gate = this.d.privacy && this.d.privacy.mode !== 'off' ? this.d.privacy : null;
+    const sensitive = new Set<string>();
+    const registryTools = new Map(this.d.registry.allowedFor(bot).map((t) => [t.id, t]));
+    for (const name of Object.keys(tools)) {
+      const def = registryTools.get(name);
+      // connector (Composio) tools are mail/app tools: always gated
+      if (def?.risk !== 'read' || UNGATED_READ_EXCEPTIONS.has(name)) sensitive.add(name);
+    }
+    const privacy = gate ? await this.guardSensitiveTools(gate, tools, sensitive, bot.slug) : null;
     const toolCalls: string[] = [];
     let text = '';
     try {
-      const r = await generateText({
-        model: this.d.chat,
-        system: `${bot.soulMd}\n\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}\n${HOUSE_RULES}`,
-        messages: buildHistoryMessages(history, userText),
-        tools,
-        stopWhen: stepCountIs(5),
-      });
+      const run = () =>
+        generateText({
+          model: this.d.chat,
+          system: `${bot.soulMd}\n\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}\n${HOUSE_RULES}`,
+          messages: buildHistoryMessages(history, userText),
+          tools,
+          stopWhen: stepCountIs(5),
+        });
+      const r = gate ? await gate.runTurn(run) : await run();
       text = r.text;
       for (const s of r.steps) for (const c of s.toolCalls) toolCalls.push(c.toolName);
+      if (privacy?.state.blocked) text = PRIVATE_MODE_UNAVAILABLE;
     } catch (e) {
       this.d.log.error({ err: (e as Error).name, bot: bot.slug }, 'bot run failed');
       text = 'hmm, my brain hiccuped. give me a sec and try that again?';
@@ -199,7 +230,65 @@ export class Crew {
       bot: bot.slug,
       tools: toolCalls.join(','),
       ms: Date.now() - started,
+      ...(privacy
+        ? { private_verified: privacy.state.verified, private_blocked: privacy.state.blocked }
+        : {}),
     });
-    return { botSlug: bot.slug, text: text.trim() || 'on it.', toolCalls };
+    const reply: CrewReply = { botSlug: bot.slug, text: text.trim() || 'on it.', toolCalls };
+    if (privacy) {
+      reply.privacy = {
+        verified: privacy.state.verified,
+        label: privacy.state.verified ? privacy.status.label : 'private mode unverified',
+        blocked: privacy.state.blocked,
+      };
+    }
+    return reply;
+  }
+
+  /**
+   * Wrap money/mail tools so they only run when the preflight attestation is verified and
+   * the completion that asked for them is signed by an attested key. warn: log and run.
+   * enforce: refuse, and the turn's reply becomes PRIVATE_MODE_UNAVAILABLE.
+   */
+  private async guardSensitiveTools(
+    gate: PrivacyGate,
+    tools: Record<string, Tool>,
+    sensitive: Set<string>,
+    botSlug: string,
+  ): Promise<{ status: AttestationStatus; state: { verified: boolean; blocked: boolean } }> {
+    let status: AttestationStatus;
+    try {
+      status = await gate.status();
+    } catch {
+      status = unverifiedStatus(gate.mode, '', 'check_failed');
+    }
+    const state = { verified: status.verified, blocked: false };
+    const responseOk = async (): Promise<boolean> => {
+      const r = await gate.verifyLatestResponse(status);
+      if (!r.ok) this.d.log.warn({ bot: botSlug, code: r.error }, 'private inference unverified');
+      return r.ok;
+    };
+    if (!status.verified)
+      this.d.log.warn({ bot: botSlug, code: status.error }, 'tee attestation unverified');
+    for (const name of sensitive) {
+      const t = tools[name];
+      if (!t?.execute) continue;
+      const orig = t.execute.bind(t);
+      tools[name] = {
+        ...t,
+        execute: async (input: unknown, opts: Parameters<NonNullable<Tool['execute']>>[1]) => {
+          const ok = status.verified && (await responseOk());
+          if (!ok) {
+            state.verified = false;
+            if (gate.mode === 'enforce') {
+              state.blocked = true;
+              return { ok: false, error: 'private_mode_unavailable' };
+            }
+          }
+          return orig(input as never, opts);
+        },
+      } as Tool;
+    }
+    return { status, state };
   }
 }

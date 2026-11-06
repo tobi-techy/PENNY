@@ -1,6 +1,14 @@
 # PENNY
 Penny is a crew of AI agents that run your money from iMessage. Text it like a friend, "put $50 somewhere safer" or "pay my DStv", and the crew gets to work: Invest builds a portfolio, Mail finds the bill, Guard checks your limits. Every move shows up as a card in your thread, and nothing happens until you approve it with Face ID. Your keys live on your phone, the agents have their own NEAR accounts, and money moves across chains through NEAR Intents. Penny has a soul too: it remembers you, has moods, and gets better every week.
 
+## Features
+
+- Crew of agents in iMessage (Penny, Invest, Mail, Guard, your own bots), with memory and moods
+- Every money move is a card approved with Face ID; server holds no user keys
+- NEAR accounts per user and agent, delegate actions + relayer, NEAR Intents across chains
+- Connected apps (Composio) with write approvals; App Attest for the iOS device
+- Private inference on NEAR AI Cloud with TEE attestation: Intel TDX + NVIDIA GPU evidence and per-response signatures verified, `private · verified in TEE` status at `GET /v1/attestation` (`NEARAI_ATTESTATION=off|warn|enforce`, see `docs/TEE.md`)
+
 Start here: `AGENT.md`, then `docs/IDEA.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/DESIGN.md`.
 
 ## Repo
@@ -33,3 +41,4 @@ More: `apps/engine/README.md`. iOS: `ios/README.md`.
 - `DRY_RUN=1` until someone explicitly says go. Live relay needs `PENNY_ENV=mainnet` **and** `DRY_RUN=0` **and** a relayer key; the env schema fails closed.
 - No user keys on the server. Ever.
 - Mood never overrides money rules.
+- `NEARAI_ATTESTATION=off` by default. `enforce` blocks money and mail turns unless NEAR AI's TEE attestation and the response signature verify.
