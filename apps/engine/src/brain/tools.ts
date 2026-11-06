@@ -71,14 +71,14 @@ export function builtinTools(): ToolDef<never>[] {
       try {
         return await ctx.market.getPortfolios();
       } catch {
-        return { ok: false, error: 'prices unavailable right now' };
+        return { ok: false, error: "I can't get prices right now." };
       }
     },
   });
   add({
     id: 'quote_invest',
     description:
-      'Preview investing USDC into ETH, SOL or NEAR: estimated amount, rate, fee, minimum received, expiry. Read-only, nothing is signed. Then call propose_invest.',
+      "Preview buying ETH, SOL or NEAR with the user's dollars: about how much they get, the least they get, fee, price, how long the price holds. Read-only. Then call propose_invest. Talk to the user in plain words, no crypto jargon.",
     risk: 'read',
     input: InvestInput,
     execute: async (ctx, i) => ctx.approvals.previewInvest(ctx.userId, i.portfolioId, i.amountUsd),

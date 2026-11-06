@@ -3,9 +3,9 @@ import type { MarketPort } from '../brain/registry.ts';
 import { INVEST_ASSETS } from './invest.ts';
 
 const BLURB = {
-  ETH: 'Ether. Swapped from your USDC through NEAR Intents.',
-  SOL: 'Solana. Swapped from your USDC through NEAR Intents.',
-  NEAR: 'NEAR. Swapped from your USDC through NEAR Intents.',
+  ETH: 'Ether. bought with your dollars.',
+  SOL: 'Solana. bought with your dollars.',
+  NEAR: 'NEAR. bought with your dollars.',
 } as const;
 
 /** Real read-only market data: balances from NEAR RPC, prices from 1Click (CoinGecko fallback). */

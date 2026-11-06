@@ -64,7 +64,7 @@ export function stepsFor(status: ApprovalStatus, kind: ApprovalKind = 'send'): S
       : kind === 'create_bot'
         ? ['Approved with Face ID', 'Bot switched on', 'Finished']
         : kind === 'invest'
-          ? ['Approved with Face ID', 'Sent to NEAR Intents', 'Swapped']
+          ? ['Approved with Face ID', 'Sent', 'Done']
           : ['Approved with Face ID', 'Sent to NEAR', 'Settled'];
   const doneCount: Record<ApprovalStatus, number> = {
     pending: 0,

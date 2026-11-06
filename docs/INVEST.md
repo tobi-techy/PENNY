@@ -20,13 +20,17 @@ Text Penny "put $50 in SOL". Penny shows a preview, Guard checks your limits, yo
                        (fresh dry quote's estimate < the approved card's guaranteed minimum)
                        Byte-for-byte verify against the approval, relay with limit = approved deposit.
   -> after relay       POST /v0/deposit/submit (hint), then poll /v0/status by deposit address.
-                       Card updates in place: pending -> processing -> success / refunded / failed,
-                       with explorer.near-intents.org and nearblocks.io links.
+                       Card updates in place: "Sending…" -> "Buying now…" -> "Done" / "Refunded to you" /
+                       "Didn't go through". Explorer links (explorer.near-intents.org, nearblocks.io) go to logs only.
 ```
 
 Quote parameters: `swapType EXACT_INPUT`, `depositType ORIGIN_CHAIN`, `refundType ORIGIN_CHAIN`, `refundTo` = your NEAR account, `recipientType INTENTS`, `recipient` = your NEAR account, `slippageTolerance` = `INVEST_SLIPPAGE_BPS` (default 100 = 1%), `deadline` = now + 10 min. Every response is zod-validated and its echo (assets, amount, recipient, refundTo, slippage) must match what we sent; `minAmountOut` must sit inside the slippage we asked for.
 
-Fees: without `ONECLICK_API_KEY` or `ONECLICK_JWT`, 1Click adds a 0.2% app fee (`appFees: [{fee: 20}]` on the quote). The card says so: "Fee ≈$0.10 incl. 0.2% no-partner-key fee".
+Fees: without `ONECLICK_API_KEY` or `ONECLICK_JWT`, 1Click adds a 0.2% app fee (`appFees: [{fee: 20}]` on the quote). It is included in the card's "Fee $0.10" row (rounded up to the cent); the keyless detail stays in logs and here.
+
+## Plain words for users
+
+Everything a user sees is in everyday words (rule from Tobi, 6 Nov 2026). Card title "Buying $50 of SOL"; rows "You pay $50", "You'll get about 0.55 SOL, at least 0.545 SOL", "Fee $0.10", "Price 1 SOL ≈ $90", "Price good for 2 min", "Goes to your Penny wallet". The iPhone card shows the first three rows. Re-quote: "Price changed, check the new amount. Nothing moved." Errors: "Couldn't check the price. Try again.", "This expired. Ask Penny again." Never on screen: 1Click, intents, deposit address, delegate action, relayer, slippage, nonce, gas, base units, tx hashes, account ids, chain names. `apps/engine/test/invest.test.ts` fails if any of those reach a card, row or status.
 
 Prices (`get_portfolios`, NEAR-send sizing in Guard): 1Click `/v0/tokens` first, CoinGecko simple price as fallback (public, no key), 60 s cache, 5 s timeout, stale (>15 min) prices refused, clear `PriceUnavailable` error.
 
@@ -45,10 +49,10 @@ Mainnet launch caps: `PENNY_MAINNET_MAX_PER_TX_USD` (default 25) and `PENNY_MAIN
 | Do | See |
 |---|---|
 | `bun test packages/chain/test/oneclick-recorded.test.ts` | real recorded 1Click quotes parse, live quote builds `storage_deposit` + `ft_transfer` to a 64-hex deposit address, 20 bps keyless fee |
-| `bun test apps/engine/test/invest.test.ts` | preview facts, Guard block before quote/card, expired -> re-card, slippage -> re-card, pending -> processing -> success / refunded / failed card edits, daily cap, relayer ceiling |
+| `bun test apps/engine/test/invest.test.ts` | preview rows, Guard block before quote/card, expired -> re-card (also after the expiry sweep, once), decline never re-quotes, price moved -> re-card, Sending / Buying now / Done / Refunded / Didn't go through card edits, no jargon on screen, daily cap, relayer ceiling |
 | `bun test apps/engine/test/intents-invest.test.ts` | the real adapter path (quote -> cache -> buildActions) on recorded responses |
 | `cd packages/chain && bun run scripts/invest-smoke.ts 1 SOL` | a real non-dry quote, the exact card actions, a throwaway-key signature that verifies, status `PENDING_DEPOSIT`. Broadcasts nothing |
-| `bun run dev` with `NEAR_RPC_URL` set, text "put $5 in SOL" | preview, then a card with You pay / You get (est.) / Rate / Fee / Min received / Expires; approving in dry run settles as "done" without touching chain |
+| `bun run dev` with `NEAR_RPC_URL` set, text "put $5 in SOL" | preview, then a "Buying $5 of SOL" card with You pay / You'll get / Fee; approving in dry run settles as "Done" without touching chain |
 
 ## Live smoke (2026-11-06 13:31 UTC)
 
