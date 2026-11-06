@@ -2,6 +2,7 @@ import {
   type Approval,
   type ApprovalStatusResponse,
   type CreateBotPlan,
+  compareDecimal,
   formatUsd,
   fromMicros,
   type IntentPlan,
@@ -11,8 +12,10 @@ import {
   planApprovalMessage,
   planHash,
   planRecipient,
+  type WritePlan,
 } from '@penny/shared';
 import type { MoodService } from '../brain/mood.ts';
+import { writeTargetProblem } from '../connectors/composio.ts';
 import { evaluate, type GuardContext, type GuardResult } from '../guard/policy.ts';
 import { verifyEd25519 } from '../lib/crypto.ts';
 import { newId } from '../lib/ids.ts';
@@ -20,12 +23,13 @@ import type { Logger } from '../lib/logger.ts';
 import type { ChainPort } from '../ports/chain.ts';
 import type { ApprovalCard, CardHandle, MessagingPort, SpaceRef } from '../ports/messaging.ts';
 import type { ApprovalRow, ApprovalsRepo } from '../repo/approvals.ts';
-import type { BotRow } from '../repo/bots.ts';
+import type { BotRow, BotsRepo } from '../repo/bots.ts';
 import type { GuardDecisionsRepo } from '../repo/infra.ts';
 import { DAY_MS, type LedgerRepo } from '../repo/ledger.ts';
 import type { UsersRepo } from '../repo/users.ts';
 import { checkCardToken, issueCardToken } from './card-token.ts';
 import { isTerminal, stepsFor } from './state.ts';
+import { writeFacts } from './write-facts.ts';
 
 export const QUOTE_TTL_CAP_MS = 120_000;
 export const BOT_APPROVAL_TTL_MS = 10 * 60_000;
@@ -58,6 +62,7 @@ export type ApprovalDeps = {
   approvals: ApprovalsRepo;
   ledger: LedgerRepo;
   users: UsersRepo;
+  bots?: BotsRepo;
   guardDecisions: GuardDecisionsRepo;
   chain: ChainPort;
   messaging: MessagingPort;
@@ -65,6 +70,15 @@ export type ApprovalDeps = {
   log: Logger;
   publicBaseUrl: string;
   now: Clock;
+  /** Hard per-tx ceiling (mainnet launch cap) clamped over user policy. */
+  mainnetMaxPerTxUsd?: string;
+  /** Executes an approved write in an outside app (connector layer). */
+  executeWrite?: (
+    userId: string,
+    toolkit: string,
+    toolSlug: string,
+    args: Record<string, unknown>,
+  ) => Promise<unknown>;
   /** called when a create_bot approval settles */
   onBotApproved?: (approvalId: string) => Promise<void>;
   onBotDeclined?: (approvalId: string) => Promise<void>;
@@ -75,6 +89,7 @@ export function toApprovalDto(r: ApprovalRow): Approval {
     id: r.id,
     userId: r.userId,
     kind: r.kind,
+    plan: r.plan as IntentPlan,
     title: r.title,
     amountDisplay: r.amountDisplay,
     facts: r.facts,
@@ -103,6 +118,8 @@ function titleFor(plan: IntentPlan): string {
       return 'Split';
     case 'create_bot':
       return `New bot · ${plan.name}`.slice(0, 80);
+    case 'write':
+      return plan.title.slice(0, 80);
   }
 }
 
@@ -152,6 +169,16 @@ export class ApprovalService {
     extra: Partial<GuardContext> = {},
   ): Promise<GuardResult> {
     const policy = await this.d.users.policy(userId);
+    // Mainnet launch cap: clamp the user's per-tx limit to the hard ceiling.
+    if (
+      this.d.mainnetMaxPerTxUsd &&
+      compareDecimal(policy.perTxUsd, this.d.mainnetMaxPerTxUsd) > 0
+    ) {
+      policy.perTxUsd = this.d.mainnetMaxPerTxUsd;
+      if (compareDecimal(policy.dailyUsd, this.d.mainnetMaxPerTxUsd) > 0) {
+        policy.dailyUsd = this.d.mainnetMaxPerTxUsd;
+      }
+    }
     return evaluate(plan, policy, await this.guardContext(userId, bot, extra));
   }
 
@@ -311,6 +338,88 @@ export class ApprovalService {
     return { approvalId: id, cardToken: token, url };
   }
 
+  /**
+   * Face ID card for a write in an outside app. No money, no NEAR actions.
+   * The write itself runs in submit, after the device signature verifies.
+   */
+  async createWriteApproval(input: {
+    userId: string;
+    bot: BotRow | null;
+    plan: WritePlan;
+    space: SpaceRef;
+  }): Promise<CreateResult> {
+    const { userId, plan, bot } = input;
+    const user = await this.d.users.byId(userId);
+    const device = user ? await this.d.users.activeDevice(userId) : null;
+    if (!user?.accountId || !device) {
+      return {
+        decision: 'needs_more_info',
+        reasons: ['Finish setting up Penny on your iPhone first.'],
+      };
+    }
+    if (!this.d.executeWrite) {
+      return { decision: 'needs_more_info', reasons: ['That app is not connected yet.'] };
+    }
+    const problem = writeTargetProblem(plan.toolkit, plan.toolSlug, bot?.slug ?? null);
+    if (problem) {
+      await this.d.guardDecisions.record({
+        userId,
+        approvalId: null,
+        plan,
+        decision: 'block',
+        reasons: [problem],
+      });
+      return { decision: 'block', reasons: [problem] };
+    }
+    const now = this.d.now();
+    const { token, hash } = issueCardToken();
+    const id = newId('apr');
+    const actions: NearAction[] = [];
+    await this.d.approvals.create({
+      id,
+      userId,
+      botId: bot?.id ?? null,
+      kind: 'write',
+      plan,
+      title: titleFor(plan),
+      amountDisplay: 'no money',
+      amountMicros: 0n,
+      facts: writeFacts(plan),
+      signerId: user.accountId,
+      receiverId: user.accountId,
+      actions,
+      nonce: '0',
+      maxBlockHeight: '0',
+      expiresAt: new Date(now.getTime() + BOT_APPROVAL_TTL_MS),
+      status: 'pending',
+      planHash: planHash(plan, actions),
+      cardTokenHash: hash,
+    });
+    await this.d.guardDecisions.record({
+      userId,
+      approvalId: id,
+      plan,
+      decision: 'allow_with_approval',
+      reasons: ['write action requires Face ID approval'],
+    });
+    await this.d.mood.on(userId, 'approval_created');
+    const url = this.cardUrl(id, token);
+    await this.sendCard(id, input.space, {
+      approvalId: id,
+      url,
+      caption: titleFor(plan),
+      subcaption: 'needs your Face ID',
+      live: true,
+    });
+    return {
+      decision: 'allow_with_approval',
+      approvalId: id,
+      cardToken: token,
+      url,
+      reasons: ['write action requires Face ID approval'],
+    };
+  }
+
   private async sendCard(id: string, space: SpaceRef, card: ApprovalCard) {
     try {
       const handle = await this.d.messaging.sendCard(space, card);
@@ -364,7 +473,12 @@ export class ApprovalService {
 
   async status(id: string, token: string | null): Promise<ApprovalStatusResponse> {
     const row = await this.load(id, token, 'read');
-    return { id: row.id, status: row.status, txHash: row.txHash, steps: stepsFor(row.status) };
+    return {
+      id: row.id,
+      status: row.status,
+      txHash: row.txHash,
+      steps: stepsFor(row.status, row.kind),
+    };
   }
 
   private async expire(row: ApprovalRow) {
@@ -409,15 +523,18 @@ export class ApprovalService {
       await this.expire(row);
       throw new ApprovalError(410, 'expired', 'this approval has expired');
     }
-    return row.kind === 'create_bot' ? this.submitBot(row, body) : this.submitMoney(row, body);
+    return row.kind === 'create_bot' || row.kind === 'write'
+      ? this.submitPlanSigned(row, body)
+      : this.submitMoney(row, body);
   }
 
-  private async submitBot(
+  /** create_bot and write approvals: plain device signature over the plan message, no chain. */
+  private async submitPlanSigned(
     row: ApprovalRow,
     body: { signedDelegateAction: string } | { planSignature: string },
   ) {
     if (!('planSignature' in body))
-      throw new ApprovalError(400, 'wrong_body', 'bot approvals need planSignature');
+      throw new ApprovalError(400, 'wrong_body', 'this approval needs planSignature');
     const device = await this.d.users.activeDevice(row.userId);
     if (!device) throw new ApprovalError(403, 'no_device', 'no enrolled device');
     const msg = new TextEncoder().encode(planApprovalMessage(row.id, row.planHash));
@@ -434,10 +551,37 @@ export class ApprovalService {
       {},
       { deviceId: device.id },
     );
-    await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
-    await this.d.onBotApproved?.(row.id);
-    await this.d.mood.on(row.userId, 'bot_created');
-    await this.updateCard(row.id, 'live');
+    if (row.kind === 'create_bot') {
+      await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
+      await this.d.onBotApproved?.(row.id);
+      await this.d.mood.on(row.userId, 'bot_created');
+      await this.updateCard(row.id, 'live');
+      return { status: 'settled' };
+    }
+    // write: execute in the outside app now, exactly once, after Face ID.
+    const plan = row.plan as WritePlan;
+    try {
+      if (!this.d.executeWrite) throw new Error('connector unavailable');
+      await this.d.executeWrite(row.userId, plan.toolkit, plan.toolSlug, plan.arguments);
+    } catch (e) {
+      await this.d.approvals.transition(
+        row.id,
+        row.kind,
+        'signed',
+        'failed',
+        'write failed',
+        {},
+        {
+          error: (e as Error).name,
+        },
+      );
+      await this.d.mood.on(row.userId, 'approval_failed');
+      await this.updateCard(row.id, 'that did not go through. nothing was changed.');
+      return { status: 'failed' };
+    }
+    await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'write executed');
+    await this.d.mood.on(row.userId, 'approval_settled');
+    await this.updateCard(row.id, 'done ✓');
     return { status: 'settled' };
   }
 
@@ -449,12 +593,16 @@ export class ApprovalService {
       throw new ApprovalError(400, 'wrong_body', 'money approvals need signedDelegateAction');
     }
     const dto = toApprovalDto(row);
-    // 1) re-run Guard against current state, excluding this approval's own reservation
+    // 1) re-run Guard against current state, excluding this approval's own
+    // reservation. Bot caps and recipient must be preserved: load the bot
+    // that created this approval, and keep velocity from other approvals.
     const plan = row.plan as MoneyPlan;
-    const ctx = await this.guardContext(row.userId, null);
+    const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
+    const ctx = await this.guardContext(row.userId, bot);
     ctx.spentLast24hMicros =
       ctx.spentLast24hMicros > row.amountMicros ? ctx.spentLast24hMicros - row.amountMicros : 0n;
-    ctx.approvalsLast10Min = 0; // velocity is a creation-time rule
+    // Exclude this approval from the velocity count; others still count.
+    ctx.approvalsLast10Min = Math.max(0, ctx.approvalsLast10Min - 1);
     if (plan.kind === 'invest') ctx.quote = { id: plan.quoteId, expiresAt: row.expiresAt };
     const policy = await this.d.users.policy(row.userId);
     // NEAR price: re-use the amount Guard sized at creation
@@ -531,6 +679,23 @@ export class ApprovalService {
   }
 
   /** Poll chain status for a relayed approval and settle/fail it. */
+  /** Poller job: advance every relayed approval toward settled/failed. */
+  async refreshRelayed(): Promise<{ checked: number; settled: number; failed: number }> {
+    const rows = await this.d.approvals.relayed();
+    let settled = 0;
+    let failed = 0;
+    for (const row of rows) {
+      try {
+        const s = await this.refreshStatus(row.id);
+        if (s === 'settled') settled += 1;
+        if (s === 'failed') failed += 1;
+      } catch (e) {
+        this.d.log.warn({ approvalId: row.id, err: (e as Error).name }, 'status poll failed');
+      }
+    }
+    return { checked: rows.length, settled, failed };
+  }
+
   async refreshStatus(id: string): Promise<string> {
     const row = await this.d.approvals.get(id);
     if (!row) throw new ApprovalError(404, 'not_found', 'not found');

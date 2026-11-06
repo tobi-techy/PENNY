@@ -45,6 +45,14 @@ export class Scheduler {
 
   start(intervalMs = 15_000): void {
     if (this.timer) return;
+    // Anchor long-interval jobs (weekly reflection) to start time so they do
+    // not fire immediately on every boot. Manual tick() still runs due jobs.
+    const nowMs = this.now().getTime();
+    for (const job of this.jobs) {
+      if (job.everyMs >= 24 * 60 * 60_000 && !this.lastRun.has(job.name)) {
+        this.lastRun.set(job.name, nowMs);
+      }
+    }
     this.timer = setInterval(() => {
       void this.tick();
     }, intervalMs);
@@ -62,6 +70,7 @@ const DAY = 24 * HOUR;
 
 export type SchedulerJobDeps = {
   expireApprovals: (now: Date) => Promise<unknown>;
+  refreshRelayed?: () => Promise<unknown>;
   pruneWebhookEvents: (olderThan: Date) => Promise<void>;
   pruneIdempotency: (olderThan: Date) => Promise<void>;
   weeklyReflection?: (now: Date) => Promise<void>;
@@ -87,6 +96,13 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       run: async (now) => d.pruneIdempotency(new Date(now.getTime() - DAY)),
     },
   ];
+  if (d.refreshRelayed) {
+    jobs.push({
+      name: 'chain_status_poller',
+      everyMs: 30_000,
+      run: async () => void (await d.refreshRelayed?.()),
+    });
+  }
   if (d.weeklyReflection) {
     // Checked hourly; the service itself only reflects users not reflected in 7 days.
     jobs.push({ name: 'weekly_reflection', everyMs: HOUR, run: d.weeklyReflection });

@@ -31,6 +31,7 @@ struct PennyHostApp: App {
 final class HostSession: ObservableObject {
     @Published private(set) var isEnrolled: Bool
     @Published private(set) var accountId: String?
+    @Published private(set) var deviceId: String?
     @Published private(set) var publicKey: NearPublicKey?
     @Published private(set) var dryRun: Bool
 
@@ -40,6 +41,7 @@ final class HostSession: ObservableObject {
     init() {
         isEnrolled = config.isEnrolled && DeviceKeyStore.shared.hasKey
         accountId = config.accountId
+        deviceId = config.deviceId
         publicKey = try? DeviceKeyStore.shared.publicKey()
         dryRun = config.enrolledInDryRun
     }
@@ -64,6 +66,7 @@ final class HostSession: ObservableObject {
             config.saveEnrollment(response)
             self.publicKey = publicKey
             self.accountId = response.accountId
+            self.deviceId = response.deviceId
             self.dryRun = response.status == "dry_run"
             self.isEnrolled = true
         } catch {
@@ -71,5 +74,33 @@ final class HostSession: ObservableObject {
             if !hadAccount { try? keys.deleteKey() }
             throw error
         }
+    }
+
+    private func client() throws -> EngineClient {
+        guard let baseURL = config.engineURL else { throw PennyError.invalidInput("No engine URL set") }
+        return EngineClient(baseURL: baseURL)
+    }
+
+    /// Remove this iPhone: server revokes the device key, then we wipe locally.
+    func removeThisIPhone() async throws {
+        guard let accountId, let deviceId else { throw PennyError.invalidInput("This iPhone is not enrolled") }
+        try await client().revokeDevice(accountId: accountId, deviceId: deviceId, signer: keys)
+        try? keys.deleteKey()
+        config.clearEnrollment()
+        self.accountId = nil
+        self.deviceId = nil
+        self.publicKey = nil
+        self.isEnrolled = false
+    }
+
+    func updateLimits(perTx: String, daily: String, blockNew: String) async throws {
+        guard let accountId else { throw PennyError.invalidInput("Not enrolled") }
+        try await client().updateGuardPolicy(
+            accountId: accountId, perTxUsd: perTx, dailyUsd: daily, blockNewUsd: blockNew, signer: keys)
+    }
+
+    func approvalHistory() async throws -> [ApprovalHistoryItem] {
+        guard let accountId else { throw PennyError.invalidInput("Not enrolled") }
+        return try await client().approvalHistory(accountId: accountId, signer: keys)
     }
 }

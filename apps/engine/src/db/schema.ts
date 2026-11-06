@@ -44,6 +44,11 @@ export const devices = pgTable(
       .references(() => users.id),
     publicKey: text('public_key').notNull(), // base64url raw ed25519
     appAttest: text('app_attest'),
+    /** Verified App Attest credential (set only after full verification). */
+    appAttestKeyId: text('app_attest_key_id'),
+    appAttestPublicKey: text('app_attest_public_key'), // base64url x||y
+    appAttestCounter: integer('app_attest_counter').notNull().default(0),
+    appAttestVerified: boolean('app_attest_verified').notNull().default(false),
     enrolledAt: ts('enrolled_at').notNull().defaultNow(),
     revokedAt: ts('revoked_at'),
   },
@@ -129,7 +134,9 @@ export const approvals = pgTable(
       .notNull()
       .references(() => users.id),
     botId: text('bot_id'),
-    kind: text('kind', { enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot'] }).notNull(),
+    kind: text('kind', {
+      enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write'],
+    }).notNull(),
     plan: jsonb('plan').notNull(),
     title: text('title').notNull(),
     amountDisplay: text('amount_display').notNull(),
@@ -278,10 +285,20 @@ export const webhookEvents = pgTable('webhook_events', {
   error: text('error'),
 });
 
+export const attestChallenges = pgTable('attest_challenges', {
+  id: text('id').primaryKey(),
+  codeHash: text('code_hash').notNull(),
+  challenge: text('challenge').notNull(), // base64url raw bytes
+  expiresAt: ts('expires_at').notNull(),
+  usedAt: ts('used_at'),
+  createdAt: createdAt(),
+});
+
 export const schema = {
   users,
   devices,
   enrollCodes,
+  attestChallenges,
   conversations,
   messages,
   bots,

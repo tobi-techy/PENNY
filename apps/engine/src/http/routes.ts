@@ -1,24 +1,36 @@
+import { createHash } from 'node:crypto';
 import {
   ApprovalId,
   DeclineBody,
+  deviceRevokeMessage,
   EnrollBody,
+  historyRequestMessage,
+  policyUpdateMessage,
   SpectrumMessagesEvent,
   SubmitBody,
 } from '@penny/shared';
 import { Hono } from 'hono';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { parseCardAuth } from '../approvals/card-token.ts';
 import { ApprovalError, type ApprovalService } from '../approvals/service.ts';
+import { verifyAssertion } from '../devices/appattest.ts';
 import { EnrollError, type EnrollService } from '../devices/enroll.ts';
+import { verifyEd25519 } from '../lib/crypto.ts';
 import type { Logger } from '../lib/logger.ts';
 import { verifySpectrumSignature } from '../photon/verify.ts';
+import type { ApprovalsRepo } from '../repo/approvals.ts';
 import type { IdempotencyRepo, WebhookEventsRepo } from '../repo/infra.ts';
+import type { DeviceRow, UsersRepo } from '../repo/users.ts';
 import { withIdempotency } from './idempotency.ts';
 import { type AppVars, clientIp, type RateLimiter, rateLimit } from './security.ts';
 
 export type RouteDeps = {
   approvals: ApprovalService;
+  approvalsRepo: ApprovalsRepo;
+  users: UsersRepo;
   enroll: EnrollService;
+  /** App Attest app id ("TEAMID.bundle.id"); assertions verified when set. */
+  attestAppId?: string;
   webhookEvents: WebhookEventsRepo;
   idempotency: IdempotencyRepo;
   webhookSecret: string | undefined;
@@ -112,6 +124,22 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     },
   );
 
+  r.post(
+    '/v1/devices/app-attest/challenge',
+    rateLimit(d.enrollLimiter, (c) => `attest:${clientIp(c)}`),
+    async (c) => {
+      const body = parseJson(
+        z.object({ enrollCode: z.string().min(4).max(32) }).strict(),
+        await c.req.text(),
+      );
+      if (!body) return c.json({ error: 'bad_request' }, 400);
+      const issued = await d.enroll.issueAttestChallenge(body.enrollCode);
+      // unknown/expired codes look the same as everywhere else
+      if (!issued) return c.json({ error: 'invalid_code' }, 401);
+      return c.json(issued);
+    },
+  );
+
   // ---- approvals (Authorization: Card <token>) ----
   const approvalsRL = rateLimit(d.approvalLimiter, (c) => `apr:${clientIp(c)}`);
   const idOf = (raw: string) => (ApprovalId.safeParse(raw).success ? raw : null);
@@ -151,6 +179,138 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
       } catch (e) {
         return asResult(e);
       }
+    });
+  });
+
+  // ---- device-signed account operations (revoke, limits, history) ----
+  const DeviceSigned = z
+    .object({
+      accountId: z.string().min(3).max(128),
+      timestamp: z.number().int().positive(),
+      signature: z.string().min(43).max(128),
+      /** Required when the device has a verified App Attest credential. */
+      appAssertion: z.string().max(8192).optional(),
+    })
+    .strict();
+  const nowSec = () => Math.floor(Date.now() / 1000);
+
+  async function verifyDeviceSigned(
+    accountId: string,
+    timestamp: number,
+    signature: string,
+    message: string,
+    appAssertion?: string,
+  ): Promise<{ userId: string; device: DeviceRow } | null> {
+    if (Math.abs(nowSec() - timestamp) > 300) return null;
+    const user = await d.users.byAccountId(accountId);
+    if (!user) return null;
+    const device = await d.users.activeDevice(user.id);
+    if (!device) return null;
+    const sig = Buffer.from(signature, 'base64url');
+    if (!verifyEd25519(device.publicKey, new TextEncoder().encode(message), sig)) return null;
+    // Verified App Attest devices must also present a fresh assertion over
+    // this exact message, with a strictly increasing counter.
+    if (device.appAttestVerified) {
+      if (!appAssertion || !d.attestAppId || !device.appAttestPublicKey) return null;
+      try {
+        const clientDataHash = new Uint8Array(createHash('sha256').update(message).digest());
+        const { counter } = verifyAssertion({
+          assertionB64: appAssertion,
+          publicKeyXY: device.appAttestPublicKey,
+          clientDataHash,
+          appId: d.attestAppId,
+          lastCounter: device.appAttestCounter,
+        });
+        if (!(await d.users.advanceAttestCounter(device.id, counter))) return null;
+      } catch {
+        return null;
+      }
+    }
+    return { userId: user.id, device };
+  }
+
+  r.post('/v1/devices/revoke', approvalsRL, async (c) => {
+    const raw = await c.req.text();
+    const body = parseJson(
+      DeviceSigned.extend({ deviceId: z.string().min(3).max(64) }).strict(),
+      raw,
+    );
+    if (!body) return c.json({ error: 'bad_request' }, 400);
+    const auth = await verifyDeviceSigned(
+      body.accountId,
+      body.timestamp,
+      body.signature,
+      deviceRevokeMessage(body.accountId, body.deviceId, body.timestamp),
+      body.appAssertion,
+    );
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    // The signing device may revoke itself (lost-phone flow uses a second
+    // enrolled device or the same device before it is wiped).
+    if (auth.device.id !== body.deviceId) {
+      const target = await d.users.deviceById(body.deviceId);
+      if (!target || target.userId !== auth.userId) return c.json({ error: 'not_found' }, 404);
+    }
+    const ok = await d.users.revokeDevice(body.deviceId);
+    return c.json({ revoked: ok, deviceId: body.deviceId }, ok ? 200 : 404);
+  });
+
+  r.post('/v1/me/guard-policy', approvalsRL, async (c) => {
+    const raw = await c.req.text();
+    const Money = z.string().regex(/^\d+(\.\d{1,6})?$/);
+    const body = parseJson(
+      DeviceSigned.extend({
+        perTxUsd: Money,
+        dailyUsd: Money,
+        blockNewRecipientsOverUsd: Money,
+      }).strict(),
+      raw,
+    );
+    if (!body) return c.json({ error: 'bad_request' }, 400);
+    const auth = await verifyDeviceSigned(
+      body.accountId,
+      body.timestamp,
+      body.signature,
+      policyUpdateMessage(
+        body.accountId,
+        body.perTxUsd,
+        body.dailyUsd,
+        body.blockNewRecipientsOverUsd,
+        body.timestamp,
+      ),
+      body.appAssertion,
+    );
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const policy = await d.users.updatePolicy(auth.userId, {
+      perTxUsd: body.perTxUsd,
+      dailyUsd: body.dailyUsd,
+      blockNewRecipientsOverUsd: body.blockNewRecipientsOverUsd,
+    });
+    return c.json({ policy });
+  });
+
+  r.post('/v1/me/approvals', approvalsRL, async (c) => {
+    const raw = await c.req.text();
+    const body = parseJson(DeviceSigned, raw);
+    if (!body) return c.json({ error: 'bad_request' }, 400);
+    const auth = await verifyDeviceSigned(
+      body.accountId,
+      body.timestamp,
+      body.signature,
+      historyRequestMessage(body.accountId, body.timestamp),
+      body.appAssertion,
+    );
+    if (!auth) return c.json({ error: 'unauthorized' }, 401);
+    const rows = await d.approvalsRepo.listForUser(auth.userId, 20);
+    return c.json({
+      approvals: rows.map((a) => ({
+        id: a.id,
+        kind: a.kind,
+        title: a.title,
+        amountDisplay: a.amountDisplay,
+        status: a.status,
+        txHash: a.txHash,
+        createdAt: a.createdAt.toISOString(),
+      })),
     });
   });
 

@@ -51,6 +51,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .send: self = .send
         case .payBill: self = .bill
         case .errand: self = .errand
+        case .createBot, .write: self = .invest
         }
     }
 }

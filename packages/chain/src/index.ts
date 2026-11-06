@@ -5,6 +5,7 @@ export * from './near/accounts.ts';
 export * from './near/chainsig.ts';
 export * from './near/delegate.ts';
 export * from './near/ft.ts';
+export * from './near/guard.ts';
 export * from './near/keys.ts';
 export * from './near/mode.ts';
 export * from './near/relayer.ts';

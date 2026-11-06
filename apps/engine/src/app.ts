@@ -8,6 +8,7 @@ import { MoodService } from './brain/mood.ts';
 import { ReflectionService } from './brain/reflection.ts';
 import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
+import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
 import { buildRoutes } from './http/routes.ts';
@@ -26,7 +27,12 @@ import type { ChainPort } from './ports/chain.ts';
 import type { MessagingPort } from './ports/messaging.ts';
 import { ApprovalsRepo } from './repo/approvals.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
-import { GuardDecisionsRepo, IdempotencyRepo, WebhookEventsRepo } from './repo/infra.ts';
+import {
+  AttestChallengesRepo,
+  GuardDecisionsRepo,
+  IdempotencyRepo,
+  WebhookEventsRepo,
+} from './repo/infra.ts';
 import { LedgerRepo } from './repo/ledger.ts';
 import { UsersRepo } from './repo/users.ts';
 import { defaultJobs, Scheduler } from './scheduler.ts';
@@ -39,8 +45,12 @@ export type EngineDeps = {
   embedder: Embedder;
   market: MarketPort;
   registry: ToolRegistry;
+  connectors?: ConnectorPort;
+  attestAppId?: string;
+  attestRequire?: boolean;
   log: Logger;
   publicBaseUrl: string;
+  mainnetMaxPerTxUsd?: string;
   webhookSecret: string | undefined;
   limits: { perIpPerMin: number; perUserPerMin: number; maxBodyBytes: number };
   tracer?: Tracer;
@@ -57,6 +67,7 @@ export function createEngine(d: EngineDeps) {
     moods: new MoodsRepo(d.db),
     messages: new MessagesRepo(d.db),
     webhookEvents: new WebhookEventsRepo(d.db),
+    attestChallenges: new AttestChallengesRepo(d.db),
     idempotency: new IdempotencyRepo(d.db),
     guardDecisions: new GuardDecisionsRepo(d.db),
   };
@@ -79,21 +90,40 @@ export function createEngine(d: EngineDeps) {
     approvals: repos.approvals,
     ledger: repos.ledger,
     users: repos.users,
+    bots: repos.bots,
     guardDecisions: repos.guardDecisions,
     chain: d.chain,
     messaging: d.messaging,
     mood,
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
+    ...(d.mainnetMaxPerTxUsd ? { mainnetMaxPerTxUsd: d.mainnetMaxPerTxUsd } : {}),
     now,
+    ...(d.connectors
+      ? {
+          executeWrite: (
+            userId: string,
+            toolkit: string,
+            slug: string,
+            args: Record<string, unknown>,
+          ) =>
+            d.connectors?.executeWrite(userId, toolkit, slug, args) ??
+            Promise.reject(new Error('no connector')),
+        }
+      : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
     onBotDeclined: (id) => botService.onApprovalDeclined(id),
   });
-  const enroll = new EnrollService(repos.users, d.chain, now);
+  const enroll = new EnrollService(repos.users, d.chain, now, {
+    ...(d.attestAppId ? { appId: d.attestAppId } : {}),
+    require: d.attestRequire ?? false,
+    challenges: repos.attestChallenges,
+  });
   const crew = new Crew({
     router: d.models.router,
     chat: d.models.chat,
     registry: d.registry,
+    ...(d.connectors ? { connectors: d.connectors } : {}),
     bots: repos.bots,
     messages: repos.messages,
     users: repos.users,
@@ -134,7 +164,10 @@ export function createEngine(d: EngineDeps) {
     '/',
     buildRoutes({
       approvals,
+      approvalsRepo: repos.approvals,
+      users: repos.users,
       enroll,
+      ...(d.attestAppId ? { attestAppId: d.attestAppId } : {}),
       webhookEvents: repos.webhookEvents,
       idempotency: repos.idempotency,
       webhookSecret: d.webhookSecret,
@@ -149,6 +182,7 @@ export function createEngine(d: EngineDeps) {
   const scheduler = new Scheduler(
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
+      refreshRelayed: () => approvals.refreshRelayed(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
       pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
       weeklyReflection: async (now) => {

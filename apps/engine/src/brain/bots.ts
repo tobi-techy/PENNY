@@ -28,6 +28,9 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'set_mood',
       'draft_bot',
       'confirm_bot',
+      'connect_app',
+      'propose_write',
+      'find_bills',
     ],
   },
   {
@@ -44,7 +47,18 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
     ],
   },
   { slug: 'guard', name: 'Guard', toolIds: ['check_guard', 'recall'] },
-  { slug: 'mail', name: 'Mail', toolIds: ['find_bills', 'propose_pay_bill', 'remember', 'recall'] },
+  {
+    slug: 'mail',
+    name: 'Mail',
+    toolIds: [
+      'find_bills',
+      'propose_pay_bill',
+      'connect_app',
+      'propose_write',
+      'remember',
+      'recall',
+    ],
+  },
   {
     slug: 'finance',
     name: 'Finance',
@@ -54,6 +68,8 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'propose_send',
       'propose_pay_bill',
       'check_guard',
+      'connect_app',
+      'find_bills',
       'remember',
       'recall',
     ],
@@ -61,7 +77,14 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
   {
     slug: 'errand',
     name: 'Errand',
-    toolIds: ['propose_errand', 'check_guard', 'remember', 'recall'],
+    toolIds: [
+      'propose_errand',
+      'check_guard',
+      'connect_app',
+      'propose_write',
+      'remember',
+      'recall',
+    ],
   },
 ];
 

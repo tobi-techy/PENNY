@@ -86,6 +86,13 @@ describe('Approval', () => {
       id: 'apr_01JC0000000000000000000000',
       userId: 'usr_01JC0000000000000000000000',
       kind: 'invest',
+      plan: {
+        kind: 'invest',
+        fromAsset: 'USDC',
+        amountUsd: '50',
+        portfolioId: 'eth-momentum',
+        quoteId: 'q_1',
+      },
       title: 'Swap · USDC → ETH Momentum',
       amountDisplay: '$50.00',
       facts: [{ label: 'Fee', value: '$0.12' }],

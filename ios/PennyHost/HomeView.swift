@@ -32,19 +32,27 @@ struct HomeView: View {
                     }
 
                     SettingsSection(title: "Limits") {
-                        Row(label: "Ask me above", value: "Set by Guard")
-                        Row(label: "Daily limit", value: "Set by Guard")
-                        Row(label: "New recipients", value: "Always ask")
-                        Text("Guard checks every payment against your limits before a card reaches you. Text Penny “show my limits” to see or change them.")
+                        NavigationLink { LimitsView() } label: {
+                            Row(label: "Edit limits", value: "Face ID ›")
+                        }
+                        .buttonStyle(.plain)
+                        Text("Guard checks every payment against your limits before a card reaches you. Changing them needs Face ID on this iPhone.")
                             .font(.geist(12.5))
                             .foregroundStyle(PennyColor.meta)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 10)
                     }
 
+                    SettingsSection(title: "History") {
+                        NavigationLink { HistoryView() } label: {
+                            Row(label: "Approvals", value: "Recent ›")
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     SettingsSection(title: "Device") {
-                        Button { confirmRevoke = true } label: {
-                            Row(label: "Remove this iPhone", value: "Coming soon")
+                        Button(role: .destructive) { confirmRevoke = true } label: {
+                            Row(label: "Remove this iPhone", value: "Revoke key")
                         }
                         .buttonStyle(.plain)
                         NavigationLink { SettingsEngineView() } label: {
@@ -62,10 +70,13 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity)
             }
             .background(PennyColor.cardBackground.ignoresSafeArea())
-            .alert("Not yet", isPresented: $confirmRevoke) {
-                Button("OK", role: .cancel) {}
+            .alert("Remove this iPhone?", isPresented: $confirmRevoke) {
+                Button("Cancel", role: .cancel) {}
+                Button("Remove", role: .destructive) {
+                    Task { try? await session.removeThisIPhone() }
+                }
             } message: {
-                Text("Removing a device will swap this key off your wallet on-chain first, so you never lose access. That flow is still being built, so for now the key stays put.")
+                Text("This iPhone's key will be revoked on the server and deleted here. It will no longer be able to approve anything. You can pair a new iPhone later.")
             }
         }
     }
@@ -208,5 +219,67 @@ struct CardGalleryView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color.black.ignoresSafeArea())
+    }
+}
+
+/// Edit Guard limits. Values are decimal USD strings; saving needs Face ID.
+struct LimitsView: View {
+    @EnvironmentObject private var session: HostSession
+    @State private var perTx = "25"
+    @State private var daily = "100"
+    @State private var blockNew = "20"
+    @State private var saved = false
+    @State private var failed = false
+
+    var body: some View {
+        Form {
+            Section("Per payment") { TextField("25", text: $perTx).keyboardType(.decimalPad) }
+            Section("Per day") { TextField("100", text: $daily).keyboardType(.decimalPad) }
+            Section("First payment to someone new") { TextField("20", text: $blockNew).keyboardType(.decimalPad) }
+            Section {
+                Button("Save with Face ID") {
+                    Task {
+                        do {
+                            try await session.updateLimits(perTx: perTx, daily: daily, blockNew: blockNew)
+                            saved = true
+                        } catch { failed = true }
+                    }
+                }
+            }
+            if saved { Section { Text("Saved. Guard uses these from the next payment.") } }
+            if failed { Section { Text("That did not save. Check the amounts and try again.") } }
+        }
+        .navigationTitle("Limits")
+    }
+}
+
+/// Recent approvals from the engine (device-signed request).
+struct HistoryView: View {
+    @EnvironmentObject private var session: HostSession
+    @State private var items: [ApprovalHistoryItem] = []
+    @State private var failed = false
+
+    var body: some View {
+        List {
+            if items.isEmpty && !failed {
+                Text("Nothing yet. Approvals you make will show up here.")
+            }
+            if failed {
+                Text("Could not load history. Try again in a moment.")
+            }
+            ForEach(items, id: \.id) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title).font(.geist(14, medium: true))
+                    Text("\(item.amountDisplay) · \(item.status)")
+                        .font(.geist(12.5))
+                        .foregroundStyle(PennyColor.meta)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .navigationTitle("Approvals")
+        .task {
+            do { items = try await session.approvalHistory() } catch { failed = true }
+        }
     }
 }

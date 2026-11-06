@@ -8,6 +8,11 @@ public enum ApprovalKind: String, Sendable, CaseIterable {
     case send
     case payBill = "pay_bill"
     case errand
+    case createBot = "create_bot"
+    case write
+
+    /// These approvals carry no NEAR actions; the device signs the plan message instead.
+    public var isPlanSigned: Bool { self == .createBot || self == .write }
 }
 
 public enum ApprovalStatus: String, Sendable {
@@ -76,10 +81,12 @@ public struct Approval: Equatable, Sendable {
     public let expiresAt: Date
     public let status: ApprovalStatus
     public let planHash: String
+    /// Raw plan JSON exactly as received; used to recompute planHash before signing.
+    public let plan: JSONValue
 
     public init(id: String, userId: String, kind: ApprovalKind, title: String, amountDisplay: String, facts: [Fact],
                 signerId: String, receiverId: String, actions: [ApprovalAction], nonce: String, maxBlockHeight: String,
-                expiresAt: Date, status: ApprovalStatus, planHash: String) {
+                expiresAt: Date, status: ApprovalStatus, planHash: String, plan: JSONValue = .null) {
         self.id = id
         self.userId = userId
         self.kind = kind
@@ -94,6 +101,7 @@ public struct Approval: Equatable, Sendable {
         self.expiresAt = expiresAt
         self.status = status
         self.planHash = planHash
+        self.plan = plan
     }
 
     /// Builds the exact NEP-366 DelegateAction the device signs.
@@ -118,6 +126,8 @@ public struct Approval: Equatable, Sendable {
         case .send: verb = "Send"
         case .payBill: verb = "Pay"
         case .errand: verb = "Hire for"
+        case .createBot: verb = "Approve"
+        case .write: verb = "Approve"
         }
         return "\(verb) \(amountDisplay) · \(title)"
     }
@@ -144,6 +154,7 @@ public struct ApprovalStatusResponse: Equatable, Sendable {
 public struct EnrollResponse: Equatable, Sendable {
     public let userId: String
     public let accountId: String
+    public let deviceId: String
     /// "created" or "dry_run"
     public let status: String
 }
@@ -219,7 +230,7 @@ struct StrictObject {
 }
 
 extension Approval {
-    static let keys: Set<String> = ["id", "userId", "kind", "title", "amountDisplay", "facts", "signerId", "receiverId",
+    static let keys: Set<String> = ["id", "userId", "kind", "plan", "title", "amountDisplay", "facts", "signerId", "receiverId",
                                     "actions", "nonce", "maxBlockHeight", "expiresAt", "status", "planHash"]
 
     public static func parse(_ data: Data) throws -> Approval {
@@ -249,7 +260,7 @@ extension Approval {
         guard NearAccountID.isValid(signerId), NearAccountID.isValid(receiverId) else { throw PennyError.invalidResponse("approval account ids") }
 
         let actionsJSON = try o.array("actions")
-        guard (1...8).contains(actionsJSON.count) else { throw PennyError.invalidResponse("approval.actions") }
+        guard (kind.isPlanSigned ? 0 : 1)...8 ~= actionsJSON.count else { throw PennyError.invalidResponse("approval.actions") }
         let actions = try actionsJSON.map(parseAction)
 
         let nonce = try o.string("nonce")
@@ -260,10 +271,15 @@ extension Approval {
         guard let status = ApprovalStatus(rawValue: try o.string("status")) else { throw PennyError.invalidResponse("approval.status") }
         let planHash = try o.string("planHash")
         guard Validate.base64URL(planHash, length: 43) else { throw PennyError.invalidResponse("approval.planHash") }
+        // Never trust the engine's hash: recompute it on-device from the
+        // exact plan + actions we were sent, before Face ID ever signs.
+        guard let planJSON = o.fields["plan"] else { throw PennyError.invalidResponse("approval.plan") }
+        let recomputed = CanonicalJSON.sha256Base64URL(.object(["plan": planJSON, "actions": .array(actionsJSON)]))
+        guard recomputed == planHash else { throw PennyError.invalidResponse("approval.planHashMismatch") }
 
         return Approval(id: id, userId: userId, kind: kind, title: title, amountDisplay: amountDisplay, facts: facts,
                         signerId: signerId, receiverId: receiverId, actions: actions, nonce: nonce,
-                        maxBlockHeight: maxBlockHeight, expiresAt: expiresAt, status: status, planHash: planHash)
+                        maxBlockHeight: maxBlockHeight, expiresAt: expiresAt, status: status, planHash: planHash, plan: planJSON)
     }
 
     static func parseAction(_ json: JSONValue) throws -> ApprovalAction {
@@ -307,14 +323,15 @@ extension ApprovalStatusResponse {
 
 extension EnrollResponse {
     public static func parse(_ data: Data) throws -> EnrollResponse {
-        let o = try StrictObject(try JSONParser.parse(data), context: "enroll", allowed: ["userId", "accountId", "status"])
+        let o = try StrictObject(try JSONParser.parse(data), context: "enroll", allowed: ["userId", "accountId", "deviceId", "status"])
         let userId = try o.string("userId")
         let accountId = try o.string("accountId")
+        let deviceId = try o.string("deviceId")
         let status = try o.string("status")
         guard Validate.userId(userId), NearAccountID.isValid(accountId), ["created", "dry_run"].contains(status) else {
             throw PennyError.invalidResponse("enroll")
         }
-        return EnrollResponse(userId: userId, accountId: accountId, status: status)
+        return EnrollResponse(userId: userId, accountId: accountId, deviceId: deviceId, status: status)
     }
 }
 

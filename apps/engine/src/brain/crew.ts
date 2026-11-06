@@ -1,6 +1,7 @@
 import { generateText, type LanguageModel, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
 import type { ApprovalService } from '../approvals/service.ts';
+import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
 import type { BotRow, BotsRepo, MessagesRepo } from '../repo/bots.ts';
@@ -29,6 +30,7 @@ export type CrewDeps = {
   router: LanguageModel;
   chat: LanguageModel;
   registry: ToolRegistry;
+  connectors?: ConnectorPort;
   bots: BotsRepo;
   messages?: MessagesRepo;
   users: UsersRepo;
@@ -157,6 +159,7 @@ export class Crew {
       bot,
       space,
       approvals: this.d.approvals,
+      ...(this.d.connectors ? { connectors: this.d.connectors } : {}),
       memory: this.d.memory,
       mood: this.d.mood,
       market: this.d.market,
@@ -164,12 +167,23 @@ export class Crew {
       quotes: new Map<string, { id: string; expiresAt: Date }>(),
     };
     const tools = this.d.registry.toAiTools(ctx);
+    let connectorNote = '';
+    if (this.d.connectors) {
+      try {
+        const extra = await this.d.connectors.toolsFor(userId, bot.slug);
+        Object.assign(tools, extra);
+        connectorNote =
+          '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app, share its link, then retry when the user says done. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';
+      } catch {
+        this.d.log.warn({ bot: bot.slug }, 'connector tools unavailable, continuing without them');
+      }
+    }
     const toolCalls: string[] = [];
     let text = '';
     try {
       const r = await generateText({
         model: this.d.chat,
-        system: `${bot.soulMd}\n\nCurrent mood: ${mood}.${formatMemories(recalled)}\n${HOUSE_RULES}`,
+        system: `${bot.soulMd}\n\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}\n${HOUSE_RULES}`,
         messages: buildHistoryMessages(history, userText),
         tools,
         stopWhen: stepCountIs(5),

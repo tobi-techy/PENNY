@@ -32,11 +32,28 @@ const BaseEnv = z.object({
   NEARAI_ROUTER_MODEL: z.string().default('z-ai/glm-5.3-flash'),
   NEARAI_EMBEDDING_MODEL: z.string().default('Qwen/Qwen3-Embedding-0.6B'),
 
+  COMPOSIO_API_KEY: optionalStr,
+
+  /** "TEAMID.bundle.id" for App Attest verification, e.g. A1B2C3D4E5.app.penny.host */
+  APP_ATTEST_APP_ID: optionalStr,
+
   NEAR_NETWORK: z.enum(['mainnet', 'testnet']).default('testnet'),
   NEAR_APP_ACCOUNT_ID: z.string().default('penny.near'),
   NEAR_RELAYER_ACCOUNT_ID: optionalStr,
   NEAR_RELAYER_PRIVATE_KEY: optionalStr,
   NEAR_RPC_URL: optionalStr,
+  NEAR_RELAYER_PUBLIC_KEY: optionalStr,
+  NEAR_APP_PRIVATE_KEY: optionalStr,
+  NEAR_APP_PUBLIC_KEY: optionalStr,
+  ONECLICK_API_KEY: optionalStr,
+  GLIDER_API_KEY: optionalStr,
+  /** Set to 1 only after the testnet end-to-end runbook passes. Gates mainnet boot. */
+  PENNY_TESTNET_E2E_OK: flag.default('0'),
+  /** Hard per-tx ceiling applied on mainnet regardless of user policy. */
+  PENNY_MAINNET_MAX_PER_TX_USD: z
+    .string()
+    .regex(/^\d+(\.\d{1,6})?$/)
+    .default('25'),
 
   LANGFUSE_PUBLIC_KEY: optionalStr,
   LANGFUSE_SECRET_KEY: optionalStr,

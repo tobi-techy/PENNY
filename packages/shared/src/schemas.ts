@@ -125,6 +125,31 @@ export const CreateBotPlan = z
   .strict();
 export type CreateBotPlan = z.infer<typeof CreateBotPlan>;
 
+/**
+ * A write action in an outside app (send an email, post a comment, book a
+ * thing) proposed by a bot. Executed by the engine only after Face ID
+ * approval, through the connector layer. Never money.
+ */
+export const WritePlan = z
+  .object({
+    kind: z.literal('write'),
+    toolkit: z
+      .string()
+      .min(2)
+      .max(32)
+      .regex(/^[a-z][a-z0-9-]*$/),
+    toolSlug: z
+      .string()
+      .min(3)
+      .max(80)
+      .regex(/^[A-Z][A-Z0-9_]+$/),
+    title: z.string().min(1).max(80),
+    summary: z.string().min(1).max(300),
+    arguments: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+export type WritePlan = z.infer<typeof WritePlan>;
+
 export const IntentPlan = z.discriminatedUnion('kind', [
   InvestPlan,
   SendPlan,
@@ -132,14 +157,18 @@ export const IntentPlan = z.discriminatedUnion('kind', [
   ErrandPlan,
   SplitPlan,
   CreateBotPlan,
+  WritePlan,
 ]);
 export type IntentPlan = z.infer<typeof IntentPlan>;
 export type IntentKind = IntentPlan['kind'];
 
-/** Plans that move money. `split` and `create_bot` never move money. */
-export type MoneyPlan = Exclude<IntentPlan, { kind: 'split' } | { kind: 'create_bot' }>;
+/** Plans that move money. `split`, `create_bot` and `write` never move money. */
+export type MoneyPlan = Exclude<
+  IntentPlan,
+  { kind: 'split' } | { kind: 'create_bot' } | { kind: 'write' }
+>;
 export function isMoneyPlan(p: IntentPlan): p is MoneyPlan {
-  return p.kind !== 'split' && p.kind !== 'create_bot';
+  return p.kind !== 'split' && p.kind !== 'create_bot' && p.kind !== 'write';
 }
 
 /** USD-equivalent amount a plan moves, as a Decimal string. NEAR needs a price. */
@@ -216,7 +245,7 @@ export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
 
 export const Fact = z.object({ label: z.string().max(40), value: z.string().max(80) }).strict();
 
-export const ApprovalKind = z.enum(['invest', 'send', 'pay_bill', 'errand', 'create_bot']);
+export const ApprovalKind = z.enum(['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write']);
 export type ApprovalKind = z.infer<typeof ApprovalKind>;
 
 /**
@@ -227,11 +256,34 @@ export function planApprovalMessage(approvalId: string, planHashValue: string): 
   return `penny-approval:v1:${approvalId}:${planHashValue}`;
 }
 
+/** Messages the enrolled device signs (ed25519) for account-level operations. */
+export function deviceRevokeMessage(
+  accountId: string,
+  deviceId: string,
+  timestampSec: number,
+): string {
+  return `penny-device:revoke:v1:${accountId}:${deviceId}:${timestampSec}`;
+}
+export function policyUpdateMessage(
+  accountId: string,
+  perTxUsd: string,
+  dailyUsd: string,
+  blockNewRecipientsOverUsd: string,
+  timestampSec: number,
+): string {
+  return `penny-policy:v1:${accountId}:${perTxUsd}:${dailyUsd}:${blockNewRecipientsOverUsd}:${timestampSec}`;
+}
+export function historyRequestMessage(accountId: string, timestampSec: number): string {
+  return `penny-history:v1:${accountId}:${timestampSec}`;
+}
+
 export const Approval = z
   .object({
     id: ApprovalId,
     userId: UserId,
     kind: ApprovalKind,
+    /** The exact plan that was hashed. Devices recompute planHash from this. */
+    plan: IntentPlan,
     title: z.string().min(1).max(80),
     amountDisplay: z.string().min(1).max(40),
     facts: z.array(Fact).max(8),
@@ -245,10 +297,16 @@ export const Approval = z
     planHash: Base64Url.length(43),
   })
   .strict()
-  .refine((a) => (a.kind === 'create_bot' ? a.actions.length === 0 : a.actions.length >= 1), {
-    message: 'money approvals need at least one action; create_bot approvals carry none',
-    path: ['actions'],
-  });
+  .refine(
+    (a) =>
+      a.kind === 'create_bot' || a.kind === 'write'
+        ? a.actions.length === 0
+        : a.actions.length >= 1,
+    {
+      message: 'money approvals need at least one action; create_bot/write approvals carry none',
+      path: ['actions'],
+    },
+  );
 export type Approval = z.infer<typeof Approval>;
 
 // ---------- Engine HTTP API bodies ----------
@@ -264,13 +322,19 @@ export const EnrollBody = z
     enrollCode: EnrollCode,
     /** base64url, exactly 32 raw bytes (43 chars, unpadded) */
     publicKeyEd25519: Base64Url.length(43),
-    appAttest: z.string().max(8192).optional(),
+    appAttest: z.string().max(16_384).optional(),
+    appAttestChallengeId: z.string().min(3).max(64).optional(),
   })
   .strict();
 export type EnrollBody = z.infer<typeof EnrollBody>;
 
 export const EnrollResponse = z
-  .object({ userId: UserId, accountId: NearAccountId, status: z.enum(['created', 'dry_run']) })
+  .object({
+    userId: UserId,
+    accountId: NearAccountId,
+    deviceId: z.string().min(3).max(64),
+    status: z.enum(['created', 'dry_run']),
+  })
   .strict();
 
 export const SubmitBody = z.union([

@@ -65,6 +65,13 @@ public struct EngineClient: Sendable {
         return try StatusOnly.parse(data)
     }
 
+    // POST /v1/approvals/:id/submit  {planSignature} for write / create_bot approvals
+    public func submitPlan(_ link: CardLink, signature: Data, idempotencyKey: String = UUID().uuidString) async throws -> ApprovalStatus {
+        let body = CanonicalJSON.data(.object(["planSignature": .string(signature.base64URLEncodedString())]))
+        let data = try await send("POST", "/v1/approvals/\(link.approvalId)/submit", cardToken: link.cardToken, body: body, idempotencyKey: idempotencyKey)
+        return try StatusOnly.parse(data)
+    }
+
     // POST /v1/approvals/:id/decline  {reason?}
     public func decline(_ link: CardLink, reason: String? = nil, idempotencyKey: String = UUID().uuidString) async throws -> ApprovalStatus {
         var fields: [String: JSONValue] = [:]
@@ -84,12 +91,36 @@ public struct EngineClient: Sendable {
     // POST /v1/devices/enroll  {enrollCode, publicKeyEd25519}
     public func enroll(code: String, publicKey: NearPublicKey, idempotencyKey: String = UUID().uuidString) async throws -> EnrollResponse {
         guard EnrollCode.isValid(code) else { throw PennyError.invalidInput("enroll code") }
-        let body = CanonicalJSON.data(.object([
+        var fields: [String: JSONValue] = [
             "enrollCode": .string(code),
             "publicKeyEd25519": .string(publicKey.base64URL),
-        ]))
+        ]
+        // App Attest when the device supports it: challenge -> attest -> enroll.
+        // The engine verifies the attestation; absence is a dev-only path.
+        if AppAttestManager.shared.isSupported,
+           let challenge = try? await attestChallenge(code: code) {
+            let attestation = try await AppAttestManager.shared.attest(challengeB64: challenge.challenge)
+            fields["appAttest"] = .string(attestation)
+            fields["appAttestChallengeId"] = .string(challenge.challengeId)
+        }
+        let body = CanonicalJSON.data(.object(fields))
         let data = try await send("POST", "/v1/devices/enroll", cardToken: nil, body: body, idempotencyKey: idempotencyKey)
         return try EnrollResponse.parse(data)
+    }
+
+    public struct AttestChallenge: Sendable {
+        public let challengeId: String
+        public let challenge: String
+    }
+
+    public func attestChallenge(code: String) async throws -> AttestChallenge {
+        let body = CanonicalJSON.data(.object(["enrollCode": .string(code)]))
+        let data = try await send("POST", "/v1/devices/app-attest/challenge", cardToken: nil, body: body, idempotencyKey: nil)
+        let root = try JSONParser.parse(data)
+        guard let id = root["challengeId"]?.stringValue, let ch = root["challenge"]?.stringValue else {
+            throw PennyError.invalidResponse("attest challenge")
+        }
+        return AttestChallenge(challengeId: id, challenge: ch)
     }
 
     // GET /healthz
@@ -97,7 +128,7 @@ public struct EngineClient: Sendable {
         (try? await send("GET", "/healthz", cardToken: nil)) != nil
     }
 
-    private func send(_ method: String, _ path: String, cardToken: String?, body: Data? = nil, idempotencyKey: String? = nil) async throws -> Data {
+    func send(_ method: String, _ path: String, cardToken: String? = nil, body: Data? = nil, idempotencyKey: String? = nil) async throws -> Data {
         guard baseURL.scheme == "https" || baseURL.host == "localhost" || baseURL.host == "127.0.0.1" else {
             throw PennyError.invalidInput("engine URL must use https")
         }

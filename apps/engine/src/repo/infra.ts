@@ -1,7 +1,38 @@
-import { and, eq, isNull, lt } from 'drizzle-orm';
+import { and, eq, gt, isNull, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { guardDecisions, idempotencyKeys, webhookEvents } from '../db/schema.ts';
+import { attestChallenges, guardDecisions, idempotencyKeys, webhookEvents } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
+
+/** Single-use App Attest challenges, bound to an enroll code hash. */
+export class AttestChallengesRepo {
+  constructor(private readonly db: Db) {}
+
+  async create(codeHash: string, challengeB64: string, expiresAt: Date): Promise<string> {
+    const id = newId('atch');
+    await this.db
+      .insert(attestChallenges)
+      .values({ id, codeHash, challenge: challengeB64, expiresAt });
+    return id;
+  }
+
+  /** Atomically consume a challenge; returns its raw bytes or null. */
+  async consume(id: string, codeHash: string, now: Date): Promise<Uint8Array | null> {
+    const rows = await this.db
+      .update(attestChallenges)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(attestChallenges.id, id),
+          eq(attestChallenges.codeHash, codeHash),
+          isNull(attestChallenges.usedAt),
+          gt(attestChallenges.expiresAt, now),
+        ),
+      )
+      .returning({ challenge: attestChallenges.challenge });
+    const row = rows[0];
+    return row ? new Uint8Array(Buffer.from(row.challenge, 'base64url')) : null;
+  }
+}
 
 export class WebhookEventsRepo {
   constructor(private readonly db: Db) {}

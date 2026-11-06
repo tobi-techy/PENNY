@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { conversations, devices, enrollCodes, guardPolicies, users } from '../db/schema.ts';
 import type { GuardPolicy } from '../guard/policy.ts';
@@ -19,6 +19,11 @@ export class UsersRepo {
       .orderBy(asc(users.id))
       .limit(Math.min(Math.max(limit, 1), 500));
     return rows.map((r) => r.id);
+  }
+
+  async byAccountId(accountId: string): Promise<UserRow | null> {
+    const [r] = await this.db.select().from(users).where(eq(users.accountId, accountId)).limit(1);
+    return r ?? null;
   }
 
   async byId(id: string): Promise<UserRow | null> {
@@ -47,22 +52,75 @@ export class UsersRepo {
     await this.db.update(users).set({ slug, accountId }).where(eq(users.id, userId));
   }
 
+  async deviceById(deviceId: string): Promise<DeviceRow | null> {
+    const [d] = await this.db.select().from(devices).where(eq(devices.id, deviceId)).limit(1);
+    return d ?? null;
+  }
+
+  /** Revoke a device: it can no longer sign or be used for approvals. */
+  async revokeDevice(deviceId: string): Promise<boolean> {
+    const r = await this.db
+      .update(devices)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(devices.id, deviceId), isNull(devices.revokedAt)))
+      .returning({ id: devices.id });
+    return r.length === 1;
+  }
+
   async activeDevice(userId: string): Promise<DeviceRow | null> {
     const [d] = await this.db
       .select()
       .from(devices)
       .where(and(eq(devices.userId, userId), isNull(devices.revokedAt)))
+      // Enrollment allows one active device; order anyway so the pick is deterministic.
+      .orderBy(desc(devices.enrolledAt), desc(devices.id))
       .limit(1);
     return d ?? null;
   }
 
-  async addDevice(userId: string, publicKey: string, appAttest?: string): Promise<DeviceRow> {
+  async addDevice(
+    userId: string,
+    publicKey: string,
+    attest?: { keyId: string; publicKeyXY: string },
+  ): Promise<DeviceRow> {
     const [d] = await this.db
       .insert(devices)
-      .values({ id: newId('dev'), userId, publicKey, appAttest: appAttest ?? null })
+      .values({
+        id: newId('dev'),
+        userId,
+        publicKey,
+        ...(attest
+          ? {
+              appAttest: attest.keyId,
+              appAttestKeyId: attest.keyId,
+              appAttestPublicKey: attest.publicKeyXY,
+              appAttestVerified: true,
+            }
+          : {}),
+      })
       .returning();
     if (!d) throw new Error('device insert failed');
     return d;
+  }
+
+  /** Advance the App Attest assertion counter (monotonic; returns false on replay). */
+  async advanceAttestCounter(deviceId: string, counter: number): Promise<boolean> {
+    const r = await this.db
+      .update(devices)
+      .set({ appAttestCounter: counter })
+      .where(and(eq(devices.id, deviceId), lt(devices.appAttestCounter, counter)))
+      .returning({ id: devices.id });
+    return r.length === 1;
+  }
+
+  /** User-edited Guard limits (Face ID signed at the route layer). */
+  async updatePolicy(
+    userId: string,
+    patch: Partial<{ perTxUsd: string; dailyUsd: string; blockNewRecipientsOverUsd: string }>,
+  ): Promise<GuardPolicy> {
+    await this.policy(userId); // ensure the row exists
+    await this.db.update(guardPolicies).set(patch).where(eq(guardPolicies.userId, userId));
+    return this.policy(userId);
   }
 
   async policy(userId: string): Promise<GuardPolicy> {
@@ -91,6 +149,22 @@ export class UsersRepo {
   }
 
   /** Atomically consume. Returns the bound user or null (unknown, used, expired). */
+  /** True when an enroll code exists, unused and unexpired (challenge issuance). */
+  async enrollCodeUsable(codeHash: string, now: Date): Promise<boolean> {
+    const [r] = await this.db
+      .select({ id: enrollCodes.codeHash })
+      .from(enrollCodes)
+      .where(
+        and(
+          eq(enrollCodes.codeHash, codeHash),
+          isNull(enrollCodes.usedAt),
+          gt(enrollCodes.expiresAt, now),
+        ),
+      )
+      .limit(1);
+    return Boolean(r);
+  }
+
   async consumeEnrollCode(
     codeHash: string,
     now: Date,

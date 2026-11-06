@@ -10,6 +10,7 @@ export type IdPrefix =
   | 'mem'
   | 'led'
   | 'gdc'
+  | 'atch'
   | 'evt';
 
 export function newId<P extends IdPrefix>(prefix: P): `${P}_${string}` {
