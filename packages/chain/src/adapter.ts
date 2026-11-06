@@ -27,7 +27,7 @@ import {
   type LiveRequest,
   modeFromEnv,
 } from './near/mode.ts';
-import { NearRelayer, RelayError } from './near/relayer.ts';
+import { DEFAULT_RELAYER_HARD_CEILING, NearRelayer, RelayError } from './near/relayer.ts';
 import { MAINNET_RPC_URL, NearRpc, RpcError } from './near/rpc.ts';
 import {
   type ApprovalSigningFields,
@@ -56,8 +56,10 @@ export interface QuoteInvestParams {
   amountUsd: string;
   /** 1Click asset id of what to buy, e.g. nep141:base-0x8335...omft.near (USDC on Base for a Glider portfolio). */
   destinationAsset: string;
-  /** Destination-chain address (e.g. Glider smart account) */
+  /** Destination-chain address, or a NEAR account when recipientType is INTENTS. */
   recipient: string;
+  /** Default DESTINATION_CHAIN. Invest uses INTENTS (asset lands in the user's own intents.near balance). */
+  recipientType?: 'DESTINATION_CHAIN' | 'INTENTS';
   /** The user's NEAR account (refunds go back here, on NEAR). */
   userAccountId: string;
   slippageBps?: number;
@@ -79,8 +81,10 @@ export interface ChainAdapterOptions {
   /** Enrolled device key for a NEAR account (from the devices table). When set, verify requires an exact match. */
   resolveDeviceKey?: (signerId: string) => Promise<string | null>;
   verifyPolicy?: VerifyPolicy;
-  /** Relayer inner-deposit ceiling (yocto). Relayer pays inner deposits, so set deliberately. */
+  /** Relayer inner-deposit cap for calls with no approval-derived limit (yocto). */
   relayerMaxInnerDepositYocto?: bigint;
+  /** Env hard ceiling on any one approval's inner deposits (yocto). Default 1 NEAR. */
+  relayerHardCeilingYocto?: bigint;
   /** Blocks from head for a fresh signing window. Default 200 (~2-3 min). */
   signingWindowBlocks?: bigint;
   now?: () => Date;
@@ -130,6 +134,9 @@ export class ChainAdapter {
           ...(o.relayerMaxInnerDepositYocto !== undefined
             ? { maxInnerDepositYocto: o.relayerMaxInnerDepositYocto }
             : {}),
+          ...(o.relayerHardCeilingYocto !== undefined
+            ? { hardCeilingYocto: o.relayerHardCeilingYocto }
+            : {}),
           ...(o.relayerSigner ? { signer: o.relayerSigner } : {}),
         })
       : null;
@@ -146,6 +153,11 @@ export class ChainAdapter {
     return isLive(this.mode, this.o.relayerSigner !== undefined, this.liveRequest());
   }
 
+  /** Env hard ceiling on the NEAR the relayer fronts for one approval (yocto). */
+  get relayerDepositCeilingYocto(): bigint {
+    return this.o.relayerHardCeilingYocto ?? DEFAULT_RELAYER_HARD_CEILING;
+  }
+
   async verifyDelegateAction(approval: ApprovalLike, sdaB64: string): Promise<AdapterVerifyResult> {
     if (Date.parse(approval.expiresAt) <= this.now().getTime())
       return { ok: false, reason: 'EXPIRED: approval expired' };
@@ -156,8 +168,13 @@ export class ChainAdapter {
       expectedPublicKey = normalizeEd25519PublicKey(k);
     }
     try {
+      const approved = approvedDepositYocto(approval);
       const r = await verifySignedDelegateAction(sdaB64, approval, this.rpc, {
         ...this.o.verifyPolicy,
+        // The cap is the approved amount itself (bounded by the env ceiling in relay()).
+        ...(approved > (this.o.verifyPolicy?.maxTotalDeposit ?? 0n)
+          ? { maxTotalDeposit: approved }
+          : {}),
         ...(expectedPublicKey ? { expectedPublicKey } : {}),
       });
       return r.ok ? { ok: true } : { ok: false, reason: `${r.reason}: ${r.detail}` };
@@ -169,10 +186,19 @@ export class ChainAdapter {
   /** Re-verifies against the approval, then relays (dry by default). */
   async relay(approval: ApprovalLike, sdaB64: string): Promise<AdapterRelayResult> {
     if (!this.relayer) return { ok: false, reason: 'relayer not configured' };
+    // Per-approval relayer limit = what the user approved, never above the env hard ceiling.
+    const approved = approvedDepositYocto(approval);
+    if (approved > this.relayerDepositCeilingYocto)
+      return {
+        ok: false,
+        reason: `DEPOSIT_CAP: approved deposit ${approved} over relayer ceiling ${this.relayerDepositCeilingYocto}`,
+      };
     const v = await this.verifyDelegateAction(approval, sdaB64);
     if (!v.ok) return v;
     try {
-      const r = await this.relayer.relay(sdaB64, this.liveRequest());
+      const r = await this.relayer.relay(sdaB64, this.liveRequest(), {
+        maxInnerDepositYocto: approved,
+      });
       if (r.mode === 'dry_run') this.dryHashes.add(r.txHash);
       return { ok: true, txHash: r.txHash, dryRun: r.mode === 'dry_run', simulated: r.simulated };
     } catch (e) {
@@ -320,16 +346,18 @@ export class ChainAdapter {
   }
 
   /** Quote an invest plan and cache it under its quoteId for buildActions. */
-  async quoteInvestForPlan(input: {
-    quoteId: string;
-    amountUsd: string;
-    destinationAsset: string;
-    recipient: string;
-    userAccountId: string;
-  }): Promise<ValidatedQuote> {
+  async quoteInvestForPlan(input: QuoteInvestParams & { quoteId: string }): Promise<ValidatedQuote> {
     const q = await this.quoteInvest(input);
+    // drop stale entries; quotes live <= 120 s
+    const t = this.now().getTime();
+    for (const [k, v] of this.investQuotes)
+      if (v.expiresAt.getTime() + 10 * 60_000 < t) this.investQuotes.delete(k);
     this.investQuotes.set(input.quoteId, q);
     return q;
+  }
+
+  getInvestQuote(quoteId: string): ValidatedQuote | undefined {
+    return this.investQuotes.get(quoteId);
   }
 
   async quoteInvest(p: QuoteInvestParams): Promise<ValidatedQuote> {
@@ -341,7 +369,7 @@ export class ChainAdapter {
         amount: toBaseUnits(p.amountUsd, USDC_DECIMALS),
         slippageBps: p.slippageBps ?? 100,
         recipient: p.recipient,
-        recipientType: 'DESTINATION_CHAIN',
+        recipientType: p.recipientType ?? 'DESTINATION_CHAIN',
         refundTo: p.userAccountId,
         refundType: 'ORIGIN_CHAIN',
         depositType: 'ORIGIN_CHAIN',
@@ -391,6 +419,13 @@ export class ChainAdapter {
   }
 }
 
+/** Sum of attached deposits in an approval's actions (yocto): what the relayer fronts. */
+export function approvedDepositYocto(approval: Pick<ApprovalSigningFields, 'actions'>): bigint {
+  let sum = 0n;
+  for (const a of approval.actions) sum += BigInt(a.deposit);
+  return sum;
+}
+
 const Env = z.object({
   PENNY_ENV: z.enum(['dev', 'mainnet']).default('dev'),
   DRY_RUN: z.string().optional(),
@@ -402,6 +437,11 @@ const Env = z.object({
   NEAR_RELAYER_PRIVATE_KEY: z.string().optional(),
   NEAR_RELAYER_PUBLIC_KEY: z.string().optional(),
   ONECLICK_API_KEY: z.string().optional(),
+  ONECLICK_JWT: z.string().optional(),
+  PENNY_RELAYER_MAX_DEPOSIT_NEAR: z
+    .string()
+    .regex(/^\d+(\.\d{1,24})?$/)
+    .optional(),
   GLIDER_API_KEY: z.string().optional(),
 });
 
@@ -433,7 +473,13 @@ export function chainAdapterFromEnv(
     ...(e.NEAR_APP_PUBLIC_KEY ? { appPublicKey: e.NEAR_APP_PUBLIC_KEY } : {}),
     ...(relayerSigner ? { relayerSigner } : {}),
     ...(e.NEAR_RELAYER_PUBLIC_KEY ? { relayerPublicKey: e.NEAR_RELAYER_PUBLIC_KEY } : {}),
-    oneClick: new OneClickClient(e.ONECLICK_API_KEY ? { apiKey: e.ONECLICK_API_KEY } : {}),
+    oneClick: new OneClickClient({
+      ...(e.ONECLICK_API_KEY ? { apiKey: e.ONECLICK_API_KEY } : {}),
+      ...(e.ONECLICK_JWT ? { jwt: e.ONECLICK_JWT } : {}),
+    }),
+    ...(e.PENNY_RELAYER_MAX_DEPOSIT_NEAR
+      ? { relayerHardCeilingYocto: toBaseUnits(e.PENNY_RELAYER_MAX_DEPOSIT_NEAR, 24) }
+      : {}),
     ...(e.GLIDER_API_KEY ? { glider: new GliderClient({ apiKey: e.GLIDER_API_KEY }) } : {}),
     ...extra,
   });

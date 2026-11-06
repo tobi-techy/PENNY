@@ -54,9 +54,24 @@ export interface RelayerOptions {
   /** Only required for live broadcast. Dry runs never sign. */
   signer?: TxSigner;
   mode?: ChainMode;
-  /** Relayer pays inner deposits (docs.near.org meta-tx). Hard cap. Default 0.01 NEAR. */
+  /**
+   * Relayer pays inner deposits (docs.near.org meta-tx). Cap used when a relay call
+   * does not carry its own per-approval limit. Default 0.01 NEAR.
+   */
   maxInnerDepositYocto?: bigint;
+  /**
+   * Env hard ceiling (PENNY_RELAYER_MAX_DEPOSIT_NEAR). A per-approval limit above this
+   * is refused. Default 1 NEAR.
+   */
+  hardCeilingYocto?: bigint;
   maxInnerGas?: bigint;
+}
+
+export const DEFAULT_RELAYER_HARD_CEILING = 10n ** 24n;
+
+/** Per-call limits. maxInnerDepositYocto comes from the approved amount (sum of approved deposits). */
+export interface RelayLimits {
+  maxInnerDepositYocto?: bigint;
 }
 
 /** Overhead for the outer tx + delegate unpacking, generous upper bound for cost estimate. */
@@ -83,13 +98,13 @@ export class NearRelayer {
    * AND opts is exactly { dryRun: false, env: 'mainnet' }. Otherwise returns the would-be tx hash + preflight.
    * Callers must have run verifySignedDelegateAction against the approval first.
    */
-  async relay(sdaB64: string, opts?: LiveRequest): Promise<RelayResult> {
+  async relay(sdaB64: string, opts?: LiveRequest, limits: RelayLimits = {}): Promise<RelayResult> {
     const sda = decodeSignedDelegateAction(sdaB64);
     const live = isLive(this.mode, this.o.signer !== undefined, opts);
 
     const [relayerKey, preflight] = await Promise.all([
       this.o.rpc.viewAccessKey(this.o.relayerAccountId, this.relayerPublicKey),
-      this.preflight(sda),
+      this.preflight(sda, limits),
     ]);
     if (!relayerKey) throw new RelayError(`relayer key not found on ${this.o.relayerAccountId}`);
 
@@ -127,10 +142,31 @@ export class NearRelayer {
     return { ...base, mode: 'broadcast', txHash: signed.hash, outcome };
   }
 
-  private async preflight(sda: DecodedSignedDelegate): Promise<RelayResult['simulated']> {
+  /** The deposit cap a relay call runs under: per-approval when given (never above the hard ceiling). */
+  depositCap(limits: RelayLimits = {}): { cap: bigint; ceiling: bigint; source: string } {
+    const ceiling = this.o.hardCeilingYocto ?? DEFAULT_RELAYER_HARD_CEILING;
+    if (limits.maxInnerDepositYocto !== undefined)
+      return { cap: limits.maxInnerDepositYocto, ceiling, source: 'approved amount' };
+    return {
+      cap: this.o.maxInnerDepositYocto ?? DEFAULT_POLICY.maxTotalDeposit,
+      ceiling,
+      source: 'default',
+    };
+  }
+
+  private async preflight(
+    sda: DecodedSignedDelegate,
+    limits: RelayLimits = {},
+  ): Promise<RelayResult['simulated']> {
     const checks: PreflightCheck[] = [];
     const add = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
-    const maxDeposit = this.o.maxInnerDepositYocto ?? DEFAULT_POLICY.maxTotalDeposit;
+    const { cap: maxDeposit, ceiling, source } = this.depositCap(limits);
+    if (limits.maxInnerDepositYocto !== undefined)
+      add(
+        'per_approval_within_ceiling',
+        limits.maxInnerDepositYocto <= ceiling,
+        `${limits.maxInnerDepositYocto} <= ${ceiling} (env hard ceiling)`,
+      );
     const maxGas = this.o.maxInnerGas ?? DEFAULT_POLICY.maxTotalGas;
 
     let innerGas = 0n;
@@ -148,7 +184,7 @@ export class NearRelayer {
     add(
       'inner_deposit_cap',
       innerDeposit <= maxDeposit,
-      `${innerDeposit} <= ${maxDeposit} (relayer pays inner deposits)`,
+      `${innerDeposit} <= ${maxDeposit} (${source}; relayer pays inner deposits)`,
     );
 
     const [keys, block, gasPrice, relayerAcct] = await Promise.all([

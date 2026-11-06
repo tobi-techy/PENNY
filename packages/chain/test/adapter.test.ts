@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
-import { ChainAdapter, chainAdapterFromEnv } from '../src/adapter.ts';
+import { approvedDepositYocto, ChainAdapter, chainAdapterFromEnv } from '../src/adapter.ts';
 import { evmAddressFromSecp256k1 } from '../src/near/chainsig.ts';
 import { fromBaseUnits, toBaseUnits, USDC_CONTRACT } from '../src/near/ft.ts';
 import { KeyPairSigner } from '../src/near/keys.ts';
@@ -168,6 +168,58 @@ describe('ChainAdapter (ChainPort)', () => {
     });
     expect(adapter.mode.network).toBe('mainnet');
     expect(adapter.isLive).toBe(false);
+  });
+});
+
+describe('relayer ceiling comes from the approved amount', () => {
+  function nearSend(deposit: bigint, ceiling?: bigint) {
+    const w = world();
+    const spec: NearActionSpec = { type: 'Transfer', deposit: deposit.toString() };
+    const adapter = new ChainAdapter({
+      rpc: w.m.rpc,
+      appAccountId: 'penny.near',
+      relayerAccountId: 'tobi.penny.near',
+      relayerPublicKey: w.device.near,
+      resolveDeviceKey: async () => toBase64Url(w.device.raw),
+      now: () => new Date('2026-11-05T19:00:00.000Z'),
+      ...(ceiling !== undefined ? { relayerHardCeilingYocto: ceiling } : {}),
+    });
+    const approval = { ...w.approval, receiverId: 'bob.near', actions: [spec] };
+    const sda = signDelegate({
+      key: w.device,
+      senderId: 'tobi.penny.near',
+      receiverId: 'bob.near',
+      actions: [specToAction(spec)],
+      nonce: 42n,
+      maxBlockHeight: BigInt(HEIGHT + 200),
+    });
+    return { adapter, approval, sda };
+  }
+  test('a 0.5 NEAR send approved for 0.5 NEAR verifies and relays (dry)', async () => {
+    const { adapter, approval, sda } = nearSend(5n * 10n ** 23n);
+    expect(await adapter.verifyDelegateAction(approval, sda)).toEqual({ ok: true });
+    const r = await adapter.relay(approval, sda);
+    expect(r.ok).toBe(true);
+  });
+  test('an approval above the env hard ceiling is refused before relay', async () => {
+    const { adapter, approval, sda } = nearSend(5n * 10n ** 23n, 10n ** 23n);
+    const r = await adapter.relay(approval, sda);
+    expect(r).toMatchObject({ ok: false });
+    if (!r.ok) expect(r.reason).toStartWith('DEPOSIT_CAP');
+  });
+  test('approvedDepositYocto sums deposits; env sets the ceiling', () => {
+    expect(
+      approvedDepositYocto({
+        actions: [
+          { type: 'Transfer', deposit: '5' },
+          { type: 'FunctionCall', methodName: 'x', args: {}, gas: '1', deposit: '1' },
+        ],
+      }),
+    ).toBe(6n);
+    expect(
+      chainAdapterFromEnv({ PENNY_RELAYER_MAX_DEPOSIT_NEAR: '2.5' }).relayerDepositCeilingYocto,
+    ).toBe(25n * 10n ** 23n);
+    expect(chainAdapterFromEnv({}).relayerDepositCeilingYocto).toBe(10n ** 24n);
   });
 });
 
