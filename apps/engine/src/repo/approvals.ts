@@ -76,6 +76,21 @@ export class ApprovalsRepo {
       .orderBy(approvalEvents.createdAt, approvalEvents.id);
   }
 
+  /** Recent approvals for the host-app history screen, newest first. */
+  async listForUser(userId: string, limit = 20): Promise<ApprovalRow[]> {
+    return this.db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.userId, userId))
+      .orderBy(desc(approvals.createdAt))
+      .limit(Math.min(Math.max(limit, 1), 50));
+  }
+
+  /** Approvals waiting on chain confirmation (status poller input). */
+  async relayed(limit = 50): Promise<ApprovalRow[]> {
+    return this.db.select().from(approvals).where(eq(approvals.status, 'relayed')).limit(limit);
+  }
+
   async countCreatedSince(userId: string, since: Date): Promise<number> {
     const [r] = await this.db
       .select({ n: sql<number>`count(*)::int` })

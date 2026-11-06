@@ -2,6 +2,7 @@ import {
   type Approval,
   type ApprovalStatusResponse,
   type CreateBotPlan,
+  compareDecimal,
   formatUsd,
   fromMicros,
   type IntentPlan,
@@ -21,7 +22,7 @@ import type { Logger } from '../lib/logger.ts';
 import type { ChainPort } from '../ports/chain.ts';
 import type { ApprovalCard, CardHandle, MessagingPort, SpaceRef } from '../ports/messaging.ts';
 import type { ApprovalRow, ApprovalsRepo } from '../repo/approvals.ts';
-import type { BotRow } from '../repo/bots.ts';
+import type { BotRow, BotsRepo } from '../repo/bots.ts';
 import type { GuardDecisionsRepo } from '../repo/infra.ts';
 import { DAY_MS, type LedgerRepo } from '../repo/ledger.ts';
 import type { UsersRepo } from '../repo/users.ts';
@@ -59,6 +60,7 @@ export type ApprovalDeps = {
   approvals: ApprovalsRepo;
   ledger: LedgerRepo;
   users: UsersRepo;
+  bots?: BotsRepo;
   guardDecisions: GuardDecisionsRepo;
   chain: ChainPort;
   messaging: MessagingPort;
@@ -66,6 +68,8 @@ export type ApprovalDeps = {
   log: Logger;
   publicBaseUrl: string;
   now: Clock;
+  /** Hard per-tx ceiling (mainnet launch cap) clamped over user policy. */
+  mainnetMaxPerTxUsd?: string;
   /** Executes an approved write in an outside app (connector layer). */
   executeWrite?: (
     userId: string,
@@ -83,6 +87,7 @@ export function toApprovalDto(r: ApprovalRow): Approval {
     id: r.id,
     userId: r.userId,
     kind: r.kind,
+    plan: r.plan as IntentPlan,
     title: r.title,
     amountDisplay: r.amountDisplay,
     facts: r.facts,
@@ -162,6 +167,16 @@ export class ApprovalService {
     extra: Partial<GuardContext> = {},
   ): Promise<GuardResult> {
     const policy = await this.d.users.policy(userId);
+    // Mainnet launch cap: clamp the user's per-tx limit to the hard ceiling.
+    if (
+      this.d.mainnetMaxPerTxUsd &&
+      compareDecimal(policy.perTxUsd, this.d.mainnetMaxPerTxUsd) > 0
+    ) {
+      policy.perTxUsd = this.d.mainnetMaxPerTxUsd;
+      if (compareDecimal(policy.dailyUsd, this.d.mainnetMaxPerTxUsd) > 0) {
+        policy.dailyUsd = this.d.mainnetMaxPerTxUsd;
+      }
+    }
     return evaluate(plan, policy, await this.guardContext(userId, bot, extra));
   }
 
@@ -569,12 +584,16 @@ export class ApprovalService {
       throw new ApprovalError(400, 'wrong_body', 'money approvals need signedDelegateAction');
     }
     const dto = toApprovalDto(row);
-    // 1) re-run Guard against current state, excluding this approval's own reservation
+    // 1) re-run Guard against current state, excluding this approval's own
+    // reservation. Bot caps and recipient must be preserved: load the bot
+    // that created this approval, and keep velocity from other approvals.
     const plan = row.plan as MoneyPlan;
-    const ctx = await this.guardContext(row.userId, null);
+    const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
+    const ctx = await this.guardContext(row.userId, bot);
     ctx.spentLast24hMicros =
       ctx.spentLast24hMicros > row.amountMicros ? ctx.spentLast24hMicros - row.amountMicros : 0n;
-    ctx.approvalsLast10Min = 0; // velocity is a creation-time rule
+    // Exclude this approval from the velocity count; others still count.
+    ctx.approvalsLast10Min = Math.max(0, ctx.approvalsLast10Min - 1);
     if (plan.kind === 'invest') ctx.quote = { id: plan.quoteId, expiresAt: row.expiresAt };
     const policy = await this.d.users.policy(row.userId);
     // NEAR price: re-use the amount Guard sized at creation
@@ -651,6 +670,23 @@ export class ApprovalService {
   }
 
   /** Poll chain status for a relayed approval and settle/fail it. */
+  /** Poller job: advance every relayed approval toward settled/failed. */
+  async refreshRelayed(): Promise<{ checked: number; settled: number; failed: number }> {
+    const rows = await this.d.approvals.relayed();
+    let settled = 0;
+    let failed = 0;
+    for (const row of rows) {
+      try {
+        const s = await this.refreshStatus(row.id);
+        if (s === 'settled') settled += 1;
+        if (s === 'failed') failed += 1;
+      } catch (e) {
+        this.d.log.warn({ approvalId: row.id, err: (e as Error).name }, 'status poll failed');
+      }
+    }
+    return { checked: rows.length, settled, failed };
+  }
+
   async refreshStatus(id: string): Promise<string> {
     const row = await this.d.approvals.get(id);
     if (!row) throw new ApprovalError(404, 'not_found', 'not found');

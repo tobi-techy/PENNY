@@ -43,6 +43,7 @@ export type EngineDeps = {
   connectors?: ConnectorPort;
   log: Logger;
   publicBaseUrl: string;
+  mainnetMaxPerTxUsd?: string;
   webhookSecret: string | undefined;
   limits: { perIpPerMin: number; perUserPerMin: number; maxBodyBytes: number };
   tracer?: Tracer;
@@ -81,12 +82,14 @@ export function createEngine(d: EngineDeps) {
     approvals: repos.approvals,
     ledger: repos.ledger,
     users: repos.users,
+    bots: repos.bots,
     guardDecisions: repos.guardDecisions,
     chain: d.chain,
     messaging: d.messaging,
     mood,
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
+    ...(d.mainnetMaxPerTxUsd ? { mainnetMaxPerTxUsd: d.mainnetMaxPerTxUsd } : {}),
     now,
     ...(d.connectors
       ? {
@@ -149,6 +152,8 @@ export function createEngine(d: EngineDeps) {
     '/',
     buildRoutes({
       approvals,
+      approvalsRepo: repos.approvals,
+      users: repos.users,
       enroll,
       webhookEvents: repos.webhookEvents,
       idempotency: repos.idempotency,
@@ -164,6 +169,7 @@ export function createEngine(d: EngineDeps) {
   const scheduler = new Scheduler(
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
+      refreshRelayed: () => approvals.refreshRelayed(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
       pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
       weeklyReflection: async (now) => {

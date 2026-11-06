@@ -18,6 +18,11 @@ export class UsersRepo {
     return rows.map((r) => r.id);
   }
 
+  async byAccountId(accountId: string): Promise<UserRow | null> {
+    const [r] = await this.db.select().from(users).where(eq(users.accountId, accountId)).limit(1);
+    return r ?? null;
+  }
+
   async byId(id: string): Promise<UserRow | null> {
     const [r] = await this.db.select().from(users).where(eq(users.id, id)).limit(1);
     return r ?? null;
@@ -44,6 +49,21 @@ export class UsersRepo {
     await this.db.update(users).set({ slug, accountId }).where(eq(users.id, userId));
   }
 
+  async deviceById(deviceId: string): Promise<DeviceRow | null> {
+    const [d] = await this.db.select().from(devices).where(eq(devices.id, deviceId)).limit(1);
+    return d ?? null;
+  }
+
+  /** Revoke a device: it can no longer sign or be used for approvals. */
+  async revokeDevice(deviceId: string): Promise<boolean> {
+    const r = await this.db
+      .update(devices)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(devices.id, deviceId), isNull(devices.revokedAt)))
+      .returning({ id: devices.id });
+    return r.length === 1;
+  }
+
   async activeDevice(userId: string): Promise<DeviceRow | null> {
     const [d] = await this.db
       .select()
@@ -60,6 +80,16 @@ export class UsersRepo {
       .returning();
     if (!d) throw new Error('device insert failed');
     return d;
+  }
+
+  /** User-edited Guard limits (Face ID signed at the route layer). */
+  async updatePolicy(
+    userId: string,
+    patch: Partial<{ perTxUsd: string; dailyUsd: string; blockNewRecipientsOverUsd: string }>,
+  ): Promise<GuardPolicy> {
+    await this.policy(userId); // ensure the row exists
+    await this.db.update(guardPolicies).set(patch).where(eq(guardPolicies.userId, userId));
+    return this.policy(userId);
   }
 
   async policy(userId: string): Promise<GuardPolicy> {

@@ -104,7 +104,7 @@ public struct EngineClient: Sendable {
         (try? await send("GET", "/healthz", cardToken: nil)) != nil
     }
 
-    private func send(_ method: String, _ path: String, cardToken: String?, body: Data? = nil, idempotencyKey: String? = nil) async throws -> Data {
+    func send(_ method: String, _ path: String, cardToken: String? = nil, body: Data? = nil, idempotencyKey: String? = nil) async throws -> Data {
         guard baseURL.scheme == "https" || baseURL.host == "localhost" || baseURL.host == "127.0.0.1" else {
             throw PennyError.invalidInput("engine URL must use https")
         }

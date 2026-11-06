@@ -35,9 +35,12 @@ export class EnrollService {
     return { code, expiresAt };
   }
 
-  async enroll(
-    body: EnrollBody,
-  ): Promise<{ userId: string; accountId: string; status: 'created' | 'dry_run' }> {
+  async enroll(body: EnrollBody): Promise<{
+    userId: string;
+    accountId: string;
+    deviceId: string;
+    status: 'created' | 'dry_run';
+  }> {
     const pk = Buffer.from(body.publicKeyEd25519, 'base64url');
     if (pk.length !== 32) throw new EnrollError(400, 'bad_public_key');
     const claim = await this.users.consumeEnrollCode(sha256Hex(body.enrollCode), this.now());
@@ -47,11 +50,12 @@ export class EnrollService {
     const slug = newSlug();
     const created = await this.chain.createUserAccount(slug, body.publicKeyEd25519);
     if (!created.ok) throw new EnrollError(502, 'account_create_failed');
-    await this.users.addDevice(claim.userId, body.publicKeyEd25519, body.appAttest);
+    const device = await this.users.addDevice(claim.userId, body.publicKeyEd25519, body.appAttest);
     await this.users.setAccount(claim.userId, slug, created.accountId);
     return {
       userId: claim.userId,
       accountId: created.accountId,
+      deviceId: device.id,
       status: created.dryRun ? 'dry_run' : 'created',
     };
   }

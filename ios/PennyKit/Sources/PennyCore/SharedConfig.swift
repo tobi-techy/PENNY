@@ -27,6 +27,7 @@ public struct SharedConfig {
     private enum Key {
         static let engineURL = "penny.engineURL"
         static let accountId = "penny.accountId"
+        static let deviceId = "penny.deviceId"
         static let userId = "penny.userId"
         static let enrolledAt = "penny.enrolledAt"
         static let dryRun = "penny.enrollDryRun"
@@ -45,6 +46,7 @@ public struct SharedConfig {
     }
 
     public var accountId: String? { defaults.string(forKey: Key.accountId) }
+    public var deviceId: String? { defaults.string(forKey: Key.deviceId) }
     public var userId: String? { defaults.string(forKey: Key.userId) }
     public var enrolledAt: Date? { defaults.object(forKey: Key.enrolledAt) as? Date }
     public var enrolledInDryRun: Bool { defaults.bool(forKey: Key.dryRun) }
@@ -52,12 +54,13 @@ public struct SharedConfig {
 
     public func saveEnrollment(_ response: EnrollResponse, at date: Date = Date()) {
         defaults.set(response.accountId, forKey: Key.accountId)
+        defaults.set(response.deviceId, forKey: Key.deviceId)
         defaults.set(response.userId, forKey: Key.userId)
         defaults.set(date, forKey: Key.enrolledAt)
         defaults.set(response.status == "dry_run", forKey: Key.dryRun)
     }
 
     public func clearEnrollment() {
-        for key in [Key.accountId, Key.userId, Key.enrolledAt, Key.dryRun] { defaults.removeObject(forKey: key) }
+        for key in [Key.accountId, Key.deviceId, Key.userId, Key.enrolledAt, Key.dryRun] { defaults.removeObject(forKey: key) }
     }
 }

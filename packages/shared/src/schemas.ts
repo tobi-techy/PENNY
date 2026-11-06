@@ -256,11 +256,34 @@ export function planApprovalMessage(approvalId: string, planHashValue: string): 
   return `penny-approval:v1:${approvalId}:${planHashValue}`;
 }
 
+/** Messages the enrolled device signs (ed25519) for account-level operations. */
+export function deviceRevokeMessage(
+  accountId: string,
+  deviceId: string,
+  timestampSec: number,
+): string {
+  return `penny-device:revoke:v1:${accountId}:${deviceId}:${timestampSec}`;
+}
+export function policyUpdateMessage(
+  accountId: string,
+  perTxUsd: string,
+  dailyUsd: string,
+  blockNewRecipientsOverUsd: string,
+  timestampSec: number,
+): string {
+  return `penny-policy:v1:${accountId}:${perTxUsd}:${dailyUsd}:${blockNewRecipientsOverUsd}:${timestampSec}`;
+}
+export function historyRequestMessage(accountId: string, timestampSec: number): string {
+  return `penny-history:v1:${accountId}:${timestampSec}`;
+}
+
 export const Approval = z
   .object({
     id: ApprovalId,
     userId: UserId,
     kind: ApprovalKind,
+    /** The exact plan that was hashed. Devices recompute planHash from this. */
+    plan: IntentPlan,
     title: z.string().min(1).max(80),
     amountDisplay: z.string().min(1).max(40),
     facts: z.array(Fact).max(8),
@@ -305,7 +328,12 @@ export const EnrollBody = z
 export type EnrollBody = z.infer<typeof EnrollBody>;
 
 export const EnrollResponse = z
-  .object({ userId: UserId, accountId: NearAccountId, status: z.enum(['created', 'dry_run']) })
+  .object({
+    userId: UserId,
+    accountId: NearAccountId,
+    deviceId: z.string().min(3).max(64),
+    status: z.enum(['created', 'dry_run']),
+  })
   .strict();
 
 export const SubmitBody = z.union([

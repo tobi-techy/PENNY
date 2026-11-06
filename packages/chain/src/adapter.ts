@@ -16,6 +16,7 @@ import {
   USDC_ASSET_ID,
   USDC_CONTRACT,
   USDC_DECIMALS,
+  USDC_STORAGE_DEPOSIT,
 } from './near/ft.ts';
 import { KeyPairSigner, normalizeEd25519PublicKey, type TxSigner } from './near/keys.ts';
 import {
@@ -27,7 +28,11 @@ import {
 } from './near/mode.ts';
 import { NearRelayer, RelayError } from './near/relayer.ts';
 import { MAINNET_RPC_URL, NearRpc, RpcError } from './near/rpc.ts';
-import { type ApprovalSigningFields, STORAGE_PRICE_PER_BYTE } from './near/types.ts';
+import {
+  type ApprovalSigningFields,
+  type NearActionSpec,
+  STORAGE_PRICE_PER_BYTE,
+} from './near/types.ts';
 
 /** Structural subset of @penny/shared Approval the adapter needs (engine passes the full Approval). */
 export type ApprovalLike = ApprovalSigningFields & { id: string; expiresAt: string };
@@ -220,6 +225,99 @@ export class ChainAdapter {
       nonce: (key.nonce + 1n).toString(),
       maxBlockHeight: (block.height + (this.o.signingWindowBlocks ?? 200n)).toString(),
     };
+  }
+
+  private readonly investQuotes = new Map<string, ValidatedQuote>();
+
+  /**
+   * Deterministic NEAR actions for a validated plan. This is the ONLY place
+   * plan -> actions happens for the real chain; the model never builds these.
+   * Invest resolves its 1Click quote from the cache filled by quoteInvestForPlan.
+   */
+  async buildActions(
+    plan:
+      | { kind: 'send'; asset: 'USDC' | 'NEAR'; amount: string; to: string }
+      | { kind: 'pay_bill'; payee: string; amount: string }
+      | { kind: 'errand'; taskId: string; bidId: string; amount: string }
+      | { kind: 'invest'; amountUsd: string; portfolioId: string; quoteId: string },
+    signerId: string,
+  ): Promise<{ receiverId: string; actions: NearActionSpec[] }> {
+    void signerId;
+    switch (plan.kind) {
+      case 'send': {
+        if (plan.asset === 'NEAR') {
+          return {
+            receiverId: plan.to,
+            actions: [{ type: 'Transfer', deposit: toBaseUnits(plan.amount, 24).toString() }],
+          };
+        }
+        return this.usdcTransfer(plan.to, toBaseUnits(plan.amount, USDC_DECIMALS).toString());
+      }
+      case 'pay_bill':
+        return this.usdcTransfer(plan.payee, toBaseUnits(plan.amount, USDC_DECIMALS).toString());
+      case 'errand':
+        return {
+          receiverId: USDC_CONTRACT,
+          actions: [
+            {
+              type: 'FunctionCall',
+              methodName: 'ft_transfer_call',
+              args: {
+                receiver_id: 'intents.near',
+                amount: toBaseUnits(plan.amount, USDC_DECIMALS).toString(),
+                msg: `${plan.taskId}:${plan.bidId}`,
+              },
+              gas: '30000000000000',
+              deposit: '1',
+            },
+          ],
+        };
+      case 'invest': {
+        const q = this.investQuotes.get(plan.quoteId);
+        if (!q) throw new Error(`unknown quote ${plan.quoteId}; call quoteInvestForPlan first`);
+        const dep = await this.buildInvestDeposit(q);
+        return { receiverId: dep.receiverId, actions: dep.actions };
+      }
+    }
+  }
+
+  /** ft_transfer with a storage_deposit first when the receiver is unregistered. */
+  private async usdcTransfer(
+    to: string,
+    amountBaseUnits: string,
+  ): Promise<{ receiverId: string; actions: NearActionSpec[] }> {
+    const registered = (await storageBalanceOf(this.rpc, USDC_CONTRACT, to)) !== null;
+    const actions: NearActionSpec[] = [];
+    if (!registered) {
+      actions.push({
+        type: 'FunctionCall',
+        methodName: 'storage_deposit',
+        args: { account_id: to, registration_only: true },
+        gas: '10000000000000',
+        deposit: USDC_STORAGE_DEPOSIT.toString(),
+      });
+    }
+    actions.push({
+      type: 'FunctionCall',
+      methodName: 'ft_transfer',
+      args: { receiver_id: to, amount: amountBaseUnits },
+      gas: '30000000000000',
+      deposit: '1',
+    });
+    return { receiverId: USDC_CONTRACT, actions };
+  }
+
+  /** Quote an invest plan and cache it under its quoteId for buildActions. */
+  async quoteInvestForPlan(input: {
+    quoteId: string;
+    amountUsd: string;
+    destinationAsset: string;
+    recipient: string;
+    userAccountId: string;
+  }): Promise<ValidatedQuote> {
+    const q = await this.quoteInvest(input);
+    this.investQuotes.set(input.quoteId, q);
+    return q;
   }
 
   async quoteInvest(p: QuoteInvestParams): Promise<ValidatedQuote> {
