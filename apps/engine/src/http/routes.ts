@@ -63,6 +63,7 @@ function asResult(e: unknown): { status: number; body: unknown } {
 export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
   const r = new Hono<{ Variables: AppVars }>();
 
+  r.get('/', (c) => c.json({ name: 'penny', ok: true }));
   r.get('/healthz', (c) => c.json({ ok: true }));
 
   // ---- NEAR AI TEE attestation status (public, no user data) ----
