@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { parseCardAuth } from '../approvals/card-token.ts';
 import { ApprovalError, type ApprovalService } from '../approvals/service.ts';
+import { type PrivacyGate, unverifiedStatus } from '../brain/attestation.ts';
 import { verifyAssertion } from '../devices/appattest.ts';
 import { EnrollError, type EnrollService } from '../devices/enroll.ts';
 import { verifyEd25519 } from '../lib/crypto.ts';
@@ -37,6 +38,8 @@ export type RouteDeps = {
   onInbound: (evt: SpectrumMessagesEvent) => Promise<void>;
   enrollLimiter: RateLimiter;
   approvalLimiter: RateLimiter;
+  /** NEAR AI TEE attestation gate; absent = NEARAI_ATTESTATION off. */
+  privacy?: PrivacyGate;
   log: Logger;
 };
 
@@ -61,6 +64,12 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
   const r = new Hono<{ Variables: AppVars }>();
 
   r.get('/healthz', (c) => c.json({ ok: true }));
+
+  // ---- NEAR AI TEE attestation status (public, no user data) ----
+  r.get('/v1/attestation', async (c) => {
+    if (!d.privacy) return c.json(unverifiedStatus('off', '', null));
+    return c.json(await d.privacy.status());
+  });
 
   // ---- Photon / Spectrum webhook ----
   r.post('/v1/photon/webhook', async (c) => {
@@ -148,7 +157,11 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     const id = idOf(c.req.param('id'));
     if (!id) return c.json({ error: 'unauthorized' }, 401);
     try {
-      return c.json(await d.approvals.get(id, parseCardAuth(c.req.header('authorization'))));
+      const approval = await d.approvals.get(id, parseCardAuth(c.req.header('authorization')));
+      if (!d.privacy) return c.json(approval);
+      // Card badge: cached status only, never a network call on the card path.
+      const p = d.privacy.peek();
+      return c.json({ ...approval, privateInference: { verified: p.verified, label: p.label } });
     } catch (e) {
       const r2 = asResult(e);
       return c.json(r2.body as object, r2.status as 401);

@@ -1,0 +1,8 @@
+{
+  "recordedAtUnix": 1793970707,
+  "model": "z-ai/glm-5.3-flash",
+  "nonce": "6f7255b353522dfc0de15cbf57a5074ca93f105f91f954175d9a877ca3737662",
+  "reportSha256": "61da97842ff1d8176145fcab2980bbf737418768b6d4671ce7d81e8e2da572b3",
+  "verified": true,
+  "source": "https://cloud-api.near.ai/v1/attestation/report?model=z-ai/glm-5.3-flash&provider=near&signing_algo=ecdsa&nonce=<nonce>"
+}

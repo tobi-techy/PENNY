@@ -71,6 +71,7 @@ export async function makeEngine(
     router?: LanguageModel;
     chat?: LanguageModel;
     connectors?: import('../src/connectors/composio.ts').ConnectorPort;
+    privacy?: import('../src/brain/attestation.ts').PrivacyGate;
   } = {},
 ): Promise<TestEngine> {
   const db = await createPgliteDb();
@@ -91,6 +92,7 @@ export async function makeEngine(
       market: new FakeMarket(() => clock.now),
       registry: createRegistry(),
       ...(opts.connectors ? { connectors: opts.connectors } : {}),
+      ...(opts.privacy ? { privacy: opts.privacy } : {}),
       log: createLogger('silent'),
       publicBaseUrl: 'https://penny.test',
       webhookSecret: WEBHOOK_SECRET,

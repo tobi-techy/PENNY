@@ -17,11 +17,21 @@ export type NearAiConfig = {
   embeddingModel: string;
 };
 
-export function nearAiModels(cfg: NearAiConfig): { chat: LanguageModel; router: LanguageModel } {
+/**
+ * `opts.fetch` lets the attestation recorder hash exact completion bytes; `opts.headers`
+ * adds x-no-aliasing so a signed response names the canonical model (docs/TEE.md).
+ * Both are only passed when NEARAI_ATTESTATION is not off.
+ */
+export function nearAiModels(
+  cfg: NearAiConfig,
+  opts: { fetch?: typeof fetch; headers?: Record<string, string> } = {},
+): { chat: LanguageModel; router: LanguageModel } {
   const provider = createOpenAICompatible({
     name: 'nearai',
     baseURL: cfg.baseURL,
     apiKey: cfg.apiKey,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    ...(opts.headers ? { headers: opts.headers } : {}),
   });
   return { chat: provider(cfg.model), router: provider(cfg.routerModel) };
 }

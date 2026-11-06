@@ -1,6 +1,7 @@
 import type { LanguageModel } from 'ai';
 import { Hono } from 'hono';
 import { ApprovalService, type Clock } from './approvals/service.ts';
+import type { PrivacyGate } from './brain/attestation.ts';
 import { BotService } from './brain/bots.ts';
 import { Crew } from './brain/crew.ts';
 import { type Embedder, MemoryService } from './brain/memory.ts';
@@ -55,6 +56,8 @@ export type EngineDeps = {
   limits: { perIpPerMin: number; perUserPerMin: number; maxBodyBytes: number };
   tracer?: Tracer;
   now?: Clock;
+  /** NEAR AI TEE attestation (NEARAI_ATTESTATION warn|enforce); absent = off. */
+  privacy?: PrivacyGate;
 };
 
 export function createEngine(d: EngineDeps) {
@@ -137,6 +140,7 @@ export function createEngine(d: EngineDeps) {
     },
     tracer: d.tracer ?? noopTracer,
     log: d.log,
+    ...(d.privacy ? { privacy: d.privacy } : {}),
   });
 
   const ipLimiter = new RateLimiter(d.limits.perIpPerMin, 60_000);
@@ -174,6 +178,7 @@ export function createEngine(d: EngineDeps) {
       onInbound: (evt) => handleInbound(inboundDeps, evt),
       enrollLimiter: new RateLimiter(10, 60_000),
       approvalLimiter: new RateLimiter(60, 60_000),
+      ...(d.privacy ? { privacy: d.privacy } : {}),
       log: d.log,
     }),
   );

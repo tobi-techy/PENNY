@@ -12,6 +12,8 @@ Bun + Hono API: Photon ingress, crew brain, Guard, approvals, relayer hand-off. 
 | `curl localhost:8787/healthz` | `{"ok":true}` |
 | no `DATABASE_URL` | in-memory Postgres (pglite + pgvector), migrations applied at boot |
 | no `NEARAI_API_KEY` | the crew answers "running without a brain" |
+| `NEARAI_ATTESTATION=warn bun run dev`, `curl localhost:8787/v1/attestation` | NEAR AI TEE status, `"verified":true` (docs/TEE.md) |
+| `bun scripts/nearai-attestation-live.ts` | one live end-to-end attestation check |
 | no `SPECTRUM_*` | outbound iMessages go to a fake (debug log only) |
 | `LOG_LEVEL=debug bun run dev` | fake iMessage sends in the log |
 | `bun test` (from `apps/engine` or root) | all engine tests, no network |

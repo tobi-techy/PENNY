@@ -31,6 +31,9 @@ const BaseEnv = z.object({
   NEARAI_MODEL: z.string().default('z-ai/glm-5.3-flash'),
   NEARAI_ROUTER_MODEL: z.string().default('z-ai/glm-5.3-flash'),
   NEARAI_EMBEDDING_MODEL: z.string().default('Qwen/Qwen3-Embedding-0.6B'),
+  /** TEE attestation of NEAR AI Cloud (docs/TEE.md). off = unchanged behaviour. */
+  NEARAI_ATTESTATION: z.enum(['off', 'warn', 'enforce']).default('off'),
+  NEARAI_ATTESTATION_TTL_SEC: z.coerce.number().int().min(30).max(3600).default(300),
 
   COMPOSIO_API_KEY: optionalStr,
 
