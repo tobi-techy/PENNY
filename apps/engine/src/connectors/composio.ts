@@ -164,6 +164,36 @@ export function blockedSlugIn(name: string, args: unknown): string | null {
   return null;
 }
 
+/** Every toolkit some bot may use. A write outside this set is never approvable. */
+const ALL_TOOLKITS = new Set(
+  [...Object.values(TOOLKITS_BY_BOT), DEFAULT_TOOLKITS].flatMap((t) => t ?? []),
+);
+
+/**
+ * Why a write target may not be approved or executed, or null when it may.
+ * Checked when the card is created and again right before execution:
+ * - never a meta tool or a removed (sandbox) tool, never a read slug;
+ * - the slug must belong to the named toolkit (GMAIL_* for gmail), so the
+ *   card's "App" fact cannot disagree with what actually runs;
+ * - the toolkit must be one the proposing bot may use (any bot's, at execution).
+ */
+export function writeTargetProblem(
+  toolkit: string,
+  slug: string,
+  botSlug?: string | null,
+): string | null {
+  const s = slug.toUpperCase();
+  if (s.startsWith('COMPOSIO_') || REMOVED_TOOLS.has(s))
+    return 'meta or sandbox tools cannot be approved';
+  if (isReadSlug(s)) return 'not a write action';
+  const prefix = `${toolkit.toUpperCase().replace(/-/g, '_')}_`;
+  if (!s.startsWith(prefix)) return `action ${s} does not belong to ${toolkit}`;
+  const allowed =
+    botSlug === undefined ? [...ALL_TOOLKITS] : (toolkitsForBot(botSlug ?? 'penny') ?? []);
+  if (!allowed.includes(toolkit)) return `${toolkit} is not enabled for this bot`;
+  return null;
+}
+
 export function blockedWriteResult(slug: string) {
   return {
     blocked: true,
@@ -275,10 +305,14 @@ type SessionLike = {
   execute(slug: string, args: Record<string, unknown>): Promise<unknown>;
 };
 
+const SESSION_TTL_MS = 30 * 60_000;
+const MAX_SESSIONS = 5_000;
+
 export class ComposioConnector implements ConnectorPort {
   readonly name = 'composio';
   private readonly composio: Composio<VercelProvider>;
-  private readonly sessions = new Map<string, Promise<SessionLike>>();
+  /** Per-user sessions, expired after SESSION_TTL_MS so revoked or new connections are picked up. */
+  private readonly sessions = new Map<string, { at: number; pending: Promise<SessionLike> }>();
 
   constructor(apiKey: string) {
     this.composio = new Composio({ apiKey, provider: new VercelProvider() });
@@ -288,8 +322,13 @@ export class ComposioConnector implements ConnectorPort {
     const toolkits = toolkitsForBot(botSlug);
     if (!toolkits) return null;
     const key = `${userId}:${toolkits.join(',')}`;
-    let pending = this.sessions.get(key);
+    const cached = this.sessions.get(key);
+    let pending = cached && Date.now() - cached.at < SESSION_TTL_MS ? cached.pending : undefined;
     if (!pending) {
+      if (this.sessions.size >= MAX_SESSIONS) {
+        const oldest = this.sessions.keys().next().value;
+        if (oldest !== undefined) this.sessions.delete(oldest);
+      }
       pending = (async () => {
         const session = await this.composio.create(userId, {
           toolkits,
@@ -300,7 +339,8 @@ export class ComposioConnector implements ConnectorPort {
         return session as unknown as SessionLike;
       })();
       pending.catch(() => this.sessions.delete(key));
-      this.sessions.set(key, pending);
+      this.sessions.delete(key);
+      this.sessions.set(key, { at: Date.now(), pending });
     }
     return pending;
   }
@@ -347,7 +387,8 @@ export class ComposioConnector implements ConnectorPort {
     slug: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    if (isReadSlug(slug)) throw new Error(`executeWrite refused read slug ${slug}`);
+    const problem = writeTargetProblem(toolkit, slug);
+    if (problem) throw new Error(`executeWrite refused: ${problem}`);
     const session = this.sessionFor(userId, toolkit === 'gmail' ? 'mail' : 'penny');
     if (!session) throw new Error('connectors off for this toolkit');
     return (await session).execute(slug, args);
@@ -409,11 +450,12 @@ export class FakeConnector implements ConnectorPort {
 
   async executeWrite(
     _userId: string,
-    _toolkit: string,
+    toolkit: string,
     slug: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    if (isReadSlug(slug)) throw new Error(`executeWrite refused read slug ${slug}`);
+    const problem = writeTargetProblem(toolkit, slug);
+    if (problem) throw new Error(`executeWrite refused: ${problem}`);
     this.writes.push({ slug, args });
     return { successful: true, data: { id: 'fake-write-1' } };
   }

@@ -4,7 +4,8 @@ import type { Logger } from './lib/logger.ts';
  * Tiny in-process scheduler for periodic crew jobs (expiry, pruning,
  * reflections, briefs). Jobs are due-checked on each tick; a failing job
  * never blocks the others. No persistence: on restart, due jobs just run
- * on the first tick, which is safe because every job here is idempotent.
+ * on the first tick, which is safe because every job here is idempotent
+ * (weekly reflection keeps its own per-user watermark in souls_changelog).
  */
 export type ScheduledJob = {
   name: string;
@@ -80,7 +81,8 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
   const jobs: ScheduledJob[] = [
     {
       name: 'expire_approvals',
-      everyMs: 15_000,
+      // Below the 15s tick so timer jitter never skips a sweep.
+      everyMs: 10_000,
       run: async (now) => void (await d.expireApprovals(now)),
     },
     {
@@ -102,7 +104,8 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
     });
   }
   if (d.weeklyReflection) {
-    jobs.push({ name: 'weekly_reflection', everyMs: 7 * DAY, run: d.weeklyReflection });
+    // Checked hourly; the service itself only reflects users not reflected in 7 days.
+    jobs.push({ name: 'weekly_reflection', everyMs: HOUR, run: d.weeklyReflection });
   }
   return jobs;
 }

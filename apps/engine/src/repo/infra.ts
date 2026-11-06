@@ -39,9 +39,11 @@ export class WebhookEventsRepo {
 
   /**
    * True if this delivery should be processed. A fresh insert claims it.
-   * An existing row blocks only while it is processed, or claimed recently;
-   * a stale unprocessed claim (crash or failed run) is reclaimable so a
-   * redelivery can finish the work instead of being dropped as a duplicate.
+   * An existing row blocks while it is processed or claimed recently. A
+   * claim whose run failed (error set) or went stale (crash) is reclaimable,
+   * so a redelivery finishes the work instead of being dropped as a duplicate.
+   * Reclaim is a compare-and-swap on the row we read, so two concurrent
+   * redeliveries can never both win.
    */
   async claim(
     id: string,
@@ -61,19 +63,31 @@ export class WebhookEventsRepo {
       .where(eq(webhookEvents.id, id))
       .limit(1);
     if (!row || row.processedAt) return false;
-    if (now.getTime() - row.receivedAt.getTime() < staleAfterMs) return false;
+    const failed = row.error !== null;
+    if (!failed && now.getTime() - row.receivedAt.getTime() < staleAfterMs) return false;
     const reclaimed = await this.db
       .update(webhookEvents)
       .set({ receivedAt: now, error: null })
-      .where(and(eq(webhookEvents.id, id), isNull(webhookEvents.processedAt)))
+      .where(
+        and(
+          eq(webhookEvents.id, id),
+          isNull(webhookEvents.processedAt),
+          eq(webhookEvents.receivedAt, row.receivedAt),
+          row.error === null ? isNull(webhookEvents.error) : eq(webhookEvents.error, row.error),
+        ),
+      )
       .returning({ id: webhookEvents.id });
     return reclaimed.length === 1;
   }
 
-  /** Release a claim after a failed run so redelivery reprocesses it. */
-  async release(id: string): Promise<void> {
+  /**
+   * Record a failed run. The row stays (audit trail, with the error name) but
+   * remains unprocessed, so a redelivery can reclaim and reprocess it.
+   */
+  async release(id: string, error = 'failed'): Promise<void> {
     await this.db
-      .delete(webhookEvents)
+      .update(webhookEvents)
+      .set({ error: error.slice(0, 200) })
       .where(and(eq(webhookEvents.id, id), isNull(webhookEvents.processedAt)));
   }
 

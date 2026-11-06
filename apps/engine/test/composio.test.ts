@@ -3,6 +3,7 @@ import { planApprovalMessage } from '@penny/shared';
 import type { ToolSet } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { writeFacts } from '../src/approvals/write-facts.ts';
 import {
   billQuery,
   blockedSlugIn,
@@ -12,8 +13,56 @@ import {
   isReadSlug,
   parseBillEmails,
   toolkitsForBot,
+  writeTargetProblem,
 } from '../src/connectors/composio.ts';
 import { enrolledUser, makeEngine, scriptedModel, type TestEngine } from './helpers.ts';
+
+describe('write targets', () => {
+  test('only real writes in a toolkit the bot may use are approvable', () => {
+    expect(writeTargetProblem('gmail', 'GMAIL_SEND_EMAIL', 'mail')).toBeNull();
+    expect(writeTargetProblem('github', 'GITHUB_CREATE_ISSUE', 'penny')).toBeNull();
+    // card App and executed slug must agree
+    expect(writeTargetProblem('github', 'GMAIL_SEND_EMAIL', 'penny')).toContain('does not belong');
+    // meta + sandbox tools are never approvable
+    expect(writeTargetProblem('composio', 'COMPOSIO_REMOTE_BASH_TOOL')).not.toBeNull();
+    expect(writeTargetProblem('gmail', 'COMPOSIO_MULTI_EXECUTE_TOOL', 'mail')).not.toBeNull();
+    // reads are not writes; bots without connectors cannot propose
+    expect(writeTargetProblem('gmail', 'GMAIL_FETCH_EMAILS', 'mail')).toBe('not a write action');
+    expect(writeTargetProblem('gmail', 'GMAIL_SEND_EMAIL', 'invest')).toContain('not enabled');
+    expect(writeTargetProblem('github', 'GITHUB_CREATE_ISSUE', 'mail')).toContain('not enabled');
+    expect(writeTargetProblem('slack', 'SLACK_SEND_MESSAGE')).toContain('not enabled');
+  });
+  test('FakeConnector.executeWrite refuses sandbox and mismatched targets', async () => {
+    const f = new FakeConnector();
+    await expect(
+      f.executeWrite('u', 'composio', 'COMPOSIO_REMOTE_BASH_TOOL', {}),
+    ).rejects.toThrow();
+    await expect(f.executeWrite('u', 'github', 'GMAIL_SEND_EMAIL', {})).rejects.toThrow();
+    expect(f.writes).toHaveLength(0);
+  });
+  test('card facts come from the arguments that will be sent', () => {
+    const facts = writeFacts({
+      kind: 'write',
+      toolkit: 'gmail',
+      toolSlug: 'GMAIL_SEND_EMAIL',
+      title: 'Reply',
+      summary: 'A harmless reply',
+      arguments: {
+        body: 'line one\nline two\u202e',
+        recipient_email: 'attacker@evil.example',
+        subject: 'Re: rent',
+      },
+    });
+    expect(facts).toEqual([
+      { label: 'App', value: 'gmail' },
+      { label: 'Action', value: 'GMAIL_SEND_EMAIL' },
+      { label: 'recipient_email', value: 'attacker@evil.example' },
+      { label: 'subject', value: 'Re: rent' },
+      { label: 'body', value: 'line one line two' },
+      { label: "Penny's note", value: 'A harmless reply' },
+    ]);
+  });
+});
 
 describe('fail-closed gate classification', () => {
   test('only known read verbs run freely', () => {
@@ -190,6 +239,25 @@ describe('connect flow + write approvals through the crew', () => {
     expect(fake.writes).toHaveLength(1);
     const status = await t.engine.services.approvals.status(created.approvalId, created.cardToken);
     expect(status.steps.map((s) => s.label)).toContain('Done in the app');
+  });
+
+  test('mismatched write target is blocked before any card', async () => {
+    const mail = await t.engine.repos.bots.builtIn('mail');
+    const created = await t.engine.services.approvals.createWriteApproval({
+      userId: u.userId,
+      bot: mail,
+      plan: {
+        kind: 'write',
+        toolkit: 'github',
+        toolSlug: 'GMAIL_SEND_EMAIL',
+        title: 'Open issue',
+        summary: 'Looks like a GitHub issue',
+        arguments: { recipient_email: 'x@y.z', subject: 's', body: 'b' },
+      },
+      space: u.space,
+    });
+    expect(created.decision).toBe('block');
+    expect(fake.writes).toHaveLength(1); // only the approved one from above
   });
 
   test('declined write never executes', async () => {

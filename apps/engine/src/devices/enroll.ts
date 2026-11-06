@@ -87,11 +87,17 @@ export class EnrollService {
       );
       if (!challenge) throw new EnrollError(401, 'attest_challenge_invalid');
       try {
-        verified = verifyAttestation({
+        const att = verifyAttestation({
           attestationB64: body.appAttest,
           challenge,
           appId: this.attest.appId,
         });
+        // Mainnet (attestation required) accepts production attestations only;
+        // a development build signed with our team id must not enroll there.
+        if (this.attest.require && att.environment !== 'production') {
+          throw new AttestError('environment');
+        }
+        verified = { keyId: att.keyId, publicKeyXY: att.publicKeyXY };
       } catch (e) {
         if (e instanceof AttestError) throw new EnrollError(401, `attest_${e.code}`);
         throw e;

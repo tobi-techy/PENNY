@@ -15,6 +15,7 @@ import {
   type WritePlan,
 } from '@penny/shared';
 import type { MoodService } from '../brain/mood.ts';
+import { writeTargetProblem } from '../connectors/composio.ts';
 import { evaluate, type GuardContext, type GuardResult } from '../guard/policy.ts';
 import { verifyEd25519 } from '../lib/crypto.ts';
 import { newId } from '../lib/ids.ts';
@@ -28,6 +29,7 @@ import { DAY_MS, type LedgerRepo } from '../repo/ledger.ts';
 import type { UsersRepo } from '../repo/users.ts';
 import { checkCardToken, issueCardToken } from './card-token.ts';
 import { isTerminal, stepsFor } from './state.ts';
+import { writeFacts } from './write-facts.ts';
 
 export const QUOTE_TTL_CAP_MS = 120_000;
 export const BOT_APPROVAL_TTL_MS = 10 * 60_000;
@@ -358,6 +360,17 @@ export class ApprovalService {
     if (!this.d.executeWrite) {
       return { decision: 'needs_more_info', reasons: ['That app is not connected yet.'] };
     }
+    const problem = writeTargetProblem(plan.toolkit, plan.toolSlug, bot?.slug ?? null);
+    if (problem) {
+      await this.d.guardDecisions.record({
+        userId,
+        approvalId: null,
+        plan,
+        decision: 'block',
+        reasons: [problem],
+      });
+      return { decision: 'block', reasons: [problem] };
+    }
     const now = this.d.now();
     const { token, hash } = issueCardToken();
     const id = newId('apr');
@@ -371,11 +384,7 @@ export class ApprovalService {
       title: titleFor(plan),
       amountDisplay: 'no money',
       amountMicros: 0n,
-      facts: [
-        { label: 'App', value: plan.toolkit.slice(0, 80) },
-        { label: 'Action', value: plan.toolSlug.slice(0, 80) },
-        { label: 'What', value: plan.summary.slice(0, 80) },
-      ],
+      facts: writeFacts(plan),
       signerId: user.accountId,
       receiverId: user.accountId,
       actions,
