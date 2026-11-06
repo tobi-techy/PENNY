@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { conversations, devices, enrollCodes, guardPolicies, users } from '../db/schema.ts';
 import type { GuardPolicy } from '../guard/policy.ts';
@@ -72,6 +72,8 @@ export class UsersRepo {
       .select()
       .from(devices)
       .where(and(eq(devices.userId, userId), isNull(devices.revokedAt)))
+      // Enrollment allows one active device; order anyway so the pick is deterministic.
+      .orderBy(desc(devices.enrolledAt), desc(devices.id))
       .limit(1);
     return d ?? null;
   }
