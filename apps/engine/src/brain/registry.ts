@@ -9,14 +9,16 @@ import type { BotRow } from '../repo/bots.ts';
 import type { MemoryService } from './memory.ts';
 import type { MoodService } from './mood.ts';
 
-/** Read-only market data. Real adapters (Glider, 1Click quotes) come from packages/chain. */
+/**
+ * Read-only market data. Real adapter: market/real-market.ts (NEAR RPC balances,
+ * 1Click prices with a CoinGecko fallback). Invest quotes live in market/invest.ts.
+ */
 export interface MarketPort {
   getBalances(accountId: string): Promise<{ asset: string; amount: string }[]>;
-  getPortfolios(): Promise<{ id: string; name: string; blurb: string }[]>;
-  quoteInvest(
-    portfolioId: string,
-    amountUsd: string,
-  ): Promise<{ quoteId: string; expiresAt: Date; feeUsd: string }>;
+  /** What Invest can buy (ETH, SOL, NEAR) with a live USD price when available. */
+  getPortfolios(): Promise<{ id: string; name: string; blurb: string; priceUsd?: string }[]>;
+  /** micro-USD per NEAR, for sizing NEAR sends in Guard. Throws when no price is available. */
+  nearUsdPriceMicros?(): Promise<bigint>;
 }
 
 /** Bot-creation hooks the registry exposes to Penny without a circular import. */
@@ -36,8 +38,6 @@ export type ToolContext = {
   mood: MoodService;
   market: MarketPort;
   botOps: BotOps;
-  /** quotes fetched in this turn, so propose_invest can bind to one */
-  quotes: Map<string, { id: string; expiresAt: Date }>;
 };
 
 export type ToolDef<I = unknown> = {

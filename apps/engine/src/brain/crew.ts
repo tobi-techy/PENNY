@@ -183,7 +183,6 @@ export class Crew {
       mood: this.d.mood,
       market: this.d.market,
       botOps: this.d.botOps,
-      quotes: new Map<string, { id: string; expiresAt: Date }>(),
     };
     const tools = this.d.registry.toAiTools(ctx);
     let connectorNote = '';

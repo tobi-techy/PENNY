@@ -49,6 +49,15 @@ const BaseEnv = z.object({
   NEAR_APP_PRIVATE_KEY: optionalStr,
   NEAR_APP_PUBLIC_KEY: optionalStr,
   ONECLICK_API_KEY: optionalStr,
+  /** Optional 1Click JWT. Without a key or JWT 1Click adds a 0.2% fee (shown on the card). */
+  ONECLICK_JWT: optionalStr,
+  /** Invest slippage tolerance in bps (1Click quote). */
+  INVEST_SLIPPAGE_BPS: z.coerce.number().int().min(1).max(300).default(100),
+  /** Env hard ceiling on NEAR the relayer fronts for one approval (inner deposits). */
+  PENNY_RELAYER_MAX_DEPOSIT_NEAR: z
+    .string()
+    .regex(/^\d+(\.\d{1,24})?$/)
+    .default('1'),
   GLIDER_API_KEY: optionalStr,
   /** Set to 1 only after the testnet end-to-end runbook passes. Gates mainnet boot. */
   PENNY_TESTNET_E2E_OK: flag.default('0'),
@@ -57,6 +66,11 @@ const BaseEnv = z.object({
     .string()
     .regex(/^\d+(\.\d{1,6})?$/)
     .default('25'),
+  /** Hard daily-total ceiling applied on mainnet regardless of user policy. */
+  PENNY_MAINNET_MAX_DAILY_USD: z
+    .string()
+    .regex(/^\d+(\.\d{1,6})?$/)
+    .default('50'),
 
   LANGFUSE_PUBLIC_KEY: optionalStr,
   LANGFUSE_SECRET_KEY: optionalStr,

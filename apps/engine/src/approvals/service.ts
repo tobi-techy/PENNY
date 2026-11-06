@@ -3,6 +3,7 @@ import {
   type ApprovalStatusResponse,
   type CreateBotPlan,
   compareDecimal,
+  Decimal,
   formatUsd,
   fromMicros,
   type IntentPlan,
@@ -16,10 +17,21 @@ import {
 } from '@penny/shared';
 import type { MoodService } from '../brain/mood.ts';
 import { writeTargetProblem } from '../connectors/composio.ts';
-import { evaluate, type GuardContext, type GuardResult } from '../guard/policy.ts';
+import {
+  evaluate,
+  type GuardContext,
+  type GuardPolicy,
+  type GuardResult,
+} from '../guard/policy.ts';
 import { verifyEd25519 } from '../lib/crypto.ts';
 import { newId } from '../lib/ids.ts';
 import type { Logger } from '../lib/logger.ts';
+import {
+  type InvestPort,
+  type InvestQuote,
+  isInvestAsset,
+  type SwapState,
+} from '../market/invest.ts';
 import type { ChainPort } from '../ports/chain.ts';
 import type { ApprovalCard, CardHandle, MessagingPort, SpaceRef } from '../ports/messaging.ts';
 import type { ApprovalRow, ApprovalsRepo } from '../repo/approvals.ts';
@@ -72,6 +84,12 @@ export type ApprovalDeps = {
   now: Clock;
   /** Hard per-tx ceiling (mainnet launch cap) clamped over user policy. */
   mainnetMaxPerTxUsd?: string;
+  /** Hard daily ceiling (mainnet launch cap) clamped over user policy. */
+  mainnetMaxDailyUsd?: string;
+  /** Env hard ceiling on NEAR the relayer fronts for one approval (yocto). Checked before the card. */
+  relayerMaxDepositYocto?: bigint;
+  /** Invest quotes and swap status (NEAR Intents 1Click). Without it, invest is off. */
+  invest?: InvestPort;
   /** Executes an approved write in an outside app (connector layer). */
   executeWrite?: (
     userId: string,
@@ -102,6 +120,42 @@ export function toApprovalDto(r: ApprovalRow): Approval {
     status: r.status,
     planHash: r.planHash,
   };
+}
+
+const SWAP_LINE: Record<SwapState, string> = {
+  pending: 'pending · waiting for NEAR Intents to see the deposit',
+  processing: 'processing · swapping now',
+  success: 'success ✓',
+  refunded: 'refunded · your USDC is back',
+  failed: 'failed · nothing was swapped',
+};
+
+/** The 1Click deposit address an invest approval pays: the ft_transfer receiver. */
+export function investDepositAddress(actions: NearAction[]): string | null {
+  for (const a of actions) {
+    if (a.type === 'FunctionCall' && a.methodName === 'ft_transfer') {
+      const r = (a.args as { receiver_id?: unknown }).receiver_id;
+      return typeof r === 'string' ? r : null;
+    }
+  }
+  return null;
+}
+
+/** Card facts for an invest preview/approval (max 7, plus the daily limit). */
+export function investFacts(q: InvestQuote, now: Date): { label: string; value: string }[] {
+  const secs = Math.max(0, Math.round((q.expiresAt.getTime() - now.getTime()) / 1000));
+  const fee = q.keyless
+    ? `≈$${q.feeUsd} incl. 0.2% no-partner-key fee`
+    : `≈$${q.feeUsd}${q.feeBps ? ` incl. ${q.feeBps / 100}% partner fee` : ''}`;
+  return [
+    { label: 'You pay', value: `${q.amountUsd} USDC` },
+    { label: 'You get (est.)', value: q.amountOutDisplay },
+    { label: 'Rate', value: q.rateDisplay },
+    { label: 'Fee', value: fee.slice(0, 80) },
+    { label: 'Min received', value: `${q.minOutDisplay} (${q.slippageBps / 100}% slippage)` },
+    { label: 'Expires', value: `in ${secs}s` },
+    { label: 'Goes to', value: 'your NEAR Intents balance' },
+  ];
 }
 
 function titleFor(plan: IntentPlan): string {
@@ -168,18 +222,21 @@ export class ApprovalService {
     bot: BotRow | null,
     extra: Partial<GuardContext> = {},
   ): Promise<GuardResult> {
-    const policy = await this.d.users.policy(userId);
-    // Mainnet launch cap: clamp the user's per-tx limit to the hard ceiling.
-    if (
-      this.d.mainnetMaxPerTxUsd &&
-      compareDecimal(policy.perTxUsd, this.d.mainnetMaxPerTxUsd) > 0
-    ) {
-      policy.perTxUsd = this.d.mainnetMaxPerTxUsd;
-      if (compareDecimal(policy.dailyUsd, this.d.mainnetMaxPerTxUsd) > 0) {
-        policy.dailyUsd = this.d.mainnetMaxPerTxUsd;
-      }
-    }
+    const policy = await this.effectivePolicy(userId);
     return evaluate(plan, policy, await this.guardContext(userId, bot, extra));
+  }
+
+  /**
+   * The user's Guard policy with the mainnet launch caps clamped over it: per-tx and
+   * daily total each bounded by their env ceiling. Used before the card AND before relay.
+   */
+  async effectivePolicy(userId: string): Promise<GuardPolicy> {
+    const policy = await this.d.users.policy(userId);
+    const tx = this.d.mainnetMaxPerTxUsd;
+    if (tx && compareDecimal(policy.perTxUsd, tx) > 0) policy.perTxUsd = tx;
+    const day = this.d.mainnetMaxDailyUsd;
+    if (day && compareDecimal(policy.dailyUsd, day) > 0) policy.dailyUsd = day;
+    return policy;
   }
 
   /** Money tools land here: Guard, then approval + live card. */
@@ -190,6 +247,9 @@ export class ApprovalService {
     space: SpaceRef;
     quote?: { id: string; expiresAt: Date };
     nearUsdPriceMicros?: bigint;
+    /** Replace the default facts (the daily limit is always appended). */
+    facts?: { label: string; value: string }[];
+    subcaption?: string;
   }): Promise<CreateResult> {
     const { userId, plan, bot } = input;
     const user = await this.d.users.byId(userId);
@@ -217,20 +277,39 @@ export class ApprovalService {
     }
 
     const built = await this.d.chain.buildActions(plan, user.accountId);
+    // Limits before the card: the relayer fronts attached deposits, so an approval may
+    // never carry more than the env hard ceiling (the relay re-checks the same bound).
+    if (this.d.relayerMaxDepositYocto !== undefined) {
+      const deposit = built.actions.reduce((sum, a) => sum + BigInt(a.deposit), 0n);
+      if (deposit > this.d.relayerMaxDepositYocto) {
+        const reasons = ["That's more NEAR than I can send in one go right now."];
+        await this.d.guardDecisions.record({
+          userId,
+          approvalId: null,
+          plan,
+          decision: 'block',
+          reasons,
+        });
+        await this.d.mood.on(userId, 'guard_blocked', 'guard');
+        return { decision: 'block', reasons };
+      }
+    }
     const signing = await this.d.chain.prepareSigning(user.accountId, device.publicKey);
     const now = this.d.now();
     const cap = now.getTime() + QUOTE_TTL_CAP_MS;
     const expiresAt = new Date(Math.min(cap, input.quote ? input.quote.expiresAt.getTime() : cap));
     const { token, hash } = issueCardToken();
     const id = newId('apr');
-    const policy = await this.d.users.policy(userId);
+    const policy = await this.effectivePolicy(userId);
     const amountDisplay = formatUsd(g.amountMicrosUsd);
-    const facts = [
-      { label: 'Amount', value: `${planAmount(plan).amount} ${planAmount(plan).asset}` },
-      { label: 'Daily limit', value: `$${policy.dailyUsd}` },
-    ];
+    const facts = input.facts
+      ? [...input.facts.slice(0, 7), { label: 'Daily limit', value: `$${policy.dailyUsd}` }]
+      : [
+          { label: 'Amount', value: `${planAmount(plan).amount} ${planAmount(plan).asset}` },
+          { label: 'Daily limit', value: `$${policy.dailyUsd}` },
+        ];
     const recipient = planRecipient(plan);
-    if (recipient) facts.unshift({ label: 'To', value: recipient.slice(0, 80) });
+    if (recipient && !input.facts) facts.unshift({ label: 'To', value: recipient.slice(0, 80) });
 
     await this.d.approvals.create({
       id,
@@ -273,7 +352,7 @@ export class ApprovalService {
       approvalId: id,
       url,
       caption: titleFor(plan),
-      subcaption: `${amountDisplay} · tap to approve`,
+      subcaption: input.subcaption ?? `${amountDisplay} · tap to approve`,
       live: true,
     });
     return {
@@ -283,6 +362,156 @@ export class ApprovalService {
       url,
       reasons: g.reasons,
     };
+  }
+
+  // ---------- invest (NEAR Intents 1Click) ----------
+
+  /** Read-only preview: dry quote + a Guard read. Nothing is signed, no card. */
+  async previewInvest(userId: string, asset: string, amountUsd: string) {
+    if (!this.d.invest) return { ok: false, error: 'invest is not switched on' };
+    if (!isInvestAsset(asset)) return { ok: false, error: 'I can buy ETH, SOL or NEAR' };
+    if (!Decimal.safeParse(amountUsd).success) return { ok: false, error: 'bad amount' };
+    const user = await this.d.users.byId(userId);
+    if (!user?.accountId) return { ok: false, error: 'finish setting up Penny first' };
+    const plan: MoneyPlan = {
+      kind: 'invest',
+      fromAsset: 'USDC',
+      amountUsd,
+      portfolioId: asset,
+      quoteId: 'preview',
+    };
+    const now = this.d.now();
+    const g = await this.checkGuard(userId, plan, null, {
+      quote: { id: 'preview', expiresAt: new Date(now.getTime() + 60_000) },
+    });
+    let q: InvestQuote;
+    try {
+      q = await this.d.invest.preview(asset, amountUsd, user.accountId);
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).message }, 'invest preview failed');
+      return { ok: false, error: "couldn't get a live price from NEAR Intents just now" };
+    }
+    return {
+      ok: true,
+      facts: investFacts(q, now),
+      keylessFee: q.keyless,
+      guard: { decision: g.decision, reasons: g.reasons },
+    };
+  }
+
+  /**
+   * Guard (limits) first, then a firm 1Click quote, then the Face ID card.
+   * Guard runs again inside createMoneyApproval with the real quote, and again before relay.
+   */
+  async createInvestApproval(input: {
+    userId: string;
+    bot: BotRow | null;
+    asset: string;
+    amountUsd: string;
+    space: SpaceRef;
+    note?: string;
+  }): Promise<CreateResult> {
+    const { userId, bot, asset, amountUsd } = input;
+    if (!this.d.invest)
+      return { decision: 'needs_more_info', reasons: ["Invest isn't switched on yet."] };
+    if (!isInvestAsset(asset))
+      return { decision: 'block', reasons: ['I can only buy ETH, SOL or NEAR for now.'] };
+    if (!Decimal.safeParse(amountUsd).success)
+      return { decision: 'needs_more_info', reasons: ['How much, in dollars?'] };
+    const user = await this.d.users.byId(userId);
+    const device = user ? await this.d.users.activeDevice(userId) : null;
+    if (!user?.accountId || !device) {
+      return {
+        decision: 'needs_more_info',
+        reasons: ['Finish setting up Penny on your iPhone first.'],
+      };
+    }
+    const provisional: MoneyPlan = {
+      kind: 'invest',
+      fromAsset: 'USDC',
+      amountUsd,
+      portfolioId: asset,
+      quoteId: 'pending',
+    };
+    const now = this.d.now();
+    const g0 = await this.checkGuard(userId, provisional, bot, {
+      quote: { id: 'pending', expiresAt: new Date(now.getTime() + 60_000) },
+    });
+    if (g0.decision !== 'allow_with_approval') {
+      await this.d.guardDecisions.record({
+        userId,
+        approvalId: null,
+        plan: provisional,
+        decision: g0.decision,
+        reasons: g0.reasons,
+      });
+      if (g0.decision === 'block') await this.d.mood.on(userId, 'guard_blocked', 'guard');
+      return { decision: g0.decision, reasons: g0.reasons };
+    }
+    let q: InvestQuote;
+    try {
+      q = await this.d.invest.firm(asset, amountUsd, user.accountId);
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).message }, 'invest firm quote failed');
+      return {
+        decision: 'needs_more_info',
+        reasons: ["I couldn't get a live quote from NEAR Intents just now. Try again in a minute."],
+      };
+    }
+    return this.createMoneyApproval({
+      userId,
+      bot,
+      plan: { ...provisional, quoteId: q.quoteId },
+      space: input.space,
+      quote: { id: q.quoteId, expiresAt: q.expiresAt },
+      facts: investFacts(q, this.d.now()),
+      subcaption: `${input.note ? `${input.note} ` : ''}${q.amountOutDisplay} est. · tap to approve`,
+    });
+  }
+
+  /**
+   * Replace a pending invest approval whose quote expired or whose price moved beyond
+   * slippage with a fresh card. Never relays the old signature. Returns the new approval id.
+   */
+  private async requote(row: ApprovalRow, why: 'expired' | 'price_moved'): Promise<string | null> {
+    const plan = row.plan as MoneyPlan;
+    if (plan.kind !== 'invest') return null;
+    const space = this.cards.get(row.id)?.space;
+    try {
+      await this.d.approvals.transition(
+        row.id,
+        row.kind,
+        'pending',
+        why === 'expired' ? 'expired' : 'cancelled',
+        why === 'expired' ? 'quote expired; re-quoted' : 'price moved beyond slippage; re-quoted',
+      );
+      await this.d.ledger.setStatusForApproval(row.id, 'released');
+    } catch {
+      return null; // someone else moved it
+    }
+    const line = why === 'expired' ? 'quote expired.' : 'price moved.';
+    if (!space) {
+      await this.updateCard(row.id, `${line} ask penny for a fresh one.`);
+      return null;
+    }
+    await this.updateCard(row.id, `${line} sent you a fresh quote. nothing moved.`);
+    const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
+    const r = await this.createInvestApproval({
+      userId: row.userId,
+      bot,
+      asset: plan.portfolioId,
+      amountUsd: plan.amountUsd,
+      space,
+      note: why === 'expired' ? 'fresh quote.' : 'price moved, new quote.',
+    });
+    return r.decision === 'allow_with_approval' ? r.approvalId : null;
+  }
+
+  private requotedError(newId: string | null, why: 'expired' | 'price_moved'): ApprovalError {
+    const what = why === 'expired' ? 'that quote expired' : 'the price moved past your slippage';
+    return newId
+      ? new ApprovalError(409, 'requoted', `${what}; a fresh card is in the thread (${newId})`)
+      : new ApprovalError(410, 'expired', `${what}; ask penny for a fresh one`);
   }
 
   /** Face ID card for a bot that has write or money tools. No NEAR actions. */
@@ -429,10 +658,10 @@ export class ApprovalService {
     }
   }
 
-  private async updateCard(id: string, subcaption: string) {
+  private async updateCard(id: string, subcaption: string, trailingCaption?: string) {
     const c = this.cards.get(id);
     if (!c) return;
-    const next = { ...c.card, subcaption };
+    const next = { ...c.card, subcaption, ...(trailingCaption ? { trailingCaption } : {}) };
     try {
       await this.d.messaging.editCard(c.handle, next);
       c.card = next;
@@ -461,6 +690,9 @@ export class ApprovalService {
     if (c === 'missing' || c === 'invalid')
       throw new ApprovalError(401, 'unauthorized', 'unauthorized');
     if (c === 'expired') {
+      if (row.status === 'pending' && row.kind === 'invest' && mode === 'mutate') {
+        throw this.requotedError(await this.requote(row, 'expired'), 'expired');
+      }
       if (row.status === 'pending') await this.expire(row);
       throw new ApprovalError(410, 'expired', 'this approval has expired');
     }
@@ -520,6 +752,8 @@ export class ApprovalService {
     if (row.status !== 'pending')
       throw new ApprovalError(409, 'not_pending', `approval is ${row.status}`);
     if (this.d.now().getTime() > row.expiresAt.getTime()) {
+      if (row.kind === 'invest')
+        throw this.requotedError(await this.requote(row, 'expired'), 'expired');
       await this.expire(row);
       throw new ApprovalError(410, 'expired', 'this approval has expired');
     }
@@ -604,7 +838,7 @@ export class ApprovalService {
     // Exclude this approval from the velocity count; others still count.
     ctx.approvalsLast10Min = Math.max(0, ctx.approvalsLast10Min - 1);
     if (plan.kind === 'invest') ctx.quote = { id: plan.quoteId, expiresAt: row.expiresAt };
-    const policy = await this.d.users.policy(row.userId);
+    const policy = await this.effectivePolicy(row.userId);
     // NEAR price: re-use the amount Guard sized at creation
     const recheckPlan: MoneyPlan =
       plan.kind === 'send' && plan.asset === 'NEAR'
@@ -631,6 +865,8 @@ export class ApprovalService {
       await this.updateCard(row.id, 'blocked by Guard');
       throw new ApprovalError(409, 'guard_blocked', g.reasons.join(' '));
     }
+    // 1b) invest: the quote must still be live and the price inside slippage, else re-card
+    if (plan.kind === 'invest') await this.investPreflight(row, plan.quoteId);
     // 2) byte-for-byte verification of the signed delegate action
     const v = await this.d.chain.verifyDelegateAction(dto, body.signedDelegateAction);
     if (!v.ok) {
@@ -674,8 +910,49 @@ export class ApprovalService {
         txHash: relay.txHash,
       },
     );
+    if (plan.kind === 'invest' && !relay.dryRun) {
+      const dep = investDepositAddress(row.actions as NearAction[]);
+      if (dep && this.d.invest) {
+        try {
+          await this.d.invest.notifyDeposit({
+            txHash: relay.txHash,
+            depositAddress: dep,
+            sender: row.signerId,
+          });
+        } catch (e) {
+          this.d.log.warn({ approvalId: row.id, err: (e as Error).name }, '1Click notify failed');
+        }
+        this.swapStates.set(row.id, 'pending');
+        await this.updateCard(row.id, SWAP_LINE.pending, this.investLinks(dep, relay.txHash));
+      }
+    }
     const final = await this.refreshStatus(row.id);
     return { status: final };
+  }
+
+  private readonly swapStates = new Map<string, SwapState>();
+
+  private investLinks(depositAddress: string, txHash: string | null): string {
+    const parts = [`explorer.near-intents.org/transactions/${depositAddress}`];
+    if (txHash) parts.push(`nearblocks.io/txns/${txHash}`);
+    return parts.join(' · ');
+  }
+
+  /** Before relaying an invest: quote still live and price within slippage, else re-card. */
+  private async investPreflight(row: ApprovalRow, quoteId: string): Promise<void> {
+    const q = this.d.invest?.get(quoteId);
+    if (!q || this.d.now().getTime() >= q.expiresAt.getTime()) {
+      throw this.requotedError(await this.requote(row, 'expired'), 'expired');
+    }
+    let r: Awaited<ReturnType<InvestPort['recheck']>>;
+    try {
+      // biome-ignore lint/style/noNonNullAssertion: q exists only when invest is wired
+      r = await this.d.invest!.recheck(q);
+    } catch (e) {
+      this.d.log.warn({ approvalId: row.id, err: (e as Error).name }, 'invest recheck failed');
+      throw new ApprovalError(502, 'price_check_failed', "couldn't confirm the price; try again");
+    }
+    if (!r.ok) throw this.requotedError(await this.requote(row, 'price_moved'), 'price_moved');
   }
 
   /** Poll chain status for a relayed approval and settle/fail it. */
@@ -702,6 +979,12 @@ export class ApprovalService {
     if (row.status !== 'relayed' || !row.txHash) return row.status;
     const s = await this.d.chain.txStatus(row.txHash);
     if (s === 'pending') return 'relayed';
+    if (s === 'settled' && row.kind === 'invest' && this.d.invest) {
+      const events = await this.d.approvals.events(id);
+      const dry = events.some((e) => e.reason === 'relayed (dry run)');
+      const dep = investDepositAddress(row.actions as NearAction[]);
+      if (!dry && dep) return this.refreshSwap(row, dep);
+    }
     if (s === 'settled') {
       await this.d.approvals.transition(id, row.kind, 'relayed', 'settled', 'final on chain');
       await this.d.ledger.setStatusForApproval(id, 'settled');
@@ -713,6 +996,45 @@ export class ApprovalService {
     await this.d.ledger.setStatusForApproval(id, 'released');
     await this.d.mood.on(row.userId, 'approval_failed');
     await this.updateCard(id, 'failed');
+    return 'failed';
+  }
+
+  /** Deposit landed on NEAR; follow the 1Click swap and update the card in place. */
+  private async refreshSwap(row: ApprovalRow, dep: string): Promise<string> {
+    // biome-ignore lint/style/noNonNullAssertion: caller checked invest is wired
+    const view = await this.d.invest!.status(dep);
+    const links = this.investLinks(dep, row.txHash);
+    const line =
+      view.state === 'success' && view.amountOutDisplay
+        ? `success ✓ got ${view.amountOutDisplay}`
+        : SWAP_LINE[view.state];
+    if (view.state === 'pending' || view.state === 'processing') {
+      if (this.swapStates.get(row.id) !== view.state) {
+        this.swapStates.set(row.id, view.state);
+        await this.updateCard(row.id, line, links);
+      }
+      return 'relayed';
+    }
+    this.swapStates.delete(row.id);
+    if (view.state === 'success') {
+      await this.d.approvals.transition(row.id, row.kind, 'relayed', 'settled', 'swap success');
+      await this.d.ledger.setStatusForApproval(row.id, 'settled');
+      await this.d.mood.on(row.userId, 'approval_settled');
+      await this.updateCard(row.id, line, links);
+      return 'settled';
+    }
+    await this.d.approvals.transition(
+      row.id,
+      row.kind,
+      'relayed',
+      'failed',
+      view.state === 'refunded'
+        ? `swap refunded${view.refundReason ? `: ${view.refundReason}` : ''}`
+        : 'swap failed',
+    );
+    await this.d.ledger.setStatusForApproval(row.id, 'released');
+    await this.d.mood.on(row.userId, 'approval_failed');
+    await this.updateCard(row.id, line, links);
     return 'failed';
   }
 

@@ -83,15 +83,40 @@ export class FakeChain implements ChainPort {
   }
 
   usdcContract = '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1';
+  /** quoteId -> 1Click deposit address, filled by FakeInvest.firm (mirrors the adapter's quote cache) */
+  investDeposits = new Map<string, string>();
 
   async buildActions(plan: MoneyPlan, _signerId: string) {
+    if (plan.kind === 'invest') {
+      const dep = this.investDeposits.get(plan.quoteId);
+      if (!dep) throw new Error(`unknown quote ${plan.quoteId}`);
+      return {
+        receiverId: this.usdcContract,
+        actions: [
+          {
+            type: 'FunctionCall' as const,
+            methodName: 'storage_deposit',
+            args: { account_id: dep, registration_only: true },
+            gas: '10000000000000',
+            deposit: '1250000000000000000000',
+          },
+          {
+            type: 'FunctionCall' as const,
+            methodName: 'ft_transfer',
+            args: { receiver_id: dep, amount: toBaseUnits(plan.amountUsd, 6).toString() },
+            gas: '30000000000000',
+            deposit: '1',
+          },
+        ],
+      };
+    }
     if (plan.kind === 'send' && plan.asset === 'NEAR') {
       return {
         receiverId: plan.to,
         actions: [{ type: 'Transfer' as const, deposit: toBaseUnits(plan.amount, 24).toString() }],
       };
     }
-    const amount = plan.kind === 'invest' ? plan.amountUsd : plan.amount;
+    const amount = plan.amount;
     const receiver = plan.kind === 'send' ? plan.to : 'intents.near';
     return {
       receiverId: this.usdcContract,
