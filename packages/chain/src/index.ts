@@ -1,6 +1,7 @@
 export * from './adapter.ts';
 export * from './glider/client.ts';
 export * from './intents/oneclick.ts';
+export * from './intents/prices.ts';
 export * from './near/accounts.ts';
 export * from './near/chainsig.ts';
 export * from './near/delegate.ts';

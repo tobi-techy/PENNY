@@ -1,11 +1,12 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
-import { createEngine, type Engine } from '../src/app.ts';
+import { createEngine, type Engine, type EngineDeps } from '../src/app.ts';
 import { FakeEmbedder } from '../src/brain/memory.ts';
 import { createRegistry, FakeMarket } from '../src/brain/tools.ts';
 import { createPgliteDb, type DbHandle } from '../src/db/client.ts';
 import { createLogger } from '../src/lib/logger.ts';
+import { FakeInvest } from '../src/market/invest.ts';
 import { FakeChain } from '../src/ports/chain.ts';
 import { FakeMessaging, type SpaceRef } from '../src/ports/messaging.ts';
 
@@ -62,6 +63,7 @@ export type TestEngine = {
   db: DbHandle;
   chain: FakeChain;
   messaging: FakeMessaging;
+  invest: FakeInvest;
   clock: { now: Date };
   setModels: (router: LanguageModel, chat: LanguageModel) => void;
 };
@@ -72,11 +74,16 @@ export async function makeEngine(
     chat?: LanguageModel;
     connectors?: import('../src/connectors/composio.ts').ConnectorPort;
     privacy?: import('../src/brain/attestation.ts').PrivacyGate;
+    extra?: Partial<EngineDeps>;
   } = {},
 ): Promise<TestEngine> {
   const db = await createPgliteDb();
   const chain = new FakeChain();
   const messaging = new FakeMessaging();
+  const invest = new FakeInvest(
+    () => clock.now,
+    (quoteId, dep) => chain.investDeposits.set(quoteId, dep),
+  );
   const clock = { now: new Date('2026-11-05T19:00:00Z') };
   const models = {
     router: opts.router ?? scriptedModel([{ text: '' }]),
@@ -98,12 +105,15 @@ export async function makeEngine(
       webhookSecret: WEBHOOK_SECRET,
       limits: { perIpPerMin: 1000, perUserPerMin: 1000, maxBodyBytes: 65_536 },
       now: () => clock.now,
+      invest,
+      ...opts.extra,
     });
   const t: TestEngine = {
     engine: build(),
     db,
     chain,
     messaging,
+    invest,
     clock,
     setModels: (router, chat) => {
       models.router = router;

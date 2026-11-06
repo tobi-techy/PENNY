@@ -6,6 +6,8 @@ Penny is a crew of AI agents that run your money from iMessage. Text it like a f
 - Crew of agents in iMessage (Penny, Invest, Mail, Guard, your own bots), with memory and moods
 - Every money move is a card approved with Face ID; server holds no user keys
 - NEAR accounts per user and agent, delegate actions + relayer, NEAR Intents across chains
+- Invest via NEAR Intents 1Click: "put $50 in SOL" gets a live preview (est. out, rate, fee, min received, expiry), Guard, a firm quote on a Face ID card, then the card follows the swap (pending, processing, success / refunded / failed). ETH, SOL, NEAR; real quotes and prices, mainnet broadcast off until explicitly enabled (see `docs/INVEST.md`)
+- Guard before every card and again before relay: per-tx, daily, new-recipient and velocity rules, with mainnet launch caps on both per-tx and daily total; relayer limit per approval comes from the approved amount, bounded by an env ceiling
 - Connected apps (Composio) with write approvals; App Attest for the iOS device
 - Private inference on NEAR AI Cloud with TEE attestation: Intel TDX + NVIDIA GPU evidence and per-response signatures verified, `private · verified in TEE` status at `GET /v1/attestation` (`NEARAI_ATTESTATION=off|warn|enforce`, see `docs/TEE.md`)
 

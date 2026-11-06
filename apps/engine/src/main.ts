@@ -1,17 +1,21 @@
 import { join } from 'node:path';
-import { chainAdapterFromEnv } from '@penny/chain';
+import { chainAdapterFromEnv, OneClickClient, PriceFeed, toBaseUnits } from '@penny/chain';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createEngine, type Engine } from './app.ts';
 import { AttestationService } from './brain/attestation.ts';
 import { FakeEmbedder } from './brain/memory.ts';
 import { NearAiEmbedder, nearAiModels } from './brain/model.ts';
+import type { MarketPort } from './brain/registry.ts';
 import { createRegistry, FakeMarket } from './brain/tools.ts';
 import { LangfuseTracer, noopTracer } from './brain/tracing.ts';
 import { ComposioConnector } from './connectors/composio.ts';
 import { createPgliteDb, createPostgresDb } from './db/client.ts';
 import { loadEnv } from './env.ts';
 import { createLogger } from './lib/logger.ts';
+import { IntentsInvest } from './market/intents.ts';
+import { FakeInvest, type InvestPort } from './market/invest.ts';
+import { RealMarket } from './market/real-market.ts';
 import { type ChainPort, FakeChain } from './ports/chain.ts';
 import { FakeMessaging, type MessagingPort } from './ports/messaging.ts';
 import { RealChain } from './ports/real-chain.ts';
@@ -101,19 +105,43 @@ const privacy =
       });
 
 let engineRef: Engine | null = null;
-const chain: ChainPort = env.NEAR_RPC_URL
-  ? new RealChain(
-      chainAdapterFromEnv(process.env, {
-        resolveDeviceKey: async (signerId) => {
-          if (!engineRef) return null;
-          const user = await engineRef.repos.users.byAccountId(signerId);
-          if (!user) return null;
-          const device = await engineRef.repos.users.activeDevice(user.id);
-          return device?.publicKey ?? null;
-        },
-      }),
-    )
-  : new FakeChain();
+const relayerMaxDepositYocto = toBaseUnits(env.PENNY_RELAYER_MAX_DEPOSIT_NEAR, 24);
+let chain: ChainPort;
+let market: MarketPort;
+let invest: InvestPort | undefined;
+if (env.NEAR_RPC_URL) {
+  const adapter = chainAdapterFromEnv(process.env, {
+    resolveDeviceKey: async (signerId) => {
+      if (!engineRef) return null;
+      const user = await engineRef.repos.users.byAccountId(signerId);
+      if (!user) return null;
+      const device = await engineRef.repos.users.activeDevice(user.id);
+      return device?.publicKey ?? null;
+    },
+    relayerHardCeilingYocto: relayerMaxDepositYocto,
+  });
+  chain = new RealChain(adapter);
+  // prices: 1Click token list (short timeout), CoinGecko fallback, 60 s cache
+  const prices = new PriceFeed({
+    oneClick: new OneClickClient({
+      ...(env.ONECLICK_API_KEY ? { apiKey: env.ONECLICK_API_KEY } : {}),
+      ...(env.ONECLICK_JWT ? { jwt: env.ONECLICK_JWT } : {}),
+      timeoutMs: 5_000,
+    }),
+  });
+  market = new RealMarket(adapter, prices);
+  // 1Click has no testnet and quotes mainnet USDC: Invest runs only against a mainnet RPC.
+  if (adapter.mode.network === 'mainnet') {
+    invest = new IntentsInvest({ adapter, slippageBps: env.INVEST_SLIPPAGE_BPS });
+  } else {
+    log.info('invest off: NEAR_RPC_URL is testnet and 1Click is mainnet-only');
+  }
+} else {
+  const fake = new FakeChain();
+  chain = fake;
+  market = new FakeMarket();
+  invest = new FakeInvest(undefined, (quoteId, dep) => fake.investDeposits.set(quoteId, dep));
+}
 
 const engine = createEngine({
   db: dbh.db,
@@ -127,14 +155,21 @@ const engine = createEngine({
     : { router: offline(), chat: offline() },
   ...(privacy ? { privacy } : {}),
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
-  market: new FakeMarket(),
+  market,
+  ...(invest ? { invest } : {}),
+  relayerMaxDepositYocto,
   registry: createRegistry(),
   ...(env.COMPOSIO_API_KEY ? { connectors: new ComposioConnector(env.COMPOSIO_API_KEY) } : {}),
   ...(env.APP_ATTEST_APP_ID ? { attestAppId: env.APP_ATTEST_APP_ID } : {}),
   attestRequire: env.PENNY_ENV === 'mainnet',
   log,
   publicBaseUrl: env.PUBLIC_BASE_URL,
-  ...(env.PENNY_ENV === 'mainnet' ? { mainnetMaxPerTxUsd: env.PENNY_MAINNET_MAX_PER_TX_USD } : {}),
+  ...(env.PENNY_ENV === 'mainnet'
+    ? {
+        mainnetMaxPerTxUsd: env.PENNY_MAINNET_MAX_PER_TX_USD,
+        mainnetMaxDailyUsd: env.PENNY_MAINNET_MAX_DAILY_USD,
+      }
+    : {}),
   webhookSecret: env.SPECTRUM_WEBHOOK_SECRET,
   limits: {
     perIpPerMin: env.RATE_LIMIT_PER_IP_PER_MIN,

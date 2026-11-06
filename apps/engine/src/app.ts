@@ -24,6 +24,7 @@ import {
 } from './http/security.ts';
 import { handleInbound } from './inbound.ts';
 import type { Logger } from './lib/logger.ts';
+import type { InvestPort } from './market/invest.ts';
 import type { ChainPort } from './ports/chain.ts';
 import type { MessagingPort } from './ports/messaging.ts';
 import { ApprovalsRepo } from './repo/approvals.ts';
@@ -52,6 +53,9 @@ export type EngineDeps = {
   log: Logger;
   publicBaseUrl: string;
   mainnetMaxPerTxUsd?: string;
+  mainnetMaxDailyUsd?: string;
+  relayerMaxDepositYocto?: bigint;
+  invest?: InvestPort;
   webhookSecret: string | undefined;
   limits: { perIpPerMin: number; perUserPerMin: number; maxBodyBytes: number };
   tracer?: Tracer;
@@ -101,6 +105,11 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
     ...(d.mainnetMaxPerTxUsd ? { mainnetMaxPerTxUsd: d.mainnetMaxPerTxUsd } : {}),
+    ...(d.mainnetMaxDailyUsd ? { mainnetMaxDailyUsd: d.mainnetMaxDailyUsd } : {}),
+    ...(d.relayerMaxDepositYocto !== undefined
+      ? { relayerMaxDepositYocto: d.relayerMaxDepositYocto }
+      : {}),
+    ...(d.invest ? { invest: d.invest } : {}),
     now,
     ...(d.connectors
       ? {

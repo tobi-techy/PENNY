@@ -78,21 +78,58 @@ export const STATUS_VALUES = [
 ] as const;
 export const StatusSchema = z.object({
   correlationId: z.string(),
-  quoteResponse: QuoteResponseSchema,
+  // The echoed quote in /v0/status has no correlationId of its own (observed live 2026-11-06).
+  quoteResponse: QuoteResponseSchema.extend({ correlationId: z.string().optional() }),
   status: z.enum(STATUS_VALUES),
   updatedAt: IsoDate,
   swapDetails: z
     .object({
-      intentHashes: z.array(z.string()).optional(),
-      nearTxHashes: z.array(z.string()).optional(),
-      amountIn: IntString.optional(),
-      amountOut: IntString.optional(),
-      refundedAmount: IntString.optional(),
-      refundReason: z.string().optional(),
+      // 1Click returns null (not absent) for fields it has not filled yet (observed live 2026-11-06).
+      intentHashes: z.array(z.string()).nullish(),
+      nearTxHashes: z.array(z.string()).nullish(),
+      originChainTxHashes: z.array(z.unknown()).nullish(),
+      destinationChainTxHashes: z.array(z.unknown()).nullish(),
+      amountIn: IntString.nullish(),
+      amountInFormatted: z.string().nullish(),
+      amountOut: IntString.nullish(),
+      amountOutFormatted: z.string().nullish(),
+      refundedAmount: IntString.nullish(),
+      refundedAmountFormatted: z.string().nullish(),
+      refundReason: z.string().nullish(),
     })
     .passthrough(),
 });
 export type SwapStatus = z.infer<typeof StatusSchema>;
+export type SwapStatusValue = (typeof STATUS_VALUES)[number];
+
+/** 1Click statuses the swap can still leave. */
+export function isTerminalSwapStatus(s: SwapStatusValue): boolean {
+  return s === 'SUCCESS' || s === 'REFUNDED' || s === 'FAILED';
+}
+
+/** Explorer pages for a swap: NEAR Intents explorer by deposit address, nearblocks for the deposit tx. */
+export function swapExplorerLinks(depositAddress: string, depositTxHash?: string) {
+  return {
+    intents: `https://explorer.near-intents.org/transactions/${encodeURIComponent(depositAddress)}`,
+    ...(depositTxHash ? { nearTx: `https://nearblocks.io/txns/${encodeURIComponent(depositTxHash)}` } : {}),
+  };
+}
+
+/**
+ * Partner/app fee in bps that 1Click put on the quote (quoteRequest.appFees).
+ * Without an API key or JWT, 1Click adds a 20 bps (0.2%) fee here (observed live 2026-11-06).
+ */
+export function quoteFeeBps(res: QuoteResponse): number {
+  const fees = (res.quoteRequest as { appFees?: unknown }).appFees;
+  if (!Array.isArray(fees)) return 0;
+  let bps = 0;
+  for (const f of fees) {
+    if (!f || typeof f !== 'object') continue;
+    const v = (f as { fee?: unknown }).fee;
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 0) bps += v;
+  }
+  return bps;
+}
 
 export interface QuoteParams {
   dry: boolean;
@@ -161,6 +198,10 @@ export interface OneClickOptions {
 }
 
 export class OneClickClient {
+  /** True when requests carry an API key or JWT (no keyless 0.2% fee). */
+  get authenticated(): boolean {
+    return Boolean(this.o.apiKey || this.o.jwt);
+  }
   private readonly base: string;
   private readonly fetchImpl: FetchLike;
   private readonly now: () => Date;
@@ -220,6 +261,29 @@ export class OneClickClient {
     const q = new URLSearchParams({ depositAddress });
     if (depositMemo) q.set('depositMemo', depositMemo);
     return fetchJson(this.fetchImpl, `${this.base}/v0/status?${q}`, StatusSchema, {
+      headers: this.headers(),
+      timeoutMs: this.o.timeoutMs,
+    });
+  }
+
+  /**
+   * POST /v0/deposit/submit: optional hint that the deposit tx was sent (speeds up processing).
+   * For NEAR deposits pass nearSenderAccount = the user's account (the delegate sender).
+   */
+  submitDeposit(p: {
+    txHash: string;
+    depositAddress: string;
+    nearSenderAccount?: string;
+    memo?: string;
+  }): Promise<SwapStatus> {
+    return fetchJson(this.fetchImpl, `${this.base}/v0/deposit/submit`, StatusSchema, {
+      method: 'POST',
+      body: {
+        txHash: p.txHash,
+        depositAddress: p.depositAddress,
+        ...(p.nearSenderAccount ? { nearSenderAccount: p.nearSenderAccount } : {}),
+        ...(p.memo ? { memo: p.memo } : {}),
+      },
       headers: this.headers(),
       timeoutMs: this.o.timeoutMs,
     });

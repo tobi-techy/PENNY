@@ -155,6 +155,69 @@ describe('relayer inner-deposit ceiling', () => {
   });
 });
 
+describe('relayer limit derived from the approved amount', () => {
+  const big: NearActionSpec = { type: 'Transfer', deposit: (10n ** 23n).toString() }; // 0.1 NEAR
+  function bigSend() {
+    const base = setup();
+    const sda = signDelegate({
+      key: base.device,
+      senderId: 'tobi.penny.near',
+      receiverId: 'bob.near',
+      actions: [specToAction(big)],
+      nonce: 11n,
+      maxBlockHeight: BigInt(HEIGHT + 100),
+    });
+    return { ...base, sda };
+  }
+  const relayer = (m: ReturnType<typeof setup>['m'], pk: string, hardCeilingYocto?: bigint) =>
+    new NearRelayer({
+      rpc: m.rpc,
+      relayerAccountId: 'relayer.penny.near',
+      relayerPublicKey: pk,
+      ...(hardCeilingYocto !== undefined ? { hardCeilingYocto } : {}),
+    });
+  test('a 0.1 NEAR send approved for 0.1 NEAR passes (was capped at 0.01 NEAR)', async () => {
+    const { m, sda, relayerKey } = bigSend();
+    const res = await relayer(m, relayerKey.near).relay(sda, undefined, {
+      maxInnerDepositYocto: 10n ** 23n,
+    });
+    expect(res.simulated.checks.find((c) => c.name === 'inner_deposit_cap')?.ok).toBe(true);
+    expect(res.simulated.checks.find((c) => c.name === 'per_approval_within_ceiling')?.ok).toBe(
+      true,
+    );
+  });
+  test('inner deposit above the approved amount fails', async () => {
+    const { m, sda, relayerKey } = bigSend();
+    const res = await relayer(m, relayerKey.near).relay(sda, undefined, {
+      maxInnerDepositYocto: 10n ** 22n,
+    });
+    expect(res.simulated.checks.find((c) => c.name === 'inner_deposit_cap')?.ok).toBe(false);
+    expect(res.simulated.wouldSucceed).toBe(false);
+  });
+  test('without a per-approval limit the hard ceiling still bounds the fallback cap', async () => {
+    const { m, sda, relayerKey } = bigSend();
+    const r = new NearRelayer({
+      rpc: m.rpc,
+      relayerAccountId: 'relayer.penny.near',
+      relayerPublicKey: relayerKey.near,
+      maxInnerDepositYocto: 10n ** 24n,
+      hardCeilingYocto: 5n * 10n ** 22n,
+    });
+    const res = await r.relay(sda);
+    expect(res.simulated.checks.find((c) => c.name === 'inner_deposit_cap')?.ok).toBe(false);
+  });
+  test('an approved amount above the env hard ceiling fails', async () => {
+    const { m, sda, relayerKey } = bigSend();
+    const res = await relayer(m, relayerKey.near, 5n * 10n ** 22n).relay(sda, undefined, {
+      maxInnerDepositYocto: 10n ** 23n,
+    });
+    expect(res.simulated.checks.find((c) => c.name === 'per_approval_within_ceiling')?.ok).toBe(
+      false,
+    );
+    expect(res.simulated.wouldSucceed).toBe(false);
+  });
+});
+
 describe('NearRelayer', () => {
   test('dry run: returns would-be hash + preflight, never signs or broadcasts', async () => {
     const { m, sda, signer } = setup();

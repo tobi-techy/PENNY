@@ -2,6 +2,7 @@ import {
   addDecimal,
   CreateBotPlan,
   compareDecimal,
+  Decimal,
   ErrandPlan,
   InvestPlan,
   type MoneyPlan,
@@ -12,6 +13,7 @@ import {
 } from '@penny/shared';
 import { z } from 'zod';
 import { billQuery, parseBillEmails } from '../connectors/composio.ts';
+import { INVEST_ASSETS } from '../market/invest.ts';
 import type { MarketPort, ToolContext, ToolDef } from './registry.ts';
 import { ToolRegistry } from './registry.ts';
 
@@ -21,13 +23,21 @@ import { ToolRegistry } from './registry.ts';
  */
 
 async function propose(ctx: ToolContext, plan: MoneyPlan) {
-  const quote = plan.kind === 'invest' ? ctx.quotes.get(plan.quoteId) : undefined;
+  // NEAR sends are sized in USD by Guard, so they need a live NEAR price.
+  let nearUsdPriceMicros: bigint | undefined;
+  if (plan.kind === 'send' && plan.asset === 'NEAR' && ctx.market.nearUsdPriceMicros) {
+    try {
+      nearUsdPriceMicros = await ctx.market.nearUsdPriceMicros();
+    } catch {
+      return { decision: 'needs_more_info', reasons: ["I can't get a NEAR price right now."] };
+    }
+  }
   const r = await ctx.approvals.createMoneyApproval({
     userId: ctx.userId,
     bot: ctx.bot,
     plan,
     space: ctx.space,
-    ...(quote ? { quote } : {}),
+    ...(nearUsdPriceMicros !== undefined ? { nearUsdPriceMicros } : {}),
   });
   // never hand the card token back to the model
   if (r.decision === 'allow_with_approval') {
@@ -37,6 +47,7 @@ async function propose(ctx: ToolContext, plan: MoneyPlan) {
 }
 
 const empty = z.object({}).strict();
+const InvestInput = z.object({ portfolioId: z.enum(INVEST_ASSETS), amountUsd: Decimal }).strict();
 
 export function builtinTools(): ToolDef<never>[] {
   const defs: ToolDef<never>[] = [];
@@ -53,22 +64,25 @@ export function builtinTools(): ToolDef<never>[] {
   });
   add({
     id: 'get_portfolios',
-    description: 'List investable portfolios (Glider).',
+    description: 'List what Invest can buy (ETH, SOL, NEAR) with live USD prices.',
     risk: 'read',
     input: empty,
-    execute: async (ctx) => ctx.market.getPortfolios(),
+    execute: async (ctx) => {
+      try {
+        return await ctx.market.getPortfolios();
+      } catch {
+        return { ok: false, error: "I can't get prices right now." };
+      }
+    },
   });
   add({
     id: 'quote_invest',
     description:
-      'Get a short-lived quote to invest USDC into a portfolio. Needed before propose_invest.',
+      "Preview buying ETH, SOL or NEAR with the user's dollars: about how much they get, the least they get, fee, price, how long the price holds. Read-only. Then call propose_invest. Talk to the user in plain words, no crypto jargon.",
     risk: 'read',
-    input: z.object({ portfolioId: z.string().min(1).max(128), amountUsd: z.string() }).strict(),
-    execute: async (ctx, i) => {
-      const q = await ctx.market.quoteInvest(i.portfolioId, i.amountUsd);
-      ctx.quotes.set(q.quoteId, { id: q.quoteId, expiresAt: q.expiresAt });
-      return { quoteId: q.quoteId, expiresAt: q.expiresAt.toISOString(), feeUsd: q.feeUsd };
-    },
+    input: InvestInput,
+    execute: async (ctx, i) =>
+      ctx.approvals.previewInvest(ctx.userId, i.portfolioId, i.amountUsd, ctx.bot),
   });
   add({
     id: 'check_guard',
@@ -197,10 +211,28 @@ export function builtinTools(): ToolDef<never>[] {
   });
   add({
     id: 'propose_invest',
-    description: 'Propose investing USDC into a portfolio using a quoteId from quote_invest.',
+    description:
+      'Propose investing USDC into ETH, SOL or NEAR. Guard checks first, then Penny fetches a firm quote and sends a Face ID card.',
     risk: 'money',
-    input: InvestPlan,
-    execute: propose,
+    input: InvestInput,
+    execute: async (ctx, i) => {
+      const r = await ctx.approvals.createInvestApproval({
+        userId: ctx.userId,
+        bot: ctx.bot,
+        asset: i.portfolioId,
+        amountUsd: i.amountUsd,
+        space: ctx.space,
+      });
+      if (r.decision === 'allow_with_approval') {
+        return {
+          decision: r.decision,
+          approvalId: r.approvalId,
+          reasons: r.reasons,
+          cardSent: true,
+        };
+      }
+      return r;
+    },
   });
   add({
     id: 'propose_pay_bill',
@@ -284,7 +316,10 @@ export function createRegistry(): ToolRegistry {
 
 /** Fixed data for DRY_RUN dev and tests. */
 export class FakeMarket implements MarketPort {
-  constructor(private readonly now: () => Date = () => new Date()) {}
+  constructor(readonly now: () => Date = () => new Date()) {}
+  async nearUsdPriceMicros() {
+    return 4_000_000n;
+  }
   async getBalances() {
     return [
       { asset: 'USDC', amount: '120.5' },
@@ -293,15 +328,9 @@ export class FakeMarket implements MarketPort {
   }
   async getPortfolios() {
     return [
-      { id: 'eth-momentum', name: 'ETH Momentum', blurb: 'rides ETH trends, rebalances weekly' },
-      { id: 'steady-stables', name: 'Steady Stables', blurb: 'yield on stablecoins' },
+      { id: 'ETH', name: 'ETH', blurb: 'Ether', priceUsd: '2000' },
+      { id: 'SOL', name: 'SOL', blurb: 'Solana', priceUsd: '100' },
+      { id: 'NEAR', name: 'NEAR', blurb: 'NEAR', priceUsd: '4' },
     ];
-  }
-  async quoteInvest(portfolioId: string, amountUsd: string) {
-    return {
-      quoteId: `q_${portfolioId}_${amountUsd}`,
-      expiresAt: new Date(this.now().getTime() + 90_000),
-      feeUsd: '0.12',
-    };
   }
 }
