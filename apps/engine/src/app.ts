@@ -5,6 +5,7 @@ import { BotService } from './brain/bots.ts';
 import { Crew } from './brain/crew.ts';
 import { type Embedder, MemoryService } from './brain/memory.ts';
 import { MoodService } from './brain/mood.ts';
+import { ReflectionService } from './brain/reflection.ts';
 import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
 import type { Db } from './db/client.ts';
@@ -28,6 +29,7 @@ import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import { GuardDecisionsRepo, IdempotencyRepo, WebhookEventsRepo } from './repo/infra.ts';
 import { LedgerRepo } from './repo/ledger.ts';
 import { UsersRepo } from './repo/users.ts';
+import { defaultJobs, Scheduler } from './scheduler.ts';
 
 export type EngineDeps = {
   db: Db;
@@ -93,6 +95,7 @@ export function createEngine(d: EngineDeps) {
     chat: d.models.chat,
     registry: d.registry,
     bots: repos.bots,
+    messages: repos.messages,
     users: repos.users,
     approvals,
     memory,
@@ -142,7 +145,25 @@ export function createEngine(d: EngineDeps) {
     }),
   );
 
-  return { app, repos, services: { approvals, bots: botService, crew, enroll, mood, memory } };
+  const reflection = new ReflectionService({ users: repos.users, bots: repos.bots, memory });
+  const scheduler = new Scheduler(
+    defaultJobs({
+      expireApprovals: () => approvals.expireDue(),
+      pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
+      pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
+      weeklyReflection: async (now) => {
+        await reflection.reflectWeekly(now);
+      },
+    }),
+    d.log,
+    now,
+  );
+
+  return {
+    app,
+    repos,
+    services: { approvals, bots: botService, crew, enroll, mood, memory, reflection, scheduler },
+  };
 }
 
 export type Engine = ReturnType<typeof createEngine>;

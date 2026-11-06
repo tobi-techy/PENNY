@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { EMBEDDING_DIM, memories } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
@@ -52,6 +52,20 @@ export class MemoryService {
       embedding: vec ? fitToColumn(vec) : null,
     });
     return id;
+  }
+
+  /** Memories learned since a date, newest first (weekly reflection). */
+  async learnedSince(
+    userId: string,
+    since: Date,
+    k = 10,
+  ): Promise<{ text: string; kind: string; createdAt: Date }[]> {
+    return this.db
+      .select({ text: memories.text, kind: memories.kind, createdAt: memories.createdAt })
+      .from(memories)
+      .where(and(eq(memories.userId, userId), gte(memories.createdAt, since)))
+      .orderBy(desc(memories.createdAt))
+      .limit(Math.min(k, 50));
   }
 
   /** Nearest memories for this user only (privacy: always filtered by userId). */

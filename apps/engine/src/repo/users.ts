@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { conversations, devices, enrollCodes, guardPolicies, users } from '../db/schema.ts';
 import type { GuardPolicy } from '../guard/policy.ts';
@@ -9,6 +9,17 @@ export type DeviceRow = typeof devices.$inferSelect;
 
 export class UsersRepo {
   constructor(private readonly db: Db) {}
+
+  /** A page of user ids in stable id order; pass the last id seen as `afterId`. */
+  async listIds(limit = 100, afterId?: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: users.id })
+      .from(users)
+      .where(afterId ? gt(users.id, afterId) : undefined)
+      .orderBy(asc(users.id))
+      .limit(Math.min(Math.max(limit, 1), 500));
+    return rows.map((r) => r.id);
+  }
 
   async byId(id: string): Promise<UserRow | null> {
     const [r] = await this.db.select().from(users).where(eq(users.id, id)).limit(1);

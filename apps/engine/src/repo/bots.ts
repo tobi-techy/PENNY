@@ -1,6 +1,6 @@
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { bots, messages, moods, soulsChangelog } from '../db/schema.ts';
+import { bots, conversations, messages, moods, soulsChangelog } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
 
 export type BotRow = typeof bots.$inferSelect;
@@ -96,6 +96,23 @@ export class BotsRepo {
   async logSoulChange(botId: string, userId: string | null, diff: string, reason: string) {
     await this.db.insert(soulsChangelog).values({ id: newId('evt'), botId, userId, diff, reason });
   }
+
+  /** When this bot last logged a change of this kind for the user (reflection watermark). */
+  async lastSoulChangeAt(botId: string, userId: string, reason: string): Promise<Date | null> {
+    const [r] = await this.db
+      .select({ createdAt: soulsChangelog.createdAt })
+      .from(soulsChangelog)
+      .where(
+        and(
+          eq(soulsChangelog.botId, botId),
+          eq(soulsChangelog.userId, userId),
+          eq(soulsChangelog.reason, reason),
+        ),
+      )
+      .orderBy(desc(soulsChangelog.createdAt))
+      .limit(1);
+    return r?.createdAt ?? null;
+  }
 }
 
 export class MoodsRepo {
@@ -139,5 +156,27 @@ export class MessagesRepo {
       botId: m.botId ?? null,
       externalId: m.externalId ?? null,
     });
+  }
+
+  /** Most recent messages in a conversation, oldest first (for crew context). */
+  async recent(
+    conversationId: string,
+    userId: string,
+    limit = 20,
+  ): Promise<{ direction: 'inbound' | 'outbound'; text: string; createdAt: Date }[]> {
+    const rows = await this.db
+      .select({
+        direction: messages.direction,
+        text: messages.text,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      // Scope to the owning user too: a conversation is keyed by space, so never
+      // feed another account's transcript into this user's prompt.
+      .where(and(eq(messages.conversationId, conversationId), eq(conversations.userId, userId)))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(Math.min(Math.max(limit, 1), 50));
+    return rows.reverse();
   }
 }
