@@ -1,5 +1,5 @@
 # Penny engine for container hosts (Atlasflow etc.). Listens on $PORT (3000 here), GET / and /healthz return 200.
-FROM oven/bun:1.3
+FROM oven/bun:1.4
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
 COPY packages ./packages
