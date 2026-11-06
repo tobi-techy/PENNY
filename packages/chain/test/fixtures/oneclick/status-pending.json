@@ -1,0 +1,73 @@
+{
+  "status": "PENDING_DEPOSIT",
+  "updatedAt": "2026-11-06T13:11:11.489Z",
+  "correlationId": "1b2bae9b-bd61-4b3e-82e6-271d81ebf6fb",
+  "swapDetails": {
+    "depositedAmount": null,
+    "depositedAmountUsd": null,
+    "depositedAmountFormatted": null,
+    "intentHashes": [],
+    "nearTxHashes": [],
+    "amountIn": null,
+    "amountInFormatted": null,
+    "amountInUsd": null,
+    "amountOut": null,
+    "amountOutFormatted": null,
+    "amountOutUsd": null,
+    "slippage": null,
+    "refundedAmount": "0",
+    "refundedAmountFormatted": "0",
+    "refundedAmountUsd": "0",
+    "refundReason": null,
+    "refundFee": "4628",
+    "withdrawFee": "0",
+    "originChainTxHashes": [],
+    "destinationChainTxHashes": []
+  },
+  "quoteResponse": {
+    "timestamp": "2026-11-06T13:11:10.960Z",
+    "signature": "ed25519:redacted-1click-quote-signature",
+    "quoteRequest": {
+      "dry": false,
+      "swapType": "EXACT_INPUT",
+      "depositMode": "SIMPLE",
+      "slippageTolerance": 100,
+      "originAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+      "depositType": "ORIGIN_CHAIN",
+      "destinationAsset": "nep141:sol.omft.near",
+      "amount": "1000000",
+      "refundTo": "penny.near",
+      "refundType": "ORIGIN_CHAIN",
+      "recipient": "penny.near",
+      "recipientType": "INTENTS",
+      "deadline": "2026-11-06T13:21:06.000Z",
+      "appFees": [
+        {
+          "limitOrderId": null,
+          "recipient": "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd",
+          "fee": 20
+        }
+      ],
+      "virtualChainRecipient": null,
+      "virtualChainRefundRecipient": null,
+      "referral": null,
+      "confidentiality": "public"
+    },
+    "quote": {
+      "amountIn": "1000000",
+      "amountInFormatted": "1.0",
+      "amountInUsd": "0.999531000000",
+      "minAmountIn": "1000000",
+      "amountOut": "11066177",
+      "amountOutFormatted": "0.011066177",
+      "amountOutUsd": "0.997062547700",
+      "minAmountOut": "10955515",
+      "timeWhenInactive": "2026-11-09T13:21:06.000Z",
+      "depositAddress": "ac10dea2bf16101cf51594a063bf7fa315d9a60bb295da5d91ea165d6f9bb927",
+      "deadline": "2026-11-09T13:21:06.000Z",
+      "timeEstimate": 22,
+      "refundFee": "4628",
+      "withdrawFee": "0"
+    }
+  }
+}
