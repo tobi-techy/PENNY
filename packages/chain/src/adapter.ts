@@ -23,6 +23,7 @@ import {
   type ChainMode,
   DEFAULT_MODE,
   isLive,
+  isTestnetRpcUrl,
   type LiveRequest,
   modeFromEnv,
 } from './near/mode.ts';
@@ -102,7 +103,13 @@ export class ChainAdapter {
 
   constructor(private readonly o: ChainAdapterOptions) {
     this.rpc = o.rpc ?? new NearRpc({ url: MAINNET_RPC_URL });
-    this.mode = o.mode ?? DEFAULT_MODE;
+    const mode = o.mode ?? DEFAULT_MODE;
+    // Fail closed: a mode labelled testnet only keeps the testnet allowance when
+    // the RPC this adapter actually talks to is a testnet host.
+    this.mode =
+      mode.network === 'testnet' && !isTestnetRpcUrl(this.rpc.url)
+        ? { ...mode, network: 'mainnet' }
+        : mode;
     this.oneClick = o.oneClick ?? new OneClickClient();
     this.glider = o.glider;
     this.now = o.now ?? (() => new Date());

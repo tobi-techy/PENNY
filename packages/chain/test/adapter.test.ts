@@ -135,6 +135,40 @@ describe('ChainAdapter (ChainPort)', () => {
       }).isLive,
     ).toBe(true);
   });
+  test('fromEnv testnet: live only when the RPC host is testnet', () => {
+    const k = genKey();
+    const base = { DRY_RUN: '0', NEAR_RELAYER_PRIVATE_KEY: k.nearSecret };
+    expect(
+      chainAdapterFromEnv({ ...base, NEAR_RPC_URL: 'https://rpc.testnet.near.org' }).isLive,
+    ).toBe(true);
+    // a stale NEAR_NETWORK label must not unlock the mainnet fallback RPC
+    expect(chainAdapterFromEnv({ ...base, NEAR_NETWORK: 'testnet' }).isLive).toBe(false);
+    expect(
+      chainAdapterFromEnv({
+        ...base,
+        NEAR_NETWORK: 'testnet',
+        NEAR_RPC_URL: 'https://rpc.mainnet.fastnear.com',
+      }).isLive,
+    ).toBe(false);
+    // testnet is never live while dry
+    expect(
+      chainAdapterFromEnv({
+        NEAR_RELAYER_PRIVATE_KEY: k.nearSecret,
+        NEAR_RPC_URL: 'https://rpc.testnet.near.org',
+      }).isLive,
+    ).toBe(false);
+  });
+  test('a mode labelled testnet over a mainnet RPC is downgraded to mainnet rules', () => {
+    const k = genKey();
+    const adapter = new ChainAdapter({
+      appAccountId: 'penny.near',
+      relayerAccountId: 'penny.near',
+      relayerSigner: new KeyPairSigner('penny.near', k.nearSecret),
+      mode: { env: 'dev', dryRun: false, network: 'testnet' },
+    });
+    expect(adapter.mode.network).toBe('mainnet');
+    expect(adapter.isLive).toBe(false);
+  });
 });
 
 describe('amounts (bigint only)', () => {

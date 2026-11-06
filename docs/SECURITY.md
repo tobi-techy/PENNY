@@ -27,4 +27,5 @@ User funds on `<slug>.penny.near`; relayer/app account keys; agent sub-account k
 - Idempotency keys on all POSTs that cause side effects.
 - Structured logging with redaction; no request bodies on money routes in logs.
 - `DRY_RUN=1` default; mainnet relay requires `PENNY_ENV=mainnet` AND `DRY_RUN=0` AND relayer key present.
+- Testnet exception: when `NEAR_RPC_URL` is a testnet host (and `NEAR_NETWORK` is unset or `testnet`), `DRY_RUN=0` + relayer key broadcasts on testnet without `PENNY_ENV=mainnet`. The `NEAR_NETWORK=testnet` label alone never unlocks this: an unset or non-testnet RPC falls back to the mainnet rules.
 - Tests required for: Guard policy, canonical JSON vectors, delegate-action verification, webhook signature, approval state machine, cardToken auth.

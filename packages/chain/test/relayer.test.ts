@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { decodeSignedTransaction, encodeTransaction, Transaction } from '@near-js/transactions';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { KeyPairSigner } from '../src/near/keys.ts';
-import { isLive, modeFromEnv } from '../src/near/mode.ts';
+import { isLive, isTestnetRpcUrl, modeFromEnv } from '../src/near/mode.ts';
 import { NearRelayer, RelayError } from '../src/near/relayer.ts';
 import type { NearActionSpec } from '../src/near/types.ts';
 import { fromBase64, toBase58 } from '../src/util/encoding.ts';
@@ -63,11 +63,14 @@ describe('mode gate', () => {
   test('defaults dry; only exact DRY_RUN=0 + mainnet + key + call-level request is live', () => {
     expect(modeFromEnv({})).toEqual({ env: 'dev', dryRun: true, network: 'mainnet' });
     // testnet broadcasts with DRY_RUN=0 + signer; mainnet still needs both levels
-    const tn = modeFromEnv({ NEAR_NETWORK: 'testnet', DRY_RUN: '0' });
+    const tn = modeFromEnv({ NEAR_RPC_URL: 'https://rpc.testnet.near.org', DRY_RUN: '0' });
     expect(tn.network).toBe('testnet');
     expect(isLive(tn, true, { dryRun: false, env: 'dev' })).toBe(true);
     expect(isLive(tn, true, { dryRun: true })).toBe(false);
-    expect(isLive({ env: 'dev', dryRun: false, network: 'mainnet' }, true, { dryRun: false, env: 'dev' })).toBe(false);
+    expect(isLive(tn, false, { dryRun: false })).toBe(false);
+    expect(
+      isLive({ env: 'dev', dryRun: false, network: 'mainnet' }, true, { dryRun: false, env: 'dev' }),
+    ).toBe(false);
     expect(modeFromEnv({ PENNY_ENV: 'mainnet', DRY_RUN: 'false' }).dryRun).toBe(true);
     const live = modeFromEnv({ PENNY_ENV: 'mainnet', DRY_RUN: '0' });
     expect(isLive(live, true, { dryRun: false, env: 'mainnet' })).toBe(true);
@@ -77,6 +80,78 @@ describe('mode gate', () => {
     expect(isLive({ env: 'dev', dryRun: false }, true, { dryRun: false, env: 'mainnet' })).toBe(
       false,
     );
+  });
+});
+
+describe('mode gate: network comes from the RPC host, mismatches fail closed', () => {
+  test('NEAR_NETWORK=testnet alone never unlocks mainnet broadcasts', () => {
+    // unset RPC -> adapter falls back to the mainnet RPC
+    const noRpc = modeFromEnv({ NEAR_NETWORK: 'testnet', DRY_RUN: '0' });
+    expect(noRpc.network).toBe('mainnet');
+    expect(isLive(noRpc, true, { dryRun: false, env: 'dev' })).toBe(false);
+    // mainnet RPC with a stale testnet label
+    const mainRpc = modeFromEnv({
+      NEAR_NETWORK: 'testnet',
+      NEAR_RPC_URL: 'https://rpc.mainnet.fastnear.com',
+      DRY_RUN: '0',
+    });
+    expect(mainRpc.network).toBe('mainnet');
+    expect(isLive(mainRpc, true, { dryRun: false, env: 'dev' })).toBe(false);
+    // "testnet" in the path or query is not a testnet host
+    expect(
+      modeFromEnv({ NEAR_RPC_URL: 'https://rpc.mainnet.near.org/testnet', DRY_RUN: '0' }).network,
+    ).toBe('mainnet');
+    // NEAR_NETWORK=mainnet narrows a testnet RPC back to mainnet rules
+    expect(
+      modeFromEnv({ NEAR_NETWORK: 'mainnet', NEAR_RPC_URL: 'https://rpc.testnet.near.org' })
+        .network,
+    ).toBe('mainnet');
+  });
+  test('isTestnetRpcUrl checks the host only', () => {
+    expect(isTestnetRpcUrl('https://rpc.testnet.near.org')).toBe(true);
+    expect(isTestnetRpcUrl('https://test.rpc.fastnear.com')).toBe(false);
+    expect(isTestnetRpcUrl('https://rpc.testnet.fastnear.com')).toBe(true);
+    expect(isTestnetRpcUrl('https://mainnet.example/?net=testnet')).toBe(false);
+    expect(isTestnetRpcUrl('not a url testnet')).toBe(false);
+    expect(isTestnetRpcUrl(undefined)).toBe(false);
+  });
+});
+
+describe('relayer inner-deposit ceiling', () => {
+  const big: NearActionSpec = { type: 'Transfer', deposit: (10n ** 23n).toString() }; // 0.1 NEAR
+  function bigSend() {
+    const base = setup();
+    const sda = signDelegate({
+      key: base.device,
+      senderId: 'tobi.penny.near',
+      receiverId: 'bob.near',
+      actions: [specToAction(big)],
+      nonce: 11n,
+      maxBlockHeight: BigInt(HEIGHT + 100),
+    });
+    return { ...base, sda };
+  }
+  test('default caps inner deposits at 0.01 NEAR', async () => {
+    const { m, sda, relayerKey } = bigSend();
+    const r = new NearRelayer({
+      rpc: m.rpc,
+      relayerAccountId: 'relayer.penny.near',
+      relayerPublicKey: relayerKey.near,
+    });
+    const res = await r.relay(sda);
+    expect(res.simulated.checks.find((c) => c.name === 'inner_deposit_cap')?.ok).toBe(false);
+    expect(res.simulated.wouldSucceed).toBe(false);
+  });
+  test('a deliberately raised maxInnerDepositYocto lets the approved deposit through', async () => {
+    const { m, sda, relayerKey } = bigSend();
+    const r = new NearRelayer({
+      rpc: m.rpc,
+      relayerAccountId: 'relayer.penny.near',
+      relayerPublicKey: relayerKey.near,
+      maxInnerDepositYocto: 10n ** 24n,
+    });
+    const res = await r.relay(sda);
+    expect(res.simulated.checks.find((c) => c.name === 'inner_deposit_cap')?.ok).toBe(true);
   });
 });
 
