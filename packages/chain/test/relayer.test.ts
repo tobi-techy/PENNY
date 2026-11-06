@@ -194,6 +194,18 @@ describe('relayer limit derived from the approved amount', () => {
     expect(res.simulated.checks.find((c) => c.name === 'inner_deposit_cap')?.ok).toBe(false);
     expect(res.simulated.wouldSucceed).toBe(false);
   });
+  test('without a per-approval limit the hard ceiling still bounds the fallback cap', async () => {
+    const { m, sda, relayerKey } = bigSend();
+    const r = new NearRelayer({
+      rpc: m.rpc,
+      relayerAccountId: 'relayer.penny.near',
+      relayerPublicKey: relayerKey.near,
+      maxInnerDepositYocto: 10n ** 24n,
+      hardCeilingYocto: 5n * 10n ** 22n,
+    });
+    const res = await r.relay(sda);
+    expect(res.simulated.checks.find((c) => c.name === 'inner_deposit_cap')?.ok).toBe(false);
+  });
   test('an approved amount above the env hard ceiling fails', async () => {
     const { m, sda, relayerKey } = bigSend();
     const res = await relayer(m, relayerKey.near, 5n * 10n ** 22n).relay(sda, undefined, {

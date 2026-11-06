@@ -163,6 +163,15 @@ describe('approval re-checks the quote (re-card, never silently)', () => {
     expect(t.messaging.cards.length).toBe(cards + 1);
   });
 
+  test('under 15 s left on the price: re-card instead of sending', async () => {
+    const r = await invest('6.5');
+    const relays = t.chain.relayCalls.length;
+    t.clock.now = new Date(t.clock.now.getTime() + 110_000);
+    const e = await submitErr(r.approvalId, r.cardToken);
+    expect(e.code).toBe('requoted');
+    expect(t.chain.relayCalls.length).toBe(relays);
+  });
+
   test('decline on an expired invest card never buys a new quote', async () => {
     const r = await invest('7.25');
     const cards = t.messaging.cards.length;

@@ -35,11 +35,14 @@ export class PriceUnavailable extends Error {
  */
 export function usdNumberToMicros(n: number): bigint {
   if (!Number.isFinite(n) || n <= 0) throw new PriceUnavailable(`bad price ${n}`);
-  const s = n >= 1e21 || n < 1e-6 ? n.toFixed(6) : String(n);
+  // toFixed(7) then truncate to 6 dp (toFixed(6) would round sub-micro values up)
+  const s = n >= 1e21 || n < 1e-6 ? n.toFixed(7) : String(n);
   const m = /^(\d+)(?:\.(\d+))?$/.exec(s);
   if (!m) throw new PriceUnavailable(`bad price ${n}`);
-  const frac = ((m[2] ?? '') + '000000').slice(0, 6);
-  return BigInt(m[1] as string) * 1_000_000n + BigInt(frac);
+  const frac = `${m[2] ?? ''}000000`.slice(0, 6);
+  const micros = BigInt(m[1] as string) * 1_000_000n + BigInt(frac);
+  if (micros === 0n) throw new PriceUnavailable(`price ${n} below one micro-dollar`);
+  return micros;
 }
 
 export function microsToUsd(m: bigint): string {
@@ -48,7 +51,10 @@ export function microsToUsd(m: bigint): string {
   return frac ? `${whole}.${frac}` : whole.toString();
 }
 
-const CoinGecko = z.record(z.string(), z.object({ usd: z.number() }));
+const CoinGecko = z.record(
+  z.string(),
+  z.object({ usd: z.number(), last_updated_at: z.number().int().positive() }),
+);
 
 export interface PriceFeedOptions {
   oneClick: OneClickClient;
@@ -80,7 +86,13 @@ export class PriceFeed {
 
   async all(): Promise<Map<InvestAsset, Price>> {
     const t = this.now().getTime();
-    if (this.cache && t - this.cache.at < (this.o.ttlMs ?? 60_000)) return this.cache.prices;
+    const maxAge = this.o.maxAgeMs ?? 15 * 60_000;
+    if (
+      this.cache &&
+      t - this.cache.at < (this.o.ttlMs ?? 60_000) &&
+      [...this.cache.prices.values()].every((p) => t - p.updatedAt.getTime() <= maxAge)
+    )
+      return this.cache.prices;
     if (!this.inflight) {
       this.inflight = this.load().finally(() => {
         this.inflight = null;
@@ -135,15 +147,19 @@ export class PriceFeed {
   private async fromCoinGecko(): Promise<Map<InvestAsset, Price>> {
     const ids = INVEST_ASSET_LIST.map((a) => INVEST_ASSETS[a].coingeckoId).join(',');
     const base = this.o.fallbackUrl ?? 'https://api.coingecko.com/api/v3/simple/price';
-    const r = await fetchJson(this.fetchImpl, `${base}?ids=${ids}&vs_currencies=usd`, CoinGecko, {
+    const url = `${base}?ids=${ids}&vs_currencies=usd&include_last_updated_at=true`;
+    const r = await fetchJson(this.fetchImpl, url, CoinGecko, {
       timeoutMs: this.o.timeoutMs ?? 5_000,
     });
     const out = new Map<InvestAsset, Price>();
     for (const a of INVEST_ASSET_LIST) {
       const v = r[INVEST_ASSETS[a].coingeckoId];
       if (!v) throw new PriceUnavailable(`fallback has no price for ${a}`);
+      const updatedAt = new Date(v.last_updated_at * 1000);
+      if (this.now().getTime() - updatedAt.getTime() > (this.o.maxAgeMs ?? 15 * 60_000))
+        throw new PriceUnavailable(`fallback price for ${a} is stale`);
       const usdMicros = usdNumberToMicros(v.usd);
-      out.set(a, { asset: a, usdMicros, usd: microsToUsd(usdMicros), updatedAt: this.now(), source: 'coingecko' });
+      out.set(a, { asset: a, usdMicros, usd: microsToUsd(usdMicros), updatedAt, source: 'coingecko' });
     }
     return out;
   }

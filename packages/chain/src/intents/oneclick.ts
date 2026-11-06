@@ -124,6 +124,7 @@ export function quoteFeeBps(res: QuoteResponse): number {
   if (!Array.isArray(fees)) return 0;
   let bps = 0;
   for (const f of fees) {
+    if (!f || typeof f !== 'object') continue;
     const v = (f as { fee?: unknown }).fee;
     if (typeof v === 'number' && Number.isInteger(v) && v >= 0) bps += v;
   }

@@ -81,7 +81,8 @@ export function builtinTools(): ToolDef<never>[] {
       "Preview buying ETH, SOL or NEAR with the user's dollars: about how much they get, the least they get, fee, price, how long the price holds. Read-only. Then call propose_invest. Talk to the user in plain words, no crypto jargon.",
     risk: 'read',
     input: InvestInput,
-    execute: async (ctx, i) => ctx.approvals.previewInvest(ctx.userId, i.portfolioId, i.amountUsd),
+    execute: async (ctx, i) =>
+      ctx.approvals.previewInvest(ctx.userId, i.portfolioId, i.amountUsd, ctx.bot),
   });
   add({
     id: 'check_guard',

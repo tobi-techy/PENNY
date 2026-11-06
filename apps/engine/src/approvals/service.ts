@@ -23,6 +23,7 @@ import {
   type GuardContext,
   type GuardPolicy,
   type GuardResult,
+  QUOTE_MIN_REMAINING_MS,
 } from '../guard/policy.ts';
 import { verifyEd25519 } from '../lib/crypto.ts';
 import { newId } from '../lib/ids.ts';
@@ -380,7 +381,7 @@ export class ApprovalService {
   // ---------- invest (NEAR Intents 1Click) ----------
 
   /** Read-only preview: dry quote + a Guard read. Nothing is signed, no card. */
-  async previewInvest(userId: string, asset: string, amountUsd: string) {
+  async previewInvest(userId: string, asset: string, amountUsd: string, bot: BotRow | null = null) {
     if (!this.d.invest) return { ok: false, error: "Investing isn't switched on yet." };
     if (!isInvestAsset(asset)) return { ok: false, error: 'I can buy ETH, SOL or NEAR for now.' };
     if (!Decimal.safeParse(amountUsd).success) return { ok: false, error: 'How much, in dollars?' };
@@ -394,7 +395,7 @@ export class ApprovalService {
       quoteId: 'preview',
     };
     const now = this.d.now();
-    const g = await this.checkGuard(userId, plan, null, {
+    const g = await this.checkGuard(userId, plan, bot, {
       quote: { id: 'preview', expiresAt: new Date(now.getTime() + 60_000) },
     });
     let q: InvestQuote;
@@ -509,7 +510,6 @@ export class ApprovalService {
       await this.updateCard(row.id, 'Price expired. Ask Penny again. Nothing moved.');
       return null;
     }
-    await this.updateCard(row.id, 'Price changed, check the new amount. Nothing moved.');
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
     const r = await this.createInvestApproval({
       userId: row.userId,
@@ -519,7 +519,12 @@ export class ApprovalService {
       space,
       note: 'New price.',
     });
-    return r.decision === 'allow_with_approval' ? r.approvalId : null;
+    if (r.decision === 'allow_with_approval') {
+      await this.updateCard(row.id, 'Price changed, check the new amount. Nothing moved.');
+      return r.approvalId;
+    }
+    await this.updateCard(row.id, 'Price changed. Ask Penny again. Nothing moved.');
+    return null;
   }
 
   /** approval ids already re-quoted once (a card is never re-quoted twice) */
@@ -869,6 +874,11 @@ export class ApprovalService {
     const ctx = await this.guardContext(row.userId, bot);
     ctx.spentLast24hMicros =
       ctx.spentLast24hMicros > row.amountMicros ? ctx.spentLast24hMicros - row.amountMicros : 0n;
+    if (ctx.bot) {
+      // this approval's own reservation also counts toward the bot's window; exclude it once
+      const b = ctx.bot.spentLast24hMicros;
+      ctx.bot.spentLast24hMicros = b > row.amountMicros ? b - row.amountMicros : 0n;
+    }
     // Exclude this approval from the velocity count; others still count.
     ctx.approvalsLast10Min = Math.max(0, ctx.approvalsLast10Min - 1);
     if (plan.kind === 'invest') ctx.quote = { id: plan.quoteId, expiresAt: row.expiresAt };
@@ -986,7 +996,8 @@ export class ApprovalService {
   /** Before relaying an invest: quote still live and price within slippage, else re-card. */
   private async investPreflight(row: ApprovalRow, quoteId: string): Promise<void> {
     const q = this.d.invest?.get(quoteId);
-    if (!q || this.d.now().getTime() >= q.expiresAt.getTime()) {
+    // same bar as Guard: under 15 s left is too close to send; re-card instead
+    if (!q || q.expiresAt.getTime() - this.d.now().getTime() < QUOTE_MIN_REMAINING_MS) {
       throw this.requotedError(await this.requote(row, 'expired'), 'expired');
     }
     let r: Awaited<ReturnType<InvestPort['recheck']>>;
@@ -1024,11 +1035,15 @@ export class ApprovalService {
     if (row.status !== 'relayed' || !row.txHash) return row.status;
     const s = await this.d.chain.txStatus(row.txHash);
     if (s === 'pending') return 'relayed';
-    if (s === 'settled' && row.kind === 'invest' && this.d.invest) {
+    if (s === 'settled' && row.kind === 'invest') {
       const events = await this.d.approvals.events(id);
       const dry = events.some((e) => e.reason === 'relayed (dry run)');
       const dep = investDepositAddress(row.actions as NearAction[]);
-      if (!dry && dep) return this.refreshSwap(row, dep);
+      if (!dry) {
+        // a live swap only settles on the swap's own status, never on the deposit alone
+        if (!this.d.invest || !dep) return 'relayed';
+        return this.refreshSwap(row, dep);
+      }
     }
     if (s === 'settled') {
       await this.d.approvals.transition(id, row.kind, 'relayed', 'settled', 'final on chain');

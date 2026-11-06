@@ -108,7 +108,7 @@ let engineRef: Engine | null = null;
 const relayerMaxDepositYocto = toBaseUnits(env.PENNY_RELAYER_MAX_DEPOSIT_NEAR, 24);
 let chain: ChainPort;
 let market: MarketPort;
-let invest: InvestPort;
+let invest: InvestPort | undefined;
 if (env.NEAR_RPC_URL) {
   const adapter = chainAdapterFromEnv(process.env, {
     resolveDeviceKey: async (signerId) => {
@@ -130,7 +130,12 @@ if (env.NEAR_RPC_URL) {
     }),
   });
   market = new RealMarket(adapter, prices);
-  invest = new IntentsInvest({ adapter, slippageBps: env.INVEST_SLIPPAGE_BPS });
+  // 1Click has no testnet and quotes mainnet USDC: Invest runs only against a mainnet RPC.
+  if (adapter.mode.network === 'mainnet') {
+    invest = new IntentsInvest({ adapter, slippageBps: env.INVEST_SLIPPAGE_BPS });
+  } else {
+    log.info('invest off: NEAR_RPC_URL is testnet and 1Click is mainnet-only');
+  }
 } else {
   const fake = new FakeChain();
   chain = fake;
@@ -151,7 +156,7 @@ const engine = createEngine({
   ...(privacy ? { privacy } : {}),
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
   market,
-  invest,
+  ...(invest ? { invest } : {}),
   relayerMaxDepositYocto,
   registry: createRegistry(),
   ...(env.COMPOSIO_API_KEY ? { connectors: new ComposioConnector(env.COMPOSIO_API_KEY) } : {}),

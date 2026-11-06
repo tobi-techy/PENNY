@@ -21,7 +21,12 @@ function feed(o: { oneClickDown?: boolean; geckoDown?: boolean; now?: () => Date
       return Response.json(tokens);
     }
     if (o.geckoDown) return new Response('nope', { status: 429 });
-    return Response.json({ ethereum: { usd: 2200.5 }, solana: { usd: 91 }, near: { usd: 3.7 } });
+    const at = Math.floor((o.now ?? (() => RECORDED_AT))().getTime() / 1000) - 60;
+    return Response.json({
+      ethereum: { usd: 2200.5, last_updated_at: at },
+      solana: { usd: 91, last_updated_at: at },
+      near: { usd: 3.7, last_updated_at: at },
+    });
   };
   const now = o.now ?? (() => RECORDED_AT);
   const pf = new PriceFeed({ oneClick: new OneClickClient({ fetch: f }), fetch: f, now });
@@ -57,6 +62,8 @@ describe('PriceFeed', () => {
     expect(usdNumberToMicros(3.7)).toBe(3_700_000n);
     expect(microsToUsd(2_237_620_000n)).toBe('2237.62');
     expect(() => usdNumberToMicros(0)).toThrow();
+    expect(() => usdNumberToMicros(0.0000009)).toThrow(); // truncates to 0, never rounds up
+    expect(usdNumberToMicros(0.0000019)).toBe(1n);
     expect(isInvestAsset('SOL')).toBe(true);
     expect(isInvestAsset('DOGE')).toBe(false);
   });

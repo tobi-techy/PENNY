@@ -147,11 +147,8 @@ export class NearRelayer {
     const ceiling = this.o.hardCeilingYocto ?? DEFAULT_RELAYER_HARD_CEILING;
     if (limits.maxInnerDepositYocto !== undefined)
       return { cap: limits.maxInnerDepositYocto, ceiling, source: 'approved amount' };
-    return {
-      cap: this.o.maxInnerDepositYocto ?? DEFAULT_POLICY.maxTotalDeposit,
-      ceiling,
-      source: 'default',
-    };
+    const fallback = this.o.maxInnerDepositYocto ?? DEFAULT_POLICY.maxTotalDeposit;
+    return { cap: fallback < ceiling ? fallback : ceiling, ceiling, source: 'default' };
   }
 
   private async preflight(
