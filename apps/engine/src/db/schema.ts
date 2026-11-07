@@ -155,6 +155,18 @@ export const approvals = pgTable(
     }).notNull(),
     planHash: text('plan_hash').notNull(),
     cardTokenHash: text('card_token_hash').notNull(),
+    /**
+     * Live-card handle, so a card can still be edited after a restart. The in-process
+     * map alone meant every redeploy froze in-flight cards at their last state.
+     */
+    cardRef: text('card_ref'),
+    /** Space the card was sent to, needed to re-send or re-edit it. */
+    cardSpace: jsonb('card_space').$type<{
+      spaceId: string;
+      userHandle: string;
+      phone?: string;
+      baseUrl?: string;
+    }>(),
     txHash: text('tx_hash'),
     createdAt: createdAt(),
     updatedAt: ts('updated_at').notNull().defaultNow(),

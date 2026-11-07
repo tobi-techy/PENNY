@@ -57,8 +57,14 @@ export function SetupPage() {
         setNote(`Something went wrong (${res.status}). Try again.`);
         setState('error');
       }
-    } catch {
-      setNote('Could not reach Penny. Check your connection and try again.');
+    } catch (e) {
+      if ((e as Error).name === 'NoSecureKeyStore') {
+        setNote(
+          'This browser cannot keep a safe approval key. Use the Penny app on your iPhone instead — text Penny and tap the setup card.',
+        );
+      } else {
+        setNote('Could not reach Penny. Check your connection and try again.');
+      }
       setState('error');
     } finally {
       setBusy(false);

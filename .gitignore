@@ -16,3 +16,8 @@ ios/DerivedData/
 ios/build/
 node_modules/
 !.env.example
+
+# Local tooling state, never committed
+.perch/
+ios/PennyKit/.swiftpm/
+.swiftpm/

@@ -29,6 +29,13 @@
       "when": 1794030694417,
       "tag": "0003_user_enroll_status",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794075025084,
+      "tag": "0004_approval_card_handle",
+      "breakpoints": true
     }
   ]
 }

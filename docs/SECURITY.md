@@ -32,3 +32,6 @@ Inference runs on NEAR AI Cloud in Intel TDX + NVIDIA confidential-computing GPU
 - `DRY_RUN=1` default; mainnet relay requires `PENNY_ENV=mainnet` AND `DRY_RUN=0` AND relayer key present.
 - Testnet exception: when `NEAR_RPC_URL` is a testnet host (and `NEAR_NETWORK` is unset or `testnet`), `DRY_RUN=0` + relayer key broadcasts on testnet without `PENNY_ENV=mainnet`. The `NEAR_NETWORK=testnet` label alone never unlocks this: an unset or non-testnet RPC falls back to the mainnet rules.
 - Tests required for: Guard policy, canonical JSON vectors, delegate-action verification, webhook signature, approval state machine, cardToken auth.
+- Browser keys: the web approval key is WebCrypto Ed25519, non-extractable, in IndexedDB. There is no software fallback: a browser without WebCrypto Ed25519 gets no key and is told to use the iPhone app. The engine cannot distinguish a software-held key from a hardware-held one, so it must never be offered.
+- Card links are built from the delivering host only when it is a real DNS name (or loopback in dev); a bare IP or malformed Host falls back to `PUBLIC_BASE_URL`.
+- Sweepers: `pending` approvals expire oldest-first (no row may starve past the sweep limit), and `signed` rows older than 15 minutes are failed with their ledger reservation released, so a dead relay call cannot hold a user's daily limit hostage.

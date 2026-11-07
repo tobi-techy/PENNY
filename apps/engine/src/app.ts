@@ -24,6 +24,7 @@ import {
   RateLimiter,
   rateLimit,
   securityMiddleware,
+  webPageCsp,
 } from './http/security.ts';
 import { handleInbound } from './inbound.ts';
 import type { Logger } from './lib/logger.ts';
@@ -71,7 +72,7 @@ export function createEngine(d: EngineDeps) {
   const now = d.now ?? (() => new Date());
   const repos = {
     users: new UsersRepo(d.db),
-    approvals: new ApprovalsRepo(d.db),
+    approvals: new ApprovalsRepo(d.db, now),
     ledger: new LedgerRepo(d.db),
     bots: new BotsRepo(d.db),
     moods: new MoodsRepo(d.db),
@@ -174,6 +175,9 @@ export function createEngine(d: EngineDeps) {
     if (!existsSync(index)) return c.json({ error: 'web_not_built' }, 503);
     return c.html(await readFile(index, 'utf8'));
   };
+  // The SPA needs its own bundle and stylesheet; the strict API CSP would block both.
+  app.use('/setup', webPageCsp());
+  app.use('/a/:id', webPageCsp());
   app.get('/setup', spa);
   app.get('/a/:id', spa);
   app.get('/assets/:file', async (c) => {
@@ -211,7 +215,7 @@ export function createEngine(d: EngineDeps) {
       webhookEvents: repos.webhookEvents,
       idempotency: repos.idempotency,
       webhookSecret: d.webhookSecret,
-      onInbound: (evt) => handleInbound(inboundDeps, evt),
+      onInbound: (evt, req) => handleInbound(inboundDeps, evt, req),
       enrollLimiter: new RateLimiter(10, 60_000),
       approvalLimiter: new RateLimiter(60, 60_000),
       ...(d.privacy ? { privacy: d.privacy } : {}),
@@ -224,6 +228,7 @@ export function createEngine(d: EngineDeps) {
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
       refreshRelayed: () => approvals.refreshRelayed(),
+      reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
       pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
       weeklyReflection: async (now) => {

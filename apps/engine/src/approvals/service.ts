@@ -196,9 +196,12 @@ export class ApprovalService {
 
   constructor(private readonly d: ApprovalDeps) {}
 
-  private cardUrl(id: string, token: string) {
-    // token in the fragment so it never hits server/proxy logs on open
-    return `${this.d.publicBaseUrl.replace(/\/$/, '')}/a/${id}#t=${token}`;
+  private cardUrl(id: string, token: string, space?: SpaceRef) {
+    // Prefer the host that delivered the text (PUBLIC_BASE_URL may be unset and
+    // default to localhost). The token stays in the fragment so it never hits
+    // server/proxy logs on open.
+    const base = (space?.baseUrl || this.d.publicBaseUrl).replace(/\/$/, '');
+    return `${base}/a/${id}#t=${token}`;
   }
 
   async guardContext(
@@ -271,7 +274,7 @@ export class ApprovalService {
     if (!user?.accountId || !device) {
       return {
         decision: 'needs_more_info',
-        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
+        reasons: ['set up approvals first: tap the setup card penny sent you, then ask again.'],
       };
     }
     const extra: Partial<GuardContext> = {};
@@ -361,7 +364,7 @@ export class ApprovalService {
       reasons: g.reasons,
     });
     await this.d.mood.on(userId, 'approval_created');
-    const url = this.cardUrl(id, token);
+    const url = this.cardUrl(id, token, input.space);
     await this.sendCard(id, input.space, {
       approvalId: id,
       url,
@@ -436,7 +439,7 @@ export class ApprovalService {
     if (!user?.accountId || !device) {
       return {
         decision: 'needs_more_info',
-        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
+        reasons: ['set up approvals first: tap the setup card penny sent you, then ask again.'],
       };
     }
     const provisional: MoneyPlan = {
@@ -593,7 +596,7 @@ export class ApprovalService {
       planHash: planHash(input.plan, actions),
       cardTokenHash: hash,
     });
-    const url = this.cardUrl(id, token);
+    const url = this.cardUrl(id, token, input.space);
     await this.sendCard(id, input.space, {
       approvalId: id,
       url,
@@ -620,7 +623,7 @@ export class ApprovalService {
     if (!user?.accountId || !device) {
       return {
         decision: 'needs_more_info',
-        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
+        reasons: ['set up approvals first: tap the setup card penny sent you, then ask again.'],
       };
     }
     if (!this.d.executeWrite) {
@@ -669,7 +672,7 @@ export class ApprovalService {
       reasons: ['write action requires Face ID approval'],
     });
     await this.d.mood.on(userId, 'approval_created');
-    const url = this.cardUrl(id, token);
+    const url = this.cardUrl(id, token, input.space);
     await this.sendCard(id, input.space, {
       approvalId: id,
       url,
@@ -690,13 +693,18 @@ export class ApprovalService {
     try {
       const handle = await this.d.messaging.sendCard(space, card);
       this.cards.set(id, { handle, space, card });
+      // Persist the handle: the in-process map dies with the process, and a card
+      // that cannot be edited leaves the user staring at a stale state.
+      await this.d.approvals.setCardHandle(id, handle.ref, space).catch((e: unknown) => {
+        this.d.log.warn({ err: (e as Error).name, approvalId: id }, 'card handle not saved');
+      });
     } catch (e) {
       this.d.log.error({ err: (e as Error).message, approvalId: id }, 'card send failed');
     }
   }
 
   private async updateCard(id: string, subcaption: string, trailingCaption?: string) {
-    const c = this.cards.get(id);
+    const c = await this.cardFor(id);
     if (!c) return;
     const next = { ...c.card, subcaption, ...(trailingCaption ? { trailingCaption } : {}) };
     try {
@@ -705,6 +713,30 @@ export class ApprovalService {
     } catch (e) {
       this.d.log.warn({ err: (e as Error).message, approvalId: id }, 'card edit failed');
     }
+  }
+
+  /**
+   * The card handle for an approval, from memory or (after a restart) from the row.
+   * Returns null when the card was never sent or its handle was not persisted.
+   */
+  private async cardFor(
+    id: string,
+  ): Promise<{ handle: CardHandle; space: SpaceRef; card: ApprovalCard } | null> {
+    const cached = this.cards.get(id);
+    if (cached) return cached;
+    const row = await this.d.approvals.get(id);
+    if (!row?.cardRef || !row.cardSpace) return null;
+    const space = row.cardSpace as SpaceRef;
+    const card: ApprovalCard = {
+      approvalId: row.id,
+      url: this.cardUrl(row.id, '', space),
+      caption: row.title,
+      subcaption: row.amountDisplay,
+      live: true,
+    };
+    const recovered = { handle: { approvalId: row.id, ref: row.cardRef }, space, card };
+    this.cards.set(id, recovered);
+    return recovered;
   }
 
   // ---------- card-token authenticated operations ----------
@@ -825,8 +857,27 @@ export class ApprovalService {
       { deviceId: device.id },
     );
     if (row.kind === 'create_bot') {
+      // Activate the bot BEFORE marking the approval settled. The other order left a
+      // settled approval with no bot behind it whenever activation threw, and nothing
+      // retried it. If activation fails, the approval fails honestly instead.
+      try {
+        await this.d.onBotApproved?.(row.id);
+      } catch (e) {
+        this.d.log.error({ approvalId: row.id, err: (e as Error).name }, 'bot activation failed');
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'signed',
+          'failed',
+          'bot activation failed',
+          {},
+          { error: (e as Error).name },
+        );
+        await this.d.mood.on(row.userId, 'approval_failed');
+        await this.updateCard(row.id, 'that did not go through. nothing was changed.');
+        return { status: 'failed' };
+      }
       await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
-      await this.d.onBotApproved?.(row.id);
       await this.d.mood.on(row.userId, 'bot_created');
       await this.updateCard(row.id, 'live');
       return { status: 'settled' };
@@ -930,7 +981,15 @@ export class ApprovalService {
       'delegate action verified',
     );
     await this.updateCard(row.id, 'sending…');
-    const relay = await this.d.chain.relay(dto, body.signedDelegateAction);
+    let relay: Awaited<ReturnType<ChainPort['relay']>>;
+    try {
+      relay = await this.d.chain.relay(dto, body.signedDelegateAction);
+    } catch (e) {
+      // A throw here (RPC error, malformed deposit, crash mid-call) used to leave the
+      // row `signed` with its ledger reservation held and nothing to sweep it.
+      this.d.log.error({ approvalId: row.id, err: (e as Error).name }, 'relay threw');
+      relay = { ok: false, reason: `RELAY_THREW: ${(e as Error).name}` };
+    }
     if (!relay.ok) {
       await this.d.approvals.transition(
         row.id,
@@ -1040,9 +1099,18 @@ export class ApprovalService {
       const dry = events.some((e) => e.reason === 'relayed (dry run)');
       const dep = investDepositAddress(row.actions as NearAction[]);
       if (!dry) {
-        // a live swap only settles on the swap's own status, never on the deposit alone
-        if (!this.d.invest || !dep) return 'relayed';
-        return this.refreshSwap(row, dep);
+        // A live swap only settles on the swap's own status, never on the deposit
+        // alone. If the swap cannot be followed (invest off, no deposit address),
+        // the deposit still landed: settle it rather than pinning the row at
+        // `relayed` forever, which would hold the reservation open indefinitely.
+        if (!this.d.invest || !dep) {
+          this.d.log.warn(
+            { approvalId: id, investWired: Boolean(this.d.invest), hasDeposit: Boolean(dep) },
+            'invest settled on deposit; swap status unavailable',
+          );
+        } else {
+          return this.refreshSwap(row, dep);
+        }
       }
     }
     if (s === 'settled') {
@@ -1106,5 +1174,39 @@ export class ApprovalService {
     const due = await this.d.approvals.pendingExpiredBefore(this.d.now());
     for (const r of due) if (!isTerminal(r.status)) await this.expire(r);
     return due.length;
+  }
+
+  /**
+   * Reconcile approvals stuck in `signed`. A row lands there after the device
+   * signature verified and the CAS succeeded, so the money may or may not have
+   * moved; nothing else sweeps this state. We release the reservation and fail the
+   * row so the user's daily limit is not held hostage by a dead relay call. The
+   * delegate action carries its own maxBlockHeight, so a late relay cannot double-spend.
+   */
+  async reconcileStuckSigned(olderThanMs = 15 * 60_000): Promise<number> {
+    const cutoff = new Date(this.d.now().getTime() - olderThanMs);
+    const rows = await this.d.approvals.signedOlderThan(cutoff);
+    let fixed = 0;
+    for (const row of rows) {
+      try {
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'signed',
+          'failed',
+          'relay never reported back; reservation released',
+        );
+        await this.d.ledger.setStatusForApproval(row.id, 'released');
+        await this.d.mood.on(row.userId, 'approval_failed');
+        await this.updateCard(row.id, 'failed, nothing was sent');
+        fixed += 1;
+      } catch (e) {
+        this.d.log.warn(
+          { approvalId: row.id, err: (e as Error).name },
+          'stuck-signed reconcile failed',
+        );
+      }
+    }
+    return fixed;
   }
 }

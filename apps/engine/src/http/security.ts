@@ -58,16 +58,55 @@ export function rateLimit(
   };
 }
 
+/**
+ * CSP for the no-install web pages (/setup, /a/:id). The default `default-src 'none'`
+ * blocks the page's own bundle, which left every setup and approval link blank.
+ * These pages are same-origin only: their scripts, styles and API calls all come
+ * from this host, so 'self' is the whole allowance. Still no inline script, no
+ * third-party origin, no framing.
+ */
+export const WEB_PAGE_CSP =
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+  "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; " +
+  "frame-ancestors 'none'";
+
+/** True for the two routes that serve the built web app (setup + approval pages). */
+export function isWebPagePath(path: string): boolean {
+  return path === '/setup' || path.startsWith('/a/');
+}
+
+/** Applies the SPA policy to the routes that serve the built web app. */
+export function webPageCsp(): MiddlewareHandler {
+  return async (c, next) => {
+    await next();
+    c.header('Content-Security-Policy', WEB_PAGE_CSP);
+    // The rest of the strict header set still applies to these pages.
+    c.header('X-Frame-Options', 'DENY');
+    c.header('Referrer-Policy', 'no-referrer');
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('Cross-Origin-Resource-Policy', 'same-origin');
+    c.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  };
+}
+
 export function securityMiddleware(opts: { maxBodyBytes: number }): MiddlewareHandler[] {
+  const headers = secureHeaders({
+    strictTransportSecurity: 'max-age=63072000; includeSubDomains; preload',
+    xFrameOptions: 'DENY',
+    referrerPolicy: 'no-referrer',
+    contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
+    crossOriginResourcePolicy: 'same-origin',
+  });
+  // secureHeaders writes its CSP after the handler runs, so a later middleware
+  // cannot override it. The no-install pages need their own policy, so they skip
+  // this one and get it from webPageCsp() instead.
+  const conditionalHeaders: MiddlewareHandler = async (c, next) => {
+    if (isWebPagePath(c.req.path)) return next();
+    return headers(c, next);
+  };
   return [
     requestId({ limitLength: 64 }),
-    secureHeaders({
-      strictTransportSecurity: 'max-age=63072000; includeSubDomains; preload',
-      xFrameOptions: 'DENY',
-      referrerPolicy: 'no-referrer',
-      contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
-      crossOriginResourcePolicy: 'same-origin',
-    }),
+    conditionalHeaders,
     bodyLimit({
       maxSize: opts.maxBodyBytes,
       onError: (c) => c.json({ error: 'payload_too_large' }, 413),

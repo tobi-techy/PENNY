@@ -142,6 +142,11 @@ public enum CardPhase: Equatable, Sendable {
 
 extension CardContent {
     /// Builds the card for an engine Approval. `trailing` is usually the quote countdown ("1:55").
+    ///
+    /// Row budget: money cards lead with the three facts people check before paying
+    /// (what you pay, what you get, the fee). Write cards are different: the Face ID
+    /// signature seals every argument, so the card has to show them all, otherwise the
+    /// user approves a payload they never saw. The engine caps write facts at 8.
     public init(approval: Approval, trailing: String) {
         let kind = CardKind(approval.kind)
         let verb: String
@@ -152,16 +157,22 @@ extension CardContent {
         case .errand: verb = "Hire with Face ID"; foot = "View details ›"
         default: verb = "Approve with Face ID"; foot = "View details ›"
         }
+        let shown: [Fact] = approval.kind == .write
+            ? Array(approval.facts.prefix(Self.writeRowLimit))
+            : Array(approval.facts.prefix(3))
         self.init(
             kind: kind,
             trailing: trailing,
             meta: approval.title,
             headline: approval.amountDisplay,
-            rows: approval.facts.prefix(3).map(CardRow.init(fact:)),
+            rows: shown.map(CardRow.init(fact:)),
             buttons: [CardButton(verb, style: .faceID, action: .approve)],
             foot: foot
         )
     }
+
+    /// Matches the engine's write-facts cap (MAX_ARG_FACTS + App/Action/More).
+    public static let writeRowLimit = 8
 }
 
 extension CardRow {
