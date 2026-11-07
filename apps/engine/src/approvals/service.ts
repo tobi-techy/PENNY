@@ -271,7 +271,7 @@ export class ApprovalService {
     if (!user?.accountId || !device) {
       return {
         decision: 'needs_more_info',
-        reasons: ['Finish setting up Penny on your iPhone first.'],
+        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
       };
     }
     const extra: Partial<GuardContext> = {};
@@ -436,7 +436,7 @@ export class ApprovalService {
     if (!user?.accountId || !device) {
       return {
         decision: 'needs_more_info',
-        reasons: ['Finish setting up Penny on your iPhone first.'],
+        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
       };
     }
     const provisional: MoneyPlan = {
@@ -620,7 +620,7 @@ export class ApprovalService {
     if (!user?.accountId || !device) {
       return {
         decision: 'needs_more_info',
-        reasons: ['Finish setting up Penny on your iPhone first.'],
+        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
       };
     }
     if (!this.d.executeWrite) {

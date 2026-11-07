@@ -55,13 +55,24 @@ function post(body: string, opts: { ts?: number; sig?: string; webhookId?: strin
 }
 
 describe('POST /v1/photon/webhook', () => {
-  test('valid delivery -> 200 fast, then onboarding text with an enroll code', async () => {
+  test('valid delivery -> 200 fast, then welcome text and a separate setup link', async () => {
     const res = await post(event('spc-msg-1', 'hi penny'));
     expect(res.status).toBe(200);
     await tick();
-    const last = t.messaging.texts.at(-1)?.text ?? '';
-    expect(last).toMatch(/penny:\/\/enroll\?code=[A-Z2-9]{8}/);
-    expect(last).toMatch(/enter [A-Z2-9]{8}; it works once/);
+    const texts = t.messaging.texts.map((x) => x.text);
+    expect(texts.at(-2)).toContain('just talk to me here');
+    expect(texts.at(-1)).toMatch(/^https:\/\/penny\.test\/setup#code=[A-Z2-9]{8}$/);
+  });
+
+  test('no install needed: an unenrolled user who keeps texting reaches the crew', async () => {
+    await post(event('spc-msg-1b', 'hi penny'));
+    await tick();
+    const before = t.messaging.texts.length;
+    const res = await post(event('spc-msg-1c', 'what can you do?'));
+    expect(res.status).toBe(200);
+    await tick();
+    expect(t.messaging.texts.length).toBeGreaterThan(before);
+    expect(t.messaging.texts.at(-1)?.text).not.toContain('/setup#code=');
   });
 
   test('duplicate delivery (same webhook id + message id) is processed once', async () => {

@@ -5,6 +5,7 @@
     "includes": [
       "**",
       "!**/node_modules",
+      "!**/dist",
       "!**/drizzle/meta",
       "!ios",
       "!packages/chain",

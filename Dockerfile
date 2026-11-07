@@ -4,9 +4,10 @@ WORKDIR /app
 COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/engine ./apps/engine
-COPY apps/web/package.json ./apps/web/package.json
+COPY apps/web ./apps/web
 COPY souls ./souls
-RUN bun install --frozen-lockfile --production || bun install --production
+RUN bun install --frozen-lockfile || bun install
+RUN cd apps/web && bun run build
 ENV PORT=3000 NODE_ENV=production
 EXPOSE 3000
 USER bun

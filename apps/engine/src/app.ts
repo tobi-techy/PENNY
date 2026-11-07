@@ -1,5 +1,8 @@
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { ApprovalService, type Clock } from './approvals/service.ts';
 import type { PrivacyGate } from './brain/attestation.ts';
 import { BotService } from './brain/bots.ts';
@@ -162,6 +165,29 @@ export function createEngine(d: EngineDeps) {
     rateLimit(ipLimiter, (c) => `ip:${clientIp(c)}`),
   );
   app.onError(errorHandler(d.log));
+
+  // No-install web pages (apps/web build): /setup creates a browser key,
+  // /a/:id is the approval page. Served only when the build exists.
+  const webDist = join(process.cwd(), 'apps/web/dist');
+  const spa = async (c: Context) => {
+    const index = join(webDist, 'index.html');
+    if (!existsSync(index)) return c.json({ error: 'web_not_built' }, 503);
+    return c.html(await readFile(index, 'utf8'));
+  };
+  app.get('/setup', spa);
+  app.get('/a/:id', spa);
+  app.get('/assets/:file', async (c) => {
+    const name = c.req.param('file').replace(/[^A-Za-z0-9._-]/g, '');
+    const file = join(webDist, 'assets', name);
+    if (!existsSync(file)) return c.json({ error: 'not_found' }, 404);
+    const type = name.endsWith('.js')
+      ? 'text/javascript'
+      : name.endsWith('.css')
+        ? 'text/css'
+        : 'application/octet-stream';
+    return new Response(await readFile(file), { headers: { 'content-type': type } });
+  });
+
   app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
   const inboundDeps = {
@@ -172,6 +198,7 @@ export function createEngine(d: EngineDeps) {
     messaging: d.messaging,
     userLimiter,
     log: d.log,
+    publicBaseUrl: d.publicBaseUrl,
   };
   app.route(
     '/',

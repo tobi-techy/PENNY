@@ -144,7 +144,7 @@ export class Crew {
     userId: string,
     space: SpaceRef,
     userText: string,
-    opts: { conversationId?: string } = {},
+    opts: { conversationId?: string; enrolled?: boolean } = {},
   ): Promise<CrewReply> {
     const started = Date.now();
     await this.d.mood.on(userId, 'message_received');
@@ -211,7 +211,7 @@ export class Crew {
       const run = () =>
         generateText({
           model: this.d.chat,
-          system: `${bot.soulMd}\n\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}\n${HOUSE_RULES}`,
+          system: `${bot.soulMd}\n\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}${opts.enrolled === false ? '\nThis user has not set up approvals yet (no app needed; Penny already sent them a setup link). Chat, read and life tasks work normally. If something needs approval, say Penny sent a setup link to tap first, then ask them to try again.' : ''}\n${HOUSE_RULES}`,
           messages: buildHistoryMessages(history, userText),
           tools,
           stopWhen: stepCountIs(5),

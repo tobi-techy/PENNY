@@ -191,7 +191,9 @@ export class BotService {
     if (!card)
       return {
         ok: false,
-        reasons: ['Finish setting up Penny on your iPhone first, then I can make this bot.'],
+        reasons: [
+          'Set up approvals first (tap the setup link Penny sent you), then I can make this bot.',
+        ],
       };
     await this.d.bots.insert({ ...base, status: 'pending_approval', approvalId: card.approvalId });
     return {

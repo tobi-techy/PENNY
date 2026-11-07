@@ -15,6 +15,8 @@ export type InboundDeps = {
   messaging: MessagingPort;
   userLimiter: RateLimiter;
   log: Logger;
+  /** Engine public base URL; the no-install setup page lives at /setup on it. */
+  publicBaseUrl: string;
 };
 
 /** Handles one verified, deduped Spectrum `messages` event. Runs after the 200 is sent. */
@@ -44,18 +46,34 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
 
   const device = await d.users.activeDevice(user.id);
   if (!device) {
-    const { code } = await d.enroll.issue(user.id, m.sender.id);
-    const reply = `hey 👋 i'm penny. i help with the everyday stuff — inbox, bills, errands, money, the lot. tap this to link your iPhone: penny://enroll?code=${code} — no typing. no app yet? install Penny first, then tap again. (or open the app and enter ${code}; it works once, for 10 minutes.)`;
-    await d.messaging.sendText(space, reply);
-    await d.messages.add({
-      conversationId,
-      direction: 'outbound',
-      text: reply.replace(code, '[code]'),
-    });
+    // No install needed to talk to Penny. The first text gets a welcome plus
+    // a separate setup link (its own message, nothing to type); after that
+    // the crew answers normally. The setup link only matters when an action
+    // needs approval.
+    const prior = await d.messages.recent(conversationId, user.id, 5);
+    const welcomed = prior.some((p) => p.direction === 'outbound');
+    if (!welcomed) {
+      const { code } = await d.enroll.issue(user.id, m.sender.id);
+      const base = d.publicBaseUrl.replace(/\/$/, '');
+      await d.messaging.sendText(
+        space,
+        `hey 👋 i'm penny. i help with the everyday stuff — inbox, bills, errands, money, the lot. just talk to me here.`,
+      );
+      await d.messaging.sendText(space, `${base}/setup#code=${code}`);
+      await d.messages.add({
+        conversationId,
+        direction: 'outbound',
+        text: 'welcome + setup link [code]',
+      });
+      return;
+    }
+    const r = await d.crew.handle(user.id, space, text, { conversationId, enrolled: false });
+    await d.messaging.sendText(space, r.text);
+    await d.messages.add({ conversationId, direction: 'outbound', text: r.text });
     return;
   }
 
-  const r = await d.crew.handle(user.id, space, text, { conversationId });
+  const r = await d.crew.handle(user.id, space, text, { conversationId, enrolled: true });
   await d.messaging.sendText(space, r.text);
   await d.messages.add({ conversationId, direction: 'outbound', text: r.text });
 }
