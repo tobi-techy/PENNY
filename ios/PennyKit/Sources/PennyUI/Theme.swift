@@ -47,6 +47,8 @@ public struct CardPalette: Equatable, Sendable {
     public static let pink = CardPalette(art: Color(hex: 0xFA78B2), tagBackground: Color(hex: 0x3A1428), tagText: Color(hex: 0xFBB3D3))
     public static let red = CardPalette(art: Color(hex: 0xFC5855), tagBackground: Color(hex: 0x3A1214), tagText: Color(hex: 0xFF9C9C))
     public static let mint = CardPalette(art: Color(hex: 0x8FE4CC), tagBackground: Color(hex: 0x0A2E27), tagText: Color(hex: 0x8FE4CC))
+    public static let indigo = CardPalette(art: Color(hex: 0x8B8CF0), tagBackground: Color(hex: 0x1B1B3A), tagText: Color(hex: 0xBEBFFA))
+    public static let amber = CardPalette(art: Color(hex: 0xE8C766), tagBackground: Color(hex: 0x2E2508), tagText: Color(hex: 0xF3DD9C))
     public static let muted = CardPalette(art: Color(hex: 0x4A5A6C), tagBackground: Color(hex: 0x151D27), tagText: Color(hex: 0xB1C3D8))
 }
 

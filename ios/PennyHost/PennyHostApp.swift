@@ -67,10 +67,20 @@ final class HostSession: ObservableObject {
         // Reuse the key from a failed attempt: the server may already have
         // created the account with it, and enroll answers the same enrollment
         // for the same key. Never delete it here — that would orphan the account.
-        let publicKey = try keys.generate(replacing: false)
-        let response = try await EngineClient(baseURL: baseURL).enroll(code: code, publicKey: publicKey)
+        var key = try keys.generate(replacing: false)
+        let client = EngineClient(baseURL: baseURL)
+        let response: EnrollResponse
+        do {
+            response = try await client.enroll(code: code, publicKey: key)
+        } catch PennyError.keyRevoked {
+            // The server confirmed this key was revoked (this iPhone was removed
+            // from Penny). It did not burn the code, so rotate the local key and
+            // retry once with the same code.
+            key = try keys.generate(replacing: true)
+            response = try await client.enroll(code: code, publicKey: key)
+        }
         config.saveEnrollment(response)
-        self.publicKey = publicKey
+        self.publicKey = key
         self.accountId = response.accountId
         self.deviceId = response.deviceId
         self.dryRun = response.status == "dry_run"

@@ -30,6 +30,8 @@ export const users = pgTable(
     handle: text('handle').notNull(), // iMessage handle (E.164 or email)
     slug: text('slug'), // <slug>.penny.near
     accountId: text('account_id'),
+    /** The account this user enrolled was only simulated (DRY_RUN=1). Replayed on enroll retries. */
+    enrolledDryRun: boolean('enrolled_dry_run').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('users_handle_uq').on(t.handle), uniqueIndex('users_slug_uq').on(t.slug)],
@@ -175,7 +177,9 @@ export const approvalEvents = pgTable(
     meta: jsonb('meta'),
     createdAt: createdAt(),
   },
-  (t) => [index('approval_events_apr_idx').on(t.approvalId, t.createdAt)],
+  // events() reads one approval's history in seq order; the old
+  // (approval_id, created_at) index cannot serve that sort (ties are random).
+  (t) => [index('approval_events_apr_seq_idx').on(t.approvalId, t.seq)],
 );
 
 export const guardPolicies = pgTable('guard_policies', {

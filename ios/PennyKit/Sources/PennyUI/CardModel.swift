@@ -2,7 +2,7 @@ import Foundation
 import PennyCore
 import SwiftUI
 
-/// The eight cards in design/card/family.html. Same anatomy; colour + crew mark say who's asking.
+/// The ten cards in design/card/family.html. Same anatomy; colour + crew mark say who's asking.
 public enum CardKind: String, CaseIterable, Sendable {
     case invest, send, bill, split, errand, guardBlock, pick, weekly, write, bot
 
@@ -11,10 +11,12 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .invest, .pick: return .blue
         case .send: return .green
         case .bill: return .orange
-        case .split, .write: return .purple
+        case .split: return .purple
         case .errand: return .pink
         case .guardBlock: return .red
-        case .weekly, .bot: return .mint
+        case .weekly: return .mint
+        case .write: return .indigo
+        case .bot: return .amber
         }
     }
 
@@ -39,7 +41,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .pick: return "◇ PICK ONE"
         case .weekly: return "● YOUR WEEK"
         case .write: return "✎ WRITE"
-        case .bot: return "✦ NEW BOT"
+        case .bot: return "✳ NEW BOT"
         }
     }
 

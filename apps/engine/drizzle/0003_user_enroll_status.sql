@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "enrolled_dry_run" boolean DEFAULT false NOT NULL;

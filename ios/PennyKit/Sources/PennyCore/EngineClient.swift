@@ -152,7 +152,16 @@ public struct EngineClient: Sendable {
             throw PennyError.network
         }
         guard let http = response as? HTTPURLResponse else { throw PennyError.network }
-        guard (200..<300).contains(http.statusCode) else { throw PennyError.http(status: http.statusCode) }
+        guard (200..<300).contains(http.statusCode) else {
+            // Enroll refuses a revoked device key with a named code so the app
+            // can rotate its local key instead of retrying a dead key forever.
+            if http.statusCode == 409,
+               let root = try? JSONParser.parse(data),
+               root["error"]?.stringValue == "key_revoked" {
+                throw PennyError.keyRevoked
+            }
+            throw PennyError.http(status: http.statusCode)
+        }
         return data
     }
 }

@@ -98,7 +98,10 @@ Mood changes words, tapbacks and card art only. It never changes a limit, a rout
 | Errand | pink `#FA78B2` | yes |
 | Guard block | red `#FC5855` | "Not me" / "Allow once" |
 | Weekly check-in | mint `#8FE4CC` | no (read-only) |
-| New bot | per the bot's colour | yes if it has write or money tools |
+| Write (post, email or message as you) | indigo `#8B8CF0` | yes |
+| New bot | amber `#E8C766` | yes if it has write or money tools |
+
+A bot's own cards use the bot's colour once it exists; the amber "new bot" card is the ask to create it.
 
 ### Crew tiles (chip on card, avatar in host app)
 Penny `#FF6B2C` · Invest `#6CCBFF` · Mail `#FFE45C` · Guard `#F6A8F0` · Finance `#5EE3A1`.
@@ -178,6 +181,6 @@ Same dark system as the cards. Four screens only:
 ## 10. Design files
 
 - `design/card/card.html`: the single card in four states (approved).
-- `design/card/family.html`: the eight card types (approved).
+- `design/card/family.html`: the ten card types (approved).
 - `brand/assets/`: mark and crew SVGs.
 - Renders: `penny-card-v1.png`, `penny-card-family-v1.png`.
