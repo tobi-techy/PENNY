@@ -2,9 +2,9 @@ import Foundation
 import PennyCore
 import SwiftUI
 
-/// The eight cards in design/card/family.html. Same anatomy; colour + crew mark say who's asking.
+/// The ten cards in design/card/family.html. Same anatomy; colour + crew mark say who's asking.
 public enum CardKind: String, CaseIterable, Sendable {
-    case invest, send, bill, split, errand, guardBlock, pick, weekly
+    case invest, send, bill, split, errand, guardBlock, pick, weekly, write, bot
 
     public var palette: CardPalette {
         switch self {
@@ -15,13 +15,15 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .errand: return .pink
         case .guardBlock: return .red
         case .weekly: return .mint
+        case .write: return .indigo
+        case .bot: return .amber
         }
     }
 
     public var crew: Crew {
         switch self {
         case .invest, .pick: return .invest
-        case .send, .split, .errand: return .penny
+        case .send, .split, .errand, .write, .bot: return .penny
         case .bill: return .mail
         case .guardBlock: return .guardian
         case .weekly: return .finance
@@ -38,6 +40,8 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .guardBlock: return "■ BLOCKED"
         case .pick: return "◇ PICK ONE"
         case .weekly: return "● YOUR WEEK"
+        case .write: return "✎ WRITE"
+        case .bot: return "✳ NEW BOT"
         }
     }
 
@@ -51,7 +55,8 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .send: self = .send
         case .payBill: self = .bill
         case .errand: self = .errand
-        case .createBot, .write: self = .invest
+        case .createBot: self = .bot
+        case .write: self = .write
         }
     }
 }

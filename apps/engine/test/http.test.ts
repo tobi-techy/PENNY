@@ -60,7 +60,8 @@ describe('POST /v1/photon/webhook', () => {
     expect(res.status).toBe(200);
     await tick();
     const last = t.messaging.texts.at(-1)?.text ?? '';
-    expect(last).toMatch(/enter [A-Z2-9]{8}\. it works once/);
+    expect(last).toMatch(/penny:\/\/enroll\?code=[A-Z2-9]{8}/);
+    expect(last).toMatch(/enter [A-Z2-9]{8}; it works once/);
   });
 
   test('duplicate delivery (same webhook id + message id) is processed once', async () => {
@@ -117,10 +118,16 @@ describe('POST /v1/photon/webhook', () => {
 });
 
 describe('POST /v1/devices/enroll', () => {
-  const enroll = (body: unknown, idem = idemKey()) =>
+  // Distinct IPs for tests that enroll more than a couple of times: the
+  // enroll limiter is 10/min per IP and shared across this file.
+  const enroll = (body: unknown, idem = idemKey(), ip?: string) =>
     t.engine.app.request('/v1/devices/enroll', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': idem },
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': idem,
+        ...(ip ? { 'x-forwarded-for': ip } : {}),
+      },
       body: JSON.stringify(body),
     });
 
@@ -139,6 +146,117 @@ describe('POST /v1/devices/enroll', () => {
       publicKeyEd25519: deviceKeys().publicKeyB64Url,
     });
     expect(second.status).toBe(401);
+  });
+
+  test('retry after a landed enroll: same key gets the same enrollment, a new key is refused', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15550202');
+    const keys = deviceKeys();
+    const first = await t.engine.services.enroll.issue(user.id, '+15550202');
+    const res = await enroll({ enrollCode: first.code, publicKeyEd25519: keys.publicKeyB64Url });
+    expect(res.status).toBe(201);
+    type EnrollOk = { userId: string; accountId: string; deviceId: string; status: string };
+    const body = (await res.json()) as EnrollOk;
+
+    // the response never reached the phone; Penny texts a fresh code
+    const second = await t.engine.services.enroll.issue(user.id, '+15550202');
+    const retry = await enroll({ enrollCode: second.code, publicKeyEd25519: keys.publicKeyB64Url });
+    expect(retry.status).toBe(201);
+    const retryBody = (await retry.json()) as EnrollOk;
+    // same enrollment, and the dry-run marker survives the retry
+    expect(retryBody).toEqual({ ...body, userId: user.id });
+    expect(retryBody.status).toBe('dry_run');
+
+    // a different key is still a second device
+    const third = await t.engine.services.enroll.issue(user.id, '+15550202');
+    const other = await enroll({
+      enrollCode: third.code,
+      publicKeyEd25519: deviceKeys().publicKeyB64Url,
+    });
+    expect(other.status).toBe(409);
+  });
+
+  test('a retry that encodes the same key differently is the same key', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15550203');
+    const keys = deviceKeys();
+    const first = await t.engine.services.enroll.issue(user.id, '+15550203');
+    const res = await enroll(
+      { enrollCode: first.code, publicKeyEd25519: keys.publicKeyB64Url },
+      idemKey(),
+      '198.51.100.31',
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { accountId: string };
+
+    // Same 32 bytes, different (nonzero) pad bits in the last base64url char.
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const last = keys.publicKeyB64Url.at(-1) as string;
+    const variant = `${keys.publicKeyB64Url.slice(0, -1)}${alphabet[alphabet.indexOf(last) ^ 1]}`;
+    expect(variant).not.toBe(keys.publicKeyB64Url);
+    expect(Buffer.from(variant, 'base64url')).toEqual(
+      Buffer.from(keys.publicKeyB64Url, 'base64url'),
+    );
+
+    const second = await t.engine.services.enroll.issue(user.id, '+15550203');
+    const retry = await enroll(
+      { enrollCode: second.code, publicKeyEd25519: variant },
+      idemKey(),
+      '198.51.100.31',
+    );
+    expect(retry.status).toBe(201);
+    expect(((await retry.json()) as { accountId: string }).accountId).toBe(body.accountId);
+  });
+
+  test('incomplete enroll (device landed, account did not) is completed by a retry', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15550204');
+    const keys = deviceKeys();
+    // The orphaned state older two-step enrolls could leave: active device, no account.
+    const device = await t.engine.repos.users.addDevice(user.id, keys.publicKeyB64Url);
+    const { code } = await t.engine.services.enroll.issue(user.id, '+15550204');
+    const res = await enroll(
+      { enrollCode: code, publicKeyEd25519: keys.publicKeyB64Url },
+      idemKey(),
+      '198.51.100.32',
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      accountId: string;
+      deviceId: string;
+      status: string;
+    };
+    expect(body.deviceId).toBe(device.id);
+    expect(body.accountId).toMatch(/^p[a-z2-9]{9}\.penny\.near$/);
+    const stored = await t.engine.repos.users.byId(user.id);
+    expect(stored?.accountId).toBe(body.accountId);
+  });
+
+  test('a revoked key gets key_revoked and the code stays usable', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15550205');
+    const keys = deviceKeys();
+    const first = await t.engine.services.enroll.issue(user.id, '+15550205');
+    const res = await enroll(
+      { enrollCode: first.code, publicKeyEd25519: keys.publicKeyB64Url },
+      idemKey(),
+      '198.51.100.33',
+    );
+    const body = (await res.json()) as { deviceId: string };
+    await t.engine.repos.users.revokeDevice(body.deviceId);
+
+    const { code } = await t.engine.services.enroll.issue(user.id, '+15550205');
+    const denied = await enroll(
+      { enrollCode: code, publicKeyEd25519: keys.publicKeyB64Url },
+      idemKey(),
+      '198.51.100.33',
+    );
+    expect(denied.status).toBe(409);
+    expect(await denied.json()).toEqual({ error: 'key_revoked' });
+
+    // the same code still works after the app rotates to a new key
+    const rotated = await enroll(
+      { enrollCode: code, publicKeyEd25519: deviceKeys().publicKeyB64Url },
+      idemKey(),
+      '198.51.100.33',
+    );
+    expect(rotated.status).toBe(201);
   });
 
   test('expired code rejected (10 min TTL); codes are stored hashed', async () => {

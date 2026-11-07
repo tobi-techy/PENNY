@@ -24,5 +24,6 @@ let package = Package(
             dependencies: ["PennyCore"],
             resources: [.copy("Fixtures")]
         ),
+        .testTarget(name: "PennyUITests", dependencies: ["PennyUI"]),
     ]
 )

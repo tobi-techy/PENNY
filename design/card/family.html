@@ -36,12 +36,12 @@ canvas{display:block;width:100%;height:88px}
 .bar{height:3px;background:#1E2A38;border-radius:3px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%}
 .note{font-size:12px;color:#546475;line-height:1.6;margin-top:12px}
 </style></head><body>
-<div class="top"><div><div class="eyebrow">Penny · iMessage cards · family v1</div><h1>Eight cards, one shape.</h1></div>
+<div class="top"><div><div class="eyebrow">Penny · iMessage cards · family v1</div><h1>Ten cards, one shape.</h1></div>
 <div class="sub">Same anatomy every time: art, tag, what it is, the number, one or two facts, one action. The colour and the crew mark tell you who's asking.</div></div>
 <div class="grid" id="g"></div>
 <script>
 const A='../../brand/assets/';
-const C={blue:['#6EA1D6','#0E2238','#A9C8EA'],green:['#4FD57F','#0A2E1C','#8FE4B0'],orange:['#FEA247','#33210B','#FFC98E'],purple:['#B77DF8','#24163A','#D4B3FB'],pink:['#FA78B2','#3A1428','#FBB3D3'],red:['#FC5855','#3A1214','#FF9C9C'],mint:['#8FE4CC','#0A2E27','#8FE4CC']};
+const C={indigo:['#8B8CF0','#1B1B3A','#BEBFFA'],amber:['#E8C766','#2E2508','#F3DD9C'],blue:['#6EA1D6','#0E2238','#A9C8EA'],green:['#4FD57F','#0A2E1C','#8FE4B0'],orange:['#FEA247','#33210B','#FFC98E'],purple:['#B77DF8','#24163A','#D4B3FB'],pink:['#FA78B2','#3A1428','#FBB3D3'],red:['#FC5855','#3A1214','#FF9C9C'],mint:['#8FE4CC','#0A2E27','#8FE4CC']};
 const crew={penny:['penny-white.svg','#FF6B2C'],invest:['bot-invest.svg','#6CCBFF'],mail:['bot-mail.svg','#FFE45C'],guard:['bot-guard.svg','#F6A8F0'],finance:['bot-finance.svg','#5EE3A1']};
 const face=c=>`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M9 9v1M15 9v1M12 9v4h-1M9 16c1.6 1.3 4.4 1.3 6 0"/></svg>`;
 const F=t=>`<div class="btn">${face('#111519')}${t}</div>`;
@@ -62,6 +62,10 @@ const cards=[
   body:`<div class="opt on">Calm · ETH Momentum<span>+6.2% 30d</span></div><div class="opt">Balanced · Majors<span>+9.8% 30d</span></div><div class="opt">Bold · SOL Memes<span>+31% 30d</span></div>`,foot:'Why these? ›',note:'Invest\'s shortlist. Tap one and it turns into an Invest card.'},
  {n:'08',t:'Weekly check-in',c:'mint',who:'finance',tag:'● YOUR WEEK',right:'Nov 2 to 8',meta:'Portfolio up this week',amt:'+$3.12',
   body:`<div class="dl"><div style="display:block"><span style="display:flex;justify-content:space-between"><span>Spent</span><b>$142 of $200</b></span><div class="bar"><i style="width:71%;background:#8FE4CC"></i></div></div><div><span>Invested</span><b>$50</b></div><div><span>Late fees dodged</span><b>1</b></div></div><div class="btn out">See the full week</div>`,foot:'',note:'Finance\'s Sunday note. The one card that\'s just for reading.'},
+ {n:'09',t:'Write',c:'indigo',who:'penny',tag:'✎ WRITE',right:'1:55',meta:'Post to X · drafted by Penny',amt:'no money',sm:1,
+  body:`<div class="dl"><div><span>Where</span><b>X · @tobi</b></div><div><span>Draft</span><b>Ready to read</b></div></div>`+F('Approve with Face ID'),foot:'Read the whole thing ›',note:'Says or posts something as you. No money moves; Face ID says the words are yours.'},
+ {n:'10',t:'New bot',c:'amber',who:'penny',tag:'✳ NEW BOT',right:'10 min',meta:'Meal planner · a new crew member',amt:'up to $40/day',sm:1,
+  body:`<div class="dl"><div><span>Tools</span><b>Calendar, grocery</b></div><div><span>Can</span><b>Read + spend your cap</b></div></div>`+F('Create with Face ID'),foot:'Change what it can do ›',note:'Shows the bot\'s tools and cap before it exists. Its own cards use its colour after this.'},
 ];
 document.getElementById('g').innerHTML=cards.map((k,i)=>{const [col,bg,fg]=C[k.c];const [svg,tile]=crew[k.who];
 return `<div class="col"><div class="eyebrow"><b>${k.n}</b>${k.t}</div><div class="card"><canvas data-c="${col}" data-i="${i}"></canvas><div class="chip" style="background:${tile}"><img src="${A+svg}"></div><div class="cb">

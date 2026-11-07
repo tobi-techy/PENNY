@@ -45,7 +45,7 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
   const device = await d.users.activeDevice(user.id);
   if (!device) {
     const { code } = await d.enroll.issue(user.id, m.sender.id);
-    const reply = `hey 👋 i'm penny. want me to look after your money? first, install my card on your phone: open the Penny app and enter ${code}. it works once, for 10 minutes.`;
+    const reply = `hey 👋 i'm penny. i help with the everyday stuff — inbox, bills, errands, money, the lot. tap this to link your iPhone: penny://enroll?code=${code} — no typing. no app yet? install Penny first, then tap again. (or open the app and enter ${code}; it works once, for 10 minutes.)`;
     await d.messaging.sendText(space, reply);
     await d.messages.add({
       conversationId,

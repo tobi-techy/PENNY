@@ -138,7 +138,7 @@ if (skipFactory) {
     console.log('added device key to app account:', nearPub);
     tempDeviceKey = nearPub;
   }
-  await engine.repos.users.setAccount(user.id, 'live', appId);
+  await engine.repos.users.setAccount(user.id, 'live', appId, false);
   await engine.repos.users.addDevice(user.id, devicePub);
   console.log('skip-factory: user account is the funded app account', appId);
 } else {

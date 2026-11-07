@@ -48,8 +48,87 @@ export class UsersRepo {
     return raced;
   }
 
-  async setAccount(userId: string, slug: string, accountId: string): Promise<void> {
-    await this.db.update(users).set({ slug, accountId }).where(eq(users.id, userId));
+  async setAccount(
+    userId: string,
+    slug: string,
+    accountId: string,
+    dryRun: boolean,
+  ): Promise<void> {
+    await this.db
+      .update(users)
+      .set({ slug, accountId, enrolledDryRun: dryRun })
+      .where(eq(users.id, userId));
+  }
+
+  /**
+   * Land a new device and its account together. Two separate writes left a
+   * window where a crash enrolled the device but left account_id null, which
+   * made every retry look like "already enrolled" with no account to return.
+   */
+  async enrollDeviceAndAccount(
+    userId: string,
+    publicKey: string,
+    slug: string,
+    accountId: string,
+    dryRun: boolean,
+    attest?: { keyId: string; publicKeyXY: string },
+  ): Promise<DeviceRow> {
+    return this.db.transaction(async (tx) => {
+      const [d] = await tx
+        .insert(devices)
+        .values({
+          id: newId('dev'),
+          userId,
+          publicKey,
+          ...(attest
+            ? {
+                appAttest: attest.keyId,
+                appAttestKeyId: attest.keyId,
+                appAttestPublicKey: attest.publicKeyXY,
+                appAttestVerified: true,
+              }
+            : {}),
+        })
+        .returning();
+      if (!d) throw new Error('device insert failed');
+      const updated = await tx
+        .update(users)
+        .set({ slug, accountId, enrolledDryRun: dryRun })
+        .where(eq(users.id, userId))
+        .returning({ id: users.id });
+      if (updated.length !== 1) throw new Error('user missing during enroll');
+      return d;
+    });
+  }
+
+  async deviceByPublicKey(publicKey: string): Promise<DeviceRow | null> {
+    const [d] = await this.db
+      .select()
+      .from(devices)
+      .where(eq(devices.publicKey, publicKey))
+      .limit(1);
+    return d ?? null;
+  }
+
+  /**
+   * Replace a device's App Attest credential. A reinstall clears the cached
+   * key id but keeps the Keychain device key, so a retry can carry a new
+   * attestation key; assertions from then on must verify against the new one.
+   */
+  async refreshAttestation(
+    deviceId: string,
+    attest: { keyId: string; publicKeyXY: string },
+  ): Promise<void> {
+    await this.db
+      .update(devices)
+      .set({
+        appAttest: attest.keyId,
+        appAttestKeyId: attest.keyId,
+        appAttestPublicKey: attest.publicKeyXY,
+        appAttestVerified: true,
+        appAttestCounter: 0,
+      })
+      .where(eq(devices.id, deviceId));
   }
 
   async deviceById(deviceId: string): Promise<DeviceRow | null> {
@@ -163,6 +242,25 @@ export class UsersRepo {
       )
       .limit(1);
     return Boolean(r);
+  }
+
+  /** The user a live, unused enroll code is bound to; does not consume it. */
+  async enrollCodeUser(
+    codeHash: string,
+    now: Date,
+  ): Promise<{ userId: string; handle: string } | null> {
+    const [r] = await this.db
+      .select({ userId: enrollCodes.userId, handle: enrollCodes.handle })
+      .from(enrollCodes)
+      .where(
+        and(
+          eq(enrollCodes.codeHash, codeHash),
+          isNull(enrollCodes.usedAt),
+          gt(enrollCodes.expiresAt, now),
+        ),
+      )
+      .limit(1);
+    return r ?? null;
   }
 
   async consumeEnrollCode(

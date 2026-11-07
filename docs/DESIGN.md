@@ -98,7 +98,10 @@ Mood changes words, tapbacks and card art only. It never changes a limit, a rout
 | Errand | pink `#FA78B2` | yes |
 | Guard block | red `#FC5855` | "Not me" / "Allow once" |
 | Weekly check-in | mint `#8FE4CC` | no (read-only) |
-| New bot | per the bot's colour | yes if it has write or money tools |
+| Write (post, email or message as you) | indigo `#8B8CF0` | yes |
+| New bot | amber `#E8C766` | yes if it has write or money tools |
+
+A bot's own cards use the bot's colour once it exists; the amber "new bot" card is the ask to create it.
 
 ### Crew tiles (chip on card, avatar in host app)
 Penny `#FF6B2C` · Invest `#6CCBFF` · Mail `#FFE45C` · Guard `#F6A8F0` · Finance `#5EE3A1`.
@@ -122,8 +125,8 @@ Rules:
 ## 5. Key flows
 
 ### First run (enrollment)
-1. You text Penny. Penny: "hey 👋 I'm penny. want me to look after your money? first, install my card on your phone."
-2. TestFlight link → host app → "Enter the code Penny texted you" (8 characters, 10 min).
+1. You text Penny. Penny: "hey 👋 I'm penny. I help with the everyday stuff — inbox, bills, errands, money, the lot. Tap this to link your iPhone."
+2. The link opens the host app with the code filled in (8 characters, 10 min, works once). No app yet? Install first, then tap again; typing the code also works.
 3. Phone makes your key behind Face ID. Penny creates `you.penny.near` with that key as the only full-access key.
 4. Penny: "you're set. your keys live on your phone, not with me."
 
@@ -178,6 +181,6 @@ Same dark system as the cards. Four screens only:
 ## 10. Design files
 
 - `design/card/card.html`: the single card in four states (approved).
-- `design/card/family.html`: the eight card types (approved).
+- `design/card/family.html`: the ten card types (approved).
 - `brand/assets/`: mark and crew SVGs.
 - Renders: `penny-card-v1.png`, `penny-card-family-v1.png`.

@@ -152,7 +152,16 @@ public struct EngineClient: Sendable {
             throw PennyError.network
         }
         guard let http = response as? HTTPURLResponse else { throw PennyError.network }
-        guard (200..<300).contains(http.statusCode) else { throw PennyError.http(status: http.statusCode) }
+        guard (200..<300).contains(http.statusCode) else {
+            // Enroll refuses a revoked device key with a named code so the app
+            // can rotate its local key instead of retrying a dead key forever.
+            if http.statusCode == 409,
+               let root = try? JSONParser.parse(data),
+               root["error"]?.stringValue == "key_revoked" {
+                throw PennyError.keyRevoked
+            }
+            throw PennyError.http(status: http.statusCode)
+        }
         return data
     }
 }
@@ -168,5 +177,15 @@ public enum EnrollCode {
     /// Uppercases and drops anything outside the alphabet (spaces, dashes, look-alikes), max 8 chars.
     public static func normalize(_ input: String) -> String {
         String(input.uppercased().filter { alphabet.contains($0) }.prefix(8))
+    }
+
+    /// Code from a `penny://enroll?code=…` tap in Penny's text. Nothing else is accepted.
+    public static func fromLink(_ url: URL) -> String? {
+        guard url.scheme == "penny", url.host == "enroll",
+              let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                  .queryItems?.first(where: { $0.name == "code" })?.value
+        else { return nil }
+        let code = normalize(raw)
+        return isValid(code) ? code : nil
     }
 }

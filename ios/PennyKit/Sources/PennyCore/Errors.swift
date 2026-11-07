@@ -4,6 +4,7 @@ public enum PennyError: Error, Equatable, LocalizedError {
     case invalidInput(String)
     case invalidResponse(String)
     case http(status: Int)
+    case keyRevoked
     case network
     case expired
     case notPending
@@ -24,6 +25,7 @@ public enum PennyError: Error, Equatable, LocalizedError {
         case let .http(status) where status == 404: return "Penny can't find this request anymore."
         case let .http(status) where status == 409: return "This request was already handled."
         case .http: return "Penny's server had a problem. Try again in a moment."
+        case .keyRevoked: return "This iPhone was removed from Penny. Link it again with a new code."
         case .network: return "No connection. Try again when you're online."
         case .expired: return "The quote expired. Ask Penny for a fresh one."
         case .notPending: return "This request was already handled."
