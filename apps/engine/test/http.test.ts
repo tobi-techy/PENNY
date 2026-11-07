@@ -60,7 +60,8 @@ describe('POST /v1/photon/webhook', () => {
     expect(res.status).toBe(200);
     await tick();
     const last = t.messaging.texts.at(-1)?.text ?? '';
-    expect(last).toMatch(/enter [A-Z2-9]{8}\. it works once/);
+    expect(last).toMatch(/penny:\/\/enroll\?code=[A-Z2-9]{8}/);
+    expect(last).toMatch(/enter [A-Z2-9]{8}; it works once/);
   });
 
   test('duplicate delivery (same webhook id + message id) is processed once', async () => {

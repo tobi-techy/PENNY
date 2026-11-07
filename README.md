@@ -1,5 +1,5 @@
 # PENNY
-Penny is a crew of AI agents that run your money from iMessage. Text it like a friend, "put $50 somewhere safer" or "pay my DStv", and the crew gets to work: Invest builds a portfolio, Mail finds the bill, Guard checks your limits. Every move shows up as a card in your thread, and nothing happens until you approve it with Face ID. Your keys live on your phone, the agents have their own NEAR accounts, and money moves across chains through NEAR Intents. Penny has a soul too: it remembers you, has moods, and gets better every week.
+Penny is a crew of AI agents that helps run your everyday life from iMessage. Text it like a friend — "what's in my inbox that matters?", "pay my DStv", "put $50 somewhere safer", "find someone to fix the tap" — and the crew gets to work: Mail reads your inbox, Finance keeps the picture straight, Errand finds people for small jobs, Invest builds a portfolio, Guard checks anything that acts in your name. Every action that matters shows up as a card in your thread, and nothing happens until you approve it with Face ID. Your keys live on your phone, the agents have their own NEAR accounts, and money moves across chains through NEAR Intents. Penny has a soul too: it remembers you, has moods, and gets better every week.
 
 ## Features
 

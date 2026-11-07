@@ -169,4 +169,14 @@ public enum EnrollCode {
     public static func normalize(_ input: String) -> String {
         String(input.uppercased().filter { alphabet.contains($0) }.prefix(8))
     }
+
+    /// Code from a `penny://enroll?code=…` tap in Penny's text. Nothing else is accepted.
+    public static func fromLink(_ url: URL) -> String? {
+        guard url.scheme == "penny", url.host == "enroll",
+              let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                  .queryItems?.first(where: { $0.name == "code" })?.value
+        else { return nil }
+        let code = normalize(raw)
+        return isValid(code) ? code : nil
+    }
 }

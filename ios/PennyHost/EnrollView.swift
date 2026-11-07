@@ -26,7 +26,7 @@ struct EnrollView: View {
                     .foregroundStyle(PennyColor.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 8)
-                Text("Your wallet key is made on this iPhone and stays here, locked behind Face ID. Penny never sees it.")
+                Text("Penny helps with the everyday stuff — inbox, bills, errands, money. The key that approves actions in your name is made on this iPhone and stays here, locked behind Face ID. Penny never sees it.")
                     .font(.geist(14))
                     .foregroundStyle(PennyColor.meta)
                     .lineSpacing(3)
@@ -83,8 +83,20 @@ struct EnrollView: View {
             .frame(maxWidth: .infinity)
         }
         .background(PennyColor.cardBackground.ignoresSafeArea())
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            consumeLinkCode()
+        }
+        .onChange(of: session.linkCode) { _, _ in consumeLinkCode() }
         .embedInNavigation()
+    }
+
+    /// A tapped enroll link fills the code and submits itself — no typing.
+    private func consumeLinkCode() {
+        guard let link = session.linkCode, EnrollCode.isValid(link) else { return }
+        session.linkCode = nil
+        code = link
+        Task { await submit() }
     }
 
     private func submit() async {

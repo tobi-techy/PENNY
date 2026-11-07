@@ -267,6 +267,14 @@ final class ApprovalParsingTests: XCTestCase {
         XCTAssertTrue(EnrollCode.isValid("ABCDEF23"))
         XCTAssertFalse(EnrollCode.isValid("ABCDEF2O")) // O is not in the alphabet
     }
+
+    func testEnrollLink() {
+        XCTAssertEqual(EnrollCode.fromLink(URL(string: "penny://enroll?code=ABCDEF23")!), "ABCDEF23")
+        XCTAssertEqual(EnrollCode.fromLink(URL(string: "penny://enroll?code=abcdef23")!), "ABCDEF23")
+        XCTAssertNil(EnrollCode.fromLink(URL(string: "penny://enroll?code=ABCDEF2O")!))
+        XCTAssertNil(EnrollCode.fromLink(URL(string: "penny://pay?code=ABCDEF23")!))
+        XCTAssertNil(EnrollCode.fromLink(URL(string: "https://evil.example/enroll?code=ABCDEF23")!))
+    }
 }
 
 // MARK: - RFC 8785

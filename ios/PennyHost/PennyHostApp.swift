@@ -22,6 +22,10 @@ struct PennyHostApp: App {
             .environmentObject(session)
             .preferredColorScheme(.dark)
             .tint(.white)
+            .onOpenURL { url in
+                // penny://enroll?code=… from Penny's text: no typing needed.
+                if let code = EnrollCode.fromLink(url) { session.linkCode = code }
+            }
         }
     }
 }
@@ -29,6 +33,8 @@ struct PennyHostApp: App {
 /// App-wide state: enrollment, the device key's public half, engine URL.
 @MainActor
 final class HostSession: ObservableObject {
+    /// Enroll code delivered by tapping the link in Penny's text.
+    @Published var linkCode: String?
     @Published private(set) var isEnrolled: Bool
     @Published private(set) var accountId: String?
     @Published private(set) var deviceId: String?

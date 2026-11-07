@@ -58,11 +58,15 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIUserInterfaceStyle: Dark
-        NSFaceIDUsageDescription: Penny uses Face ID to unlock your wallet key and approve each payment. The key never leaves this iPhone.
+        NSFaceIDUsageDescription: Penny uses Face ID to unlock your key and approve actions and payments in your name. The key never leaves this iPhone.
         ITSAppUsesNonExemptEncryption: false
         PennyKeychainAccessGroup: $(AppIdentifierPrefix)$(PENNY_BUNDLE_PREFIX).shared
         PennyAppGroup: group.$(PENNY_BUNDLE_PREFIX).host
         PennyEngineURL: https://$(PENNY_ENGINE_HOST)
+        CFBundleURLTypes:
+          - CFBundleURLName: app.penny.enroll
+            CFBundleURLSchemes:
+              - penny
     entitlements:
       path: PennyHost/PennyHost.entitlements
       properties:
@@ -92,7 +96,7 @@ targets:
         CFBundleDisplayName: Penny
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSFaceIDUsageDescription: Penny uses Face ID to unlock your wallet key and approve each payment. The key never leaves this iPhone.
+        NSFaceIDUsageDescription: Penny uses Face ID to unlock your key and approve actions and payments in your name. The key never leaves this iPhone.
         PennyKeychainAccessGroup: $(AppIdentifierPrefix)$(PENNY_BUNDLE_PREFIX).shared
         PennyAppGroup: group.$(PENNY_BUNDLE_PREFIX).host
         PennyEngineURL: https://$(PENNY_ENGINE_HOST)
