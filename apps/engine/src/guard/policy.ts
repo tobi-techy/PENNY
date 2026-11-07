@@ -89,8 +89,28 @@ export function evaluate(plan: MoneyPlan, policy: GuardPolicy, ctx: GuardContext
 
   const amount = usdMicros(plan, ctx);
   if (amount === null) {
+    // The amount cannot be sized in USD, so the caps cannot be checked. But a plan
+    // that is already blocked for another reason must report `block`, not
+    // `needs_more_info`, or the audit row and the mood event both lie about it.
+    if (block.length > 0) return { decision: 'block', reasons: block, amountMicrosUsd: 0n };
+    // One case is still decidable without a price: a NEAR amount so large that no
+    // plausible price could bring it under the per-tx cap. Refuse it rather than
+    // asking for a quote it can never pass. The floor is 1 NEAR >= $1, so the whole
+    // NEAR count is a lower bound on the USD value; compare it to the cap in dollars
+    // (perTx is micro-USD, hence the 1e6). The real price check still runs when a
+    // price is available.
+    if (planAmount(plan).asset === 'NEAR') {
+      const perTxMicros = toMicros(policy.perTxUsd);
+      const wholeNear = toBaseUnits(planAmount(plan).amount, 24) / 10n ** 24n;
+      if (wholeNear * 1_000_000n > perTxMicros) {
+        block.push(
+          `That's more NEAR than your ${formatUsd(perTxMicros)} per-payment limit could cover.`,
+        );
+        return { decision: 'block', reasons: block, amountMicrosUsd: 0n };
+      }
+    }
     info.push("I need a fresh NEAR price before I can size this. I'll grab one.");
-    return { decision: 'needs_more_info', reasons: [...block, ...info], amountMicrosUsd: 0n };
+    return { decision: 'needs_more_info', reasons: info, amountMicrosUsd: 0n };
   }
   if (amount <= 0n) block.push('The amount has to be more than zero.');
 
