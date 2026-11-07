@@ -164,6 +164,8 @@ export const approvalEvents = pgTable(
   'approval_events',
   {
     id: text('id').primaryKey(),
+    /** Monotonic insertion order: created_at ties at millisecond precision. */
+    seq: bigint('seq', { mode: 'number' }).generatedAlwaysAsIdentity(),
     approvalId: text('approval_id')
       .notNull()
       .references(() => approvals.id),

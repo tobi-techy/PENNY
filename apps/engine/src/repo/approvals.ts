@@ -73,7 +73,7 @@ export class ApprovalsRepo {
       .select()
       .from(approvalEvents)
       .where(eq(approvalEvents.approvalId, approvalId))
-      .orderBy(approvalEvents.createdAt, approvalEvents.id);
+      .orderBy(approvalEvents.seq);
   }
 
   /** Recent approvals for the host-app history screen, newest first. */

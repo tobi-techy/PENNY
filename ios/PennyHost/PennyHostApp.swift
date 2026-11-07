@@ -58,22 +58,17 @@ final class HostSession: ObservableObject {
         guard let baseURL = config.engineURL else { throw PennyError.invalidInput("No engine URL set") }
         guard EnrollCode.isValid(code) else { throw PennyError.invalidInput("That code doesn't look right") }
 
-        // A key without an account means a previous attempt failed; replacing it is safe.
-        let hadAccount = config.isEnrolled
-        let publicKey = try keys.generate(replacing: !hadAccount)
-        do {
-            let response = try await EngineClient(baseURL: baseURL).enroll(code: code, publicKey: publicKey)
-            config.saveEnrollment(response)
-            self.publicKey = publicKey
-            self.accountId = response.accountId
-            self.deviceId = response.deviceId
-            self.dryRun = response.status == "dry_run"
-            self.isEnrolled = true
-        } catch {
-            // The server never saw this key as an account key, so don't leave it lying around.
-            if !hadAccount { try? keys.deleteKey() }
-            throw error
-        }
+        // Reuse the key from a failed attempt: the server may already have
+        // created the account with it, and enroll answers the same enrollment
+        // for the same key. Never delete it here — that would orphan the account.
+        let publicKey = try keys.generate(replacing: false)
+        let response = try await EngineClient(baseURL: baseURL).enroll(code: code, publicKey: publicKey)
+        config.saveEnrollment(response)
+        self.publicKey = publicKey
+        self.accountId = response.accountId
+        self.deviceId = response.deviceId
+        self.dryRun = response.status == "dry_run"
+        self.isEnrolled = true
     }
 
     private func client() throws -> EngineClient {

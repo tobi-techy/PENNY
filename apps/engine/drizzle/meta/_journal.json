@@ -15,6 +15,13 @@
       "when": 1793952606011,
       "tag": "0001_app_attest",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793952606012,
+      "tag": "0002_approval_event_seq",
+      "breakpoints": true
     }
   ]
 }

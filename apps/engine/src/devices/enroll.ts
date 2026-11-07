@@ -108,7 +108,22 @@ export class EnrollService {
     const claim = await this.users.consumeEnrollCode(codeHash, this.now());
     // unknown, used and expired all look the same
     if (!claim) throw new EnrollError(401, 'invalid_code');
-    if (await this.users.activeDevice(claim.userId)) throw new EnrollError(409, 'already_enrolled');
+    const existing = await this.users.activeDevice(claim.userId);
+    if (existing) {
+      // Retry of an enroll that already landed (response lost, app killed):
+      // the same device key with a fresh code gets the same enrollment back.
+      // A different key is a second device, which enrollment does not allow.
+      const user = await this.users.byId(claim.userId);
+      if (existing.publicKey === body.publicKeyEd25519 && user?.accountId) {
+        return {
+          userId: claim.userId,
+          accountId: user.accountId,
+          deviceId: existing.id,
+          status: 'created',
+        };
+      }
+      throw new EnrollError(409, 'already_enrolled');
+    }
     const slug = newSlug();
     const created = await this.chain.createUserAccount(slug, body.publicKeyEd25519);
     if (!created.ok) throw new EnrollError(502, 'account_create_failed');

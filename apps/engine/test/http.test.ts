@@ -141,6 +141,31 @@ describe('POST /v1/devices/enroll', () => {
     expect(second.status).toBe(401);
   });
 
+  test('retry after a landed enroll: same key gets the same enrollment, a new key is refused', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15550202');
+    const keys = deviceKeys();
+    const first = await t.engine.services.enroll.issue(user.id, '+15550202');
+    const res = await enroll({ enrollCode: first.code, publicKeyEd25519: keys.publicKeyB64Url });
+    expect(res.status).toBe(201);
+    type EnrollOk = { userId: string; accountId: string; deviceId: string; status: string };
+    const body = (await res.json()) as EnrollOk;
+
+    // the response never reached the phone; Penny texts a fresh code
+    const second = await t.engine.services.enroll.issue(user.id, '+15550202');
+    const retry = await enroll({ enrollCode: second.code, publicKeyEd25519: keys.publicKeyB64Url });
+    expect(retry.status).toBe(201);
+    const retryBody = (await retry.json()) as EnrollOk;
+    expect(retryBody).toEqual({ ...body, userId: user.id, status: 'created' });
+
+    // a different key is still a second device
+    const third = await t.engine.services.enroll.issue(user.id, '+15550202');
+    const other = await enroll({
+      enrollCode: third.code,
+      publicKeyEd25519: deviceKeys().publicKeyB64Url,
+    });
+    expect(other.status).toBe(409);
+  });
+
   test('expired code rejected (10 min TTL); codes are stored hashed', async () => {
     const user = await t.engine.repos.users.findOrCreateByHandle('+15550201');
     const { code } = await t.engine.services.enroll.issue(user.id, '+15550201');
