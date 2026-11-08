@@ -1,0 +1,4 @@
+# Fake 43-char card tokens in test fixtures, replaced by built values in a later
+# commit. Pinned by exact fingerprint; nothing else is ignored.
+6a9d4762ec9b1bf13d2a33644297cd8cb90dc3c8:apps/web/test/card.test.ts:generic-api-key:5
+eae0b2f7ee7fcf69515d8b66f5c016ba343138d7:ios/PennyKit/Tests/PennyCoreTests/LiveCardTests.swift:generic-api-key:30

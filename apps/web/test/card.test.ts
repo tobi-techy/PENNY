@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { countdown, pillFor, readCard, styleFor, tokenFromPath } from '../src/cardView.ts';
 import { authenticationOptions, registrationOptions } from '../src/keys/passkey.ts';
 
-const token = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE';
+// a made-up 43-char base64url card token (built, not a literal, so it never looks like a secret)
+const token = 'A'.repeat(42) + 'Q';
 
 describe('link card page', () => {
   test('reads the card token from /a/<token>; old /a/apr_ links are not tokens', () => {

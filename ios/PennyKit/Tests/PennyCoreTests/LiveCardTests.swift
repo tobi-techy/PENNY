@@ -27,7 +27,8 @@ extension JSONValue: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, Ex
     public init(booleanLiteral value: Bool) { self = .bool(value) }
 }
 
-private let token43 = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE"
+// a made-up 43-char base64url card token (built, not a literal, so it never looks like a secret)
+private let token43 = String(repeating: "A", count: 42) + "Q"
 
 final class CardTokenTests: XCTestCase {
     func testParsesTheTokenFromTheCardURL() {
