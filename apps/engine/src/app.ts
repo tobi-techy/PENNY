@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import { type Context, Hono } from 'hono';
 import { ApprovalService, type Clock } from './approvals/service.ts';
+import { resolveBillers } from './bills/billers.ts';
 import { BillsService } from './bills/service.ts';
 import { DEFAULT_TIME_ZONE } from './bills/time.ts';
 import type { PrivacyGate } from './brain/attestation.ts';
@@ -70,6 +71,8 @@ export type EngineDeps = {
   privacy?: PrivacyGate;
   /** User-facing IANA time zone for reminders and "now" (PENNY_TIMEZONE). */
   timeZone?: string;
+  /** NEAR account of the demo biller (PENNY_DEMO_BILLER_ACCOUNT); unset = no demo biller. */
+  demoBillerAccount?: string;
 };
 
 export function createEngine(d: EngineDeps) {
@@ -135,6 +138,7 @@ export function createEngine(d: EngineDeps) {
         }
       : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
+    onBillPaid: (userId, billId) => bills.markPaid(userId, billId),
     onBotDeclined: (id) => botService.onApprovalDeclined(id),
   });
   const enroll = new EnrollService(repos.users, d.chain, now, {
@@ -149,6 +153,8 @@ export function createEngine(d: EngineDeps) {
     messages: repos.messages,
     messaging: d.messaging,
     ...(d.connectors ? { connectors: d.connectors } : {}),
+    approvals: repos.approvals,
+    billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
     log: d.log,
     timeZone,
     now,

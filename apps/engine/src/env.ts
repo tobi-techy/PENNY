@@ -23,6 +23,14 @@ const BaseEnv = z.object({
     .string()
     .default('Africa/Lagos')
     .refine(isValidTimeZone, 'must be an IANA time zone like Africa/Lagos'),
+  /**
+   * NEAR account you control that receives USDC for the "Penny Demo Utility" biller.
+   * Unset = no demo biller; real billers get payout accounts in bills/billers.ts.
+   */
+  PENNY_DEMO_BILLER_ACCOUNT: optionalStr.refine(
+    (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),
+    'must be a NEAR account id',
+  ),
   DATABASE_URL: optionalStr,
 
   SPECTRUM_PROJECT_ID: optionalStr,

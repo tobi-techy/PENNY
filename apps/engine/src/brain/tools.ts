@@ -278,10 +278,31 @@ export function builtinTools(): ToolDef<never>[] {
   });
   add({
     id: 'propose_pay_bill',
-    description: 'Propose paying a bill in USDC.',
+    description:
+      "Propose paying one of the user's saved bills in USDC, by billId (from find_bills or list_bills). Penny fills in the biller's payout account and the exact amount from the bill; you never supply a payee. Only works when the bill shows payableInApp; otherwise tell the user notPayableBecause and offer a reminder.",
     risk: 'money',
-    input: PayBillPlan,
-    execute: propose,
+    input: z.object({ billId: z.string().min(1).max(64) }).strict(),
+    execute: async (ctx, i) => {
+      if (!ctx.bills) return { decision: 'needs_more_info', reasons: ['bills are not set up'] };
+      const p = await ctx.bills.paymentPlan(ctx.userId, i.billId);
+      if (!p.ok) return { decision: 'needs_more_info', reasons: [p.reason] };
+      const r = await ctx.approvals.createMoneyApproval({
+        userId: ctx.userId,
+        bot: ctx.bot,
+        plan: p.plan,
+        space: ctx.space,
+        facts: p.facts,
+      });
+      if (r.decision === 'allow_with_approval') {
+        return {
+          decision: r.decision,
+          approvalId: r.approvalId,
+          reasons: r.reasons,
+          cardSent: true,
+        };
+      }
+      return r;
+    },
   });
   add({
     id: 'propose_errand',

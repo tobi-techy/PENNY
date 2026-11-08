@@ -103,6 +103,8 @@ export type ApprovalDeps = {
   /** called when a create_bot approval settles */
   onBotApproved?: (approvalId: string) => Promise<void>;
   onBotDeclined?: (approvalId: string) => Promise<void>;
+  /** called when a pay_bill approval settles on chain (marks the bill paid) */
+  onBillPaid?: (userId: string, billId: string) => Promise<void>;
 };
 
 export function toApprovalDto(r: ApprovalRow): Approval {
@@ -1048,6 +1050,16 @@ export class ApprovalService {
     if (s === 'settled') {
       await this.d.approvals.transition(id, row.kind, 'relayed', 'settled', 'final on chain');
       await this.d.ledger.setStatusForApproval(id, 'settled');
+      if (row.kind === 'pay_bill') {
+        const billId = (row.plan as { billId?: string }).billId;
+        if (billId) {
+          try {
+            await this.d.onBillPaid?.(row.userId, billId);
+          } catch (e) {
+            this.d.log.warn({ approvalId: id, err: (e as Error).name }, 'bill mark-paid failed');
+          }
+        }
+      }
       await this.d.mood.on(row.userId, 'approval_settled');
       await this.updateCard(id, 'done ✓');
       return 'settled';

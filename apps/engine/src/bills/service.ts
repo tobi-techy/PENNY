@@ -1,11 +1,16 @@
+import type { MoneyPlan } from '@penny/shared';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { MessagingPort } from '../ports/messaging.ts';
+import type { ApprovalsRepo } from '../repo/approvals.ts';
 import type { BillRow, BillsRepo, ReminderRow, RemindersRepo } from '../repo/bills.ts';
 import type { MessagesRepo } from '../repo/bots.ts';
 import type { UsersRepo } from '../repo/users.ts';
-import { billerById } from './billers.ts';
+import { BILLERS, type Biller, billerById } from './billers.ts';
 import { formatDay, formatMoney, parseBills } from './parse.ts';
+
+type PayBillPlan = Extract<MoneyPlan, { kind: 'pay_bill' }>;
+
 import { addDays, localDate, localTimeOn } from './time.ts';
 
 /** Gmail query: bill-ish subjects in the last 60 days, noise senders out. */
@@ -15,9 +20,30 @@ export function billSearchQuery(now: Date): string {
   return `newer:${ymd} subject:(bill OR invoice OR payment OR due OR statement OR renewal OR subscription OR expires OR expiring OR overdue OR reminder) -subject:(receipt) -from:notifications@github.com -from:newsletter -from:substack`;
 }
 
-/** What the model and the user see for a bill. Payable means the registry has a verified payTo. */
-export function billView(b: BillRow, today: string) {
-  const biller = billerById(b.billerId);
+/**
+ * Can this bill be paid in USDC from the app? Only when the registry biller has a
+ * verified NEAR payout account, the bill is in USD and the email showed an amount.
+ * Naira bills wait for a naira payment rail.
+ */
+export function payability(
+  b: BillRow,
+  billers: readonly Biller[] = BILLERS,
+): { payable: true; biller: Biller & { payTo: string } } | { payable: false; why: string } {
+  const biller = billerById(b.billerId, billers);
+  if (b.status !== 'open') return { payable: false, why: `this bill is already ${b.status}` };
+  if (!biller) return { payable: false, why: "I don't know how to pay this biller yet" };
+  if (!biller.payTo)
+    return { payable: false, why: `${biller.name} can't take payment through Penny yet` };
+  if (b.currency !== 'USD')
+    return { payable: false, why: 'naira bills need a naira payment option, coming soon' };
+  if (!b.amount) return { payable: false, why: "the email didn't show an amount" };
+  return { payable: true, biller: biller as Biller & { payTo: string } };
+}
+
+/** What the model and the user see for a bill. */
+export function billView(b: BillRow, today: string, billers: readonly Biller[] = BILLERS) {
+  const biller = billerById(b.billerId, billers);
+  const pay = payability(b, billers);
   return {
     billId: b.id,
     payee: b.payeeName,
@@ -28,7 +54,8 @@ export function billView(b: BillRow, today: string) {
     overdue: b.dueOn ? b.dueOn < today : false,
     status: b.status,
     subject: b.subject,
-    payableInApp: Boolean(biller?.payTo),
+    payableInApp: pay.payable,
+    ...(pay.payable ? {} : { notPayableBecause: pay.why }),
   };
 }
 
@@ -61,6 +88,9 @@ export type BillsDeps = {
   messages: MessagesRepo;
   messaging: MessagingPort;
   connectors?: ConnectorPort;
+  approvals?: ApprovalsRepo;
+  /** Biller registry in force (resolveBillers); defaults to the built-in list. */
+  billers?: readonly Biller[];
   log: Logger;
   timeZone: string;
   now: () => Date;
@@ -80,6 +110,10 @@ export class BillsService {
 
   get timeZone(): string {
     return this.d.timeZone;
+  }
+
+  private get billers(): readonly Biller[] {
+    return this.d.billers ?? BILLERS;
   }
 
   today(): string {
@@ -104,7 +138,7 @@ export class BillsService {
     } catch (e) {
       return { ok: false, error: (e as Error).name || 'read_failed' };
     }
-    const parsed = parseBills(raw, now);
+    const parsed = parseBills(raw, now, this.billers);
     const newBills = await this.d.bills.addNew(
       userId,
       parsed.map((p) => ({
@@ -186,14 +220,61 @@ export class BillsService {
 
   async open(userId: string) {
     const today = this.today();
-    return (await this.d.bills.open(userId)).map((b) => billView(b, today));
+    return (await this.d.bills.open(userId)).map((b) => billView(b, today, this.billers));
+  }
+
+  /**
+   * The only way a bill payment plan is made: from a stored bill and the biller
+   * registry. Payee and amount never come from the model or the email body.
+   */
+  async paymentPlan(
+    userId: string,
+    billId: string,
+  ): Promise<
+    | { ok: true; plan: PayBillPlan; facts: { label: string; value: string }[] }
+    | { ok: false; reason: string }
+  > {
+    const bill = await this.d.bills.get(userId, billId);
+    if (!bill) return { ok: false, reason: 'no bill with that id' };
+    const pay = payability(bill, this.billers);
+    if (!pay.payable) return { ok: false, reason: pay.why };
+    if (this.d.approvals) {
+      const recent = await this.d.approvals.listForUser(userId, 50);
+      const inFlight = recent.some(
+        (a) =>
+          a.kind === 'pay_bill' &&
+          ['pending', 'signed', 'relayed'].includes(a.status) &&
+          (a.plan as { billId?: string }).billId === bill.id,
+      );
+      if (inFlight) return { ok: false, reason: 'there is already a card out for this bill' };
+    }
+    const plan: PayBillPlan = {
+      kind: 'pay_bill',
+      billId: bill.id,
+      payee: pay.biller.payTo,
+      amount: bill.amount as string,
+      asset: 'USDC',
+    };
+    const facts = [
+      { label: 'Bill', value: pay.biller.name },
+      { label: 'Amount', value: `${formatMoney(bill.amount, bill.currency)} in USDC` },
+      { label: 'Pays', value: pay.biller.payTo },
+      ...(bill.dueOn ? [{ label: 'Due', value: formatDay(bill.dueOn) }] : []),
+    ];
+    return { ok: true, plan, facts };
+  }
+
+  /** Called when a bill payment settles on chain. */
+  async markPaid(userId: string, billId: string): Promise<void> {
+    const b = await this.d.bills.close(userId, billId, 'paid');
+    if (b) await this.d.reminders.cancelForBill(b.id);
   }
 
   async close(userId: string, billId: string, to: 'paid' | 'dismissed') {
     const b = await this.d.bills.close(userId, billId, to);
     if (!b) return { ok: false as const, error: 'no open bill with that id' };
     await this.d.reminders.cancelForBill(b.id);
-    return { ok: true as const, bill: billView(b, this.today()) };
+    return { ok: true as const, bill: billView(b, this.today(), this.billers) };
   }
 
   async remind(userId: string, text: string, at: Date) {

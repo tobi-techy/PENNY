@@ -96,10 +96,33 @@ export const BILLERS: readonly Biller[] = [
   },
 ];
 
-const BY_ID = new Map(BILLERS.map((b) => [b.id, b]));
+/**
+ * The demo biller: a NEAR account the operator controls (PENNY_DEMO_BILLER_ACCOUNT),
+ * matched only by the exact phrase "Penny Demo Utility". Lets the USDC bill path be
+ * shown end to end before real billers have payout accounts. Absent when unset.
+ */
+export function demoBiller(payTo: string): Biller {
+  return {
+    id: 'penny-demo',
+    name: 'Penny Demo Utility',
+    category: 'other',
+    domains: [],
+    keywords: ['penny demo utility'],
+    currency: 'USD',
+    payTo,
+  };
+}
 
-export function billerById(id: string | null | undefined): Biller | undefined {
-  return id ? BY_ID.get(id) : undefined;
+/** The registry in force: the built-in list plus the demo biller when configured. */
+export function resolveBillers(opts: { demoPayTo?: string | undefined } = {}): readonly Biller[] {
+  return opts.demoPayTo ? [...BILLERS, demoBiller(opts.demoPayTo)] : BILLERS;
+}
+
+export function billerById(
+  id: string | null | undefined,
+  list: readonly Biller[] = BILLERS,
+): Biller | undefined {
+  return id ? list.find((b) => b.id === id) : undefined;
 }
 
 /** "Name <bills@x.com>" -> { name: "Name", domain: "x.com" }. */
@@ -122,13 +145,17 @@ function wordMatch(hay: string, kw: string): boolean {
 }
 
 /** Match a bill email to a known biller, or undefined. */
-export function matchBiller(sender: string, subject: string): Biller | undefined {
+export function matchBiller(
+  sender: string,
+  subject: string,
+  list: readonly Biller[] = BILLERS,
+): Biller | undefined {
   const { name, domain } = splitSender(sender);
   if (domain) {
-    for (const b of BILLERS)
+    for (const b of list)
       if (b.domains.some((d) => domain === d || domain.endsWith(`.${d}`))) return b;
   }
-  for (const b of BILLERS)
+  for (const b of list)
     if (b.keywords.some((k) => wordMatch(name, k) || wordMatch(subject, k))) return b;
   return undefined;
 }

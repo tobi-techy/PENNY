@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { type Biller, matchBiller, splitSender } from './billers.ts';
+import { BILLERS, type Biller, matchBiller, splitSender } from './billers.ts';
 
 /**
  * Deterministic bill parsing from Gmail metadata (subject, sender, snippet,
@@ -147,7 +147,11 @@ function parseDate(v: unknown): Date | null {
 }
 
 /** Parse a GMAIL_FETCH_EMAILS result into bills. `now` is the fallback received time. */
-export function parseBills(raw: unknown, now: Date): ParsedBill[] {
+export function parseBills(
+  raw: unknown,
+  now: Date,
+  billers: readonly Biller[] = BILLERS,
+): ParsedBill[] {
   const data = (raw as { data?: unknown })?.data ?? raw;
   const messages = (data as { messages?: unknown })?.messages;
   if (!Array.isArray(messages)) return [];
@@ -167,7 +171,7 @@ export function parseBills(raw: unknown, now: Date): ParsedBill[] {
     const receivedAt = parseDate(r.messageTimestamp ?? r.internalDate ?? r.date);
     const text = `${subject}. ${snippet}`;
     const money = parseAmount(text);
-    const biller = matchBiller(sender, subject);
+    const biller = matchBiller(sender, subject, billers);
     const id = String(r.messageId ?? r.id ?? '').slice(0, 128);
     const sourceKey = id
       ? `gmail:${id}`
@@ -197,7 +201,8 @@ export function formatMoney(amount: string | null, currency: 'NGN' | 'USD' | nul
   if (!amount) return 'amount not shown';
   const [whole, frac] = amount.split('.');
   const grouped = (whole ?? '0').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const value = frac ? `${grouped}.${frac.padEnd(2, '0')}` : grouped;
+  // dollars always show cents; naira only when the email had kobo
+  const value = frac || currency === 'USD' ? `${grouped}.${(frac ?? '').padEnd(2, '0')}` : grouped;
   return `${currency ? SYM[currency] : ''}${value}`;
 }
 
