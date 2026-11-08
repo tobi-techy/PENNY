@@ -110,6 +110,27 @@ export class FakeChain implements ChainPort {
         ],
       };
     }
+    if (plan.kind === 'pay_bill') {
+      if (plan.asset === 'NEAR')
+        return {
+          receiverId: plan.payee,
+          actions: [
+            { type: 'Transfer' as const, deposit: toBaseUnits(plan.amount, 24).toString() },
+          ],
+        };
+      return {
+        receiverId: this.usdcContract,
+        actions: [
+          {
+            type: 'FunctionCall' as const,
+            methodName: 'ft_transfer',
+            args: { receiver_id: plan.payee, amount: toBaseUnits(plan.amount, 6).toString() },
+            gas: '30000000000000',
+            deposit: '1',
+          },
+        ],
+      };
+    }
     if (plan.kind === 'send' && plan.asset === 'NEAR') {
       return {
         receiverId: plan.to,

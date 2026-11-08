@@ -109,6 +109,7 @@ const relayerMaxDepositYocto = toBaseUnits(env.PENNY_RELAYER_MAX_DEPOSIT_NEAR, 2
 let chain: ChainPort;
 let market: MarketPort;
 let invest: InvestPort | undefined;
+let chainNetwork: 'mainnet' | 'testnet' = 'mainnet';
 if (env.NEAR_RPC_URL) {
   const adapter = chainAdapterFromEnv(process.env, {
     resolveDeviceKey: async (signerId) => {
@@ -121,6 +122,7 @@ if (env.NEAR_RPC_URL) {
     relayerHardCeilingYocto: relayerMaxDepositYocto,
   });
   chain = new RealChain(adapter);
+  chainNetwork = adapter.mode.network === 'testnet' ? 'testnet' : 'mainnet';
   // prices: 1Click token list (short timeout), CoinGecko fallback, 60 s cache
   const prices = new PriceFeed({
     oneClick: new OneClickClient({
@@ -165,6 +167,7 @@ const engine = createEngine({
   log,
   publicBaseUrl: env.PUBLIC_BASE_URL,
   timeZone: env.PENNY_TIMEZONE,
+  chainNetwork,
   ...(env.PENNY_DEMO_BILLER_ACCOUNT ? { demoBillerAccount: env.PENNY_DEMO_BILLER_ACCOUNT } : {}),
   ...(env.PENNY_ENV === 'mainnet'
     ? {

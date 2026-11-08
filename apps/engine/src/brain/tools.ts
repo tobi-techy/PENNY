@@ -305,7 +305,24 @@ export function builtinTools(): ToolDef<never>[] {
     input: z.object({ billId: z.string().min(1).max(64) }).strict(),
     execute: async (ctx, i) => {
       if (!ctx.bills) return { decision: 'needs_more_info', reasons: ['bills are not set up'] };
-      const p = await ctx.bills.paymentPlan(ctx.userId, i.billId);
+      // On testnet bills are paid in NEAR: price it, and check there is enough to spend.
+      const near: { usdPriceMicros?: bigint; availableYocto?: bigint } = {};
+      if (ctx.bills.settlesIn === 'NEAR') {
+        try {
+          if (ctx.market.nearUsdPriceMicros)
+            near.usdPriceMicros = await ctx.market.nearUsdPriceMicros();
+        } catch {
+          /* paymentPlan says the price is missing */
+        }
+        if (ctx.accountId && ctx.market.nearAvailableYocto) {
+          try {
+            near.availableYocto = await ctx.market.nearAvailableYocto(ctx.accountId);
+          } catch {
+            /* balance unknown: the relay fails cleanly if it is short */
+          }
+        }
+      }
+      const p = await ctx.bills.paymentPlan(ctx.userId, i.billId, near);
       if (!p.ok) return { decision: 'needs_more_info', reasons: [p.reason] };
       const r = await ctx.approvals.createMoneyApproval({
         userId: ctx.userId,
@@ -313,6 +330,7 @@ export function builtinTools(): ToolDef<never>[] {
         plan: p.plan,
         space: ctx.space,
         facts: p.facts,
+        ...(near.usdPriceMicros !== undefined ? { nearUsdPriceMicros: near.usdPriceMicros } : {}),
       });
       if (r.decision === 'allow_with_approval') {
         return {
@@ -403,6 +421,11 @@ export class FakeMarket implements MarketPort {
   constructor(readonly now: () => Date = () => new Date()) {}
   async nearUsdPriceMicros() {
     return 4_000_000n;
+  }
+  /** spendable NEAR for tests; override per test */
+  nearAvailable = 3_200_000_000_000_000_000_000_000n; // 3.2 NEAR
+  async nearAvailableYocto() {
+    return this.nearAvailable;
   }
   async getBalances() {
     return [

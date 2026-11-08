@@ -21,6 +21,8 @@ export interface MarketPort {
   getPortfolios(): Promise<{ id: string; name: string; blurb: string; priceUsd?: string }[]>;
   /** micro-USD per NEAR, for sizing NEAR sends in Guard. Throws when no price is available. */
   nearUsdPriceMicros?(): Promise<bigint>;
+  /** Spendable NEAR (yocto) on an account: balance minus what storage locks up. */
+  nearAvailableYocto?(accountId: string): Promise<bigint>;
 }
 
 /** Bot-creation hooks the registry exposes to Penny without a circular import. */

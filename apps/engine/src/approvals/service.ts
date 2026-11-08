@@ -105,8 +105,12 @@ export type ApprovalDeps = {
   onBotDeclined?: (approvalId: string) => Promise<void>;
   /** a user without approvals set up tried something that needs one (texts the setup link) */
   onNeedsSetup?: (userId: string, space: SpaceRef) => Promise<void>;
-  /** called when a pay_bill approval settles on chain (marks the bill paid) */
-  onBillPaid?: (userId: string, billId: string) => Promise<void>;
+  /** called when a pay_bill approval settles on chain (marks the bill paid, sends a receipt) */
+  onBillPaid?: (
+    userId: string,
+    billId: string,
+    receipt: { txHash: string | null; dryRun: boolean },
+  ) => Promise<void>;
 };
 
 export function toApprovalDto(r: ApprovalRow): Approval {
@@ -898,7 +902,9 @@ export class ApprovalService {
     const recheckPlan: MoneyPlan =
       plan.kind === 'send' && plan.asset === 'NEAR'
         ? { kind: 'send', asset: 'USDC', amount: fromMicros(row.amountMicros), to: plan.to }
-        : plan;
+        : plan.kind === 'pay_bill' && plan.asset === 'NEAR'
+          ? { ...plan, asset: 'USDC', amount: fromMicros(row.amountMicros) }
+          : plan;
     const g = evaluate(recheckPlan, policy, ctx);
     if (g.decision === 'block') {
       await this.d.guardDecisions.record({
@@ -1062,8 +1068,10 @@ export class ApprovalService {
       if (row.kind === 'pay_bill') {
         const billId = (row.plan as { billId?: string }).billId;
         if (billId) {
+          const events = await this.d.approvals.events(id);
+          const dryRun = events.some((e) => e.reason === 'relayed (dry run)');
           try {
-            await this.d.onBillPaid?.(row.userId, billId);
+            await this.d.onBillPaid?.(row.userId, billId, { txHash: row.txHash, dryRun });
           } catch (e) {
             this.d.log.warn({ approvalId: id, err: (e as Error).name }, 'bill mark-paid failed');
           }

@@ -69,13 +69,23 @@ describe('buildActions (real money path, deterministic)', () => {
   test('USDC send to unregistered receiver prepends storage_deposit', async () => {
     const { adapter } = world(null);
     const r = await adapter.buildActions(
-      { kind: 'pay_bill', payee: 'newbiller.near', amount: '10' },
+      { kind: 'pay_bill', payee: 'newbiller.near', amount: '10', asset: 'USDC' },
       'tobi.penny.near',
     );
     expect(r.actions.map((a) => (a.type === 'FunctionCall' ? a.methodName : a.type))).toEqual([
       'storage_deposit',
       'ft_transfer',
     ]);
+  });
+
+  test('a NEAR bill payment (testnet) is one plain transfer to the biller', async () => {
+    const { adapter } = world(null);
+    const r = await adapter.buildActions(
+      { kind: 'pay_bill', payee: 'demo-biller.testnet', amount: '1.25', asset: 'NEAR' },
+      'tobi.penny.near',
+    );
+    expect(r.receiverId).toBe('demo-biller.testnet');
+    expect(r.actions).toEqual([{ type: 'Transfer', deposit: '1250000000000000000000000' }]);
   });
 
   test('invest without a cached quote fails closed', async () => {

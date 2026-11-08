@@ -275,7 +275,7 @@ export class ChainAdapter {
   async buildActions(
     plan:
       | { kind: 'send'; asset: 'USDC' | 'NEAR'; amount: string; to: string }
-      | { kind: 'pay_bill'; payee: string; amount: string }
+      | { kind: 'pay_bill'; payee: string; amount: string; asset: 'USDC' | 'NEAR' }
       | { kind: 'errand'; taskId: string; bidId: string; amount: string }
       | { kind: 'invest'; amountUsd: string; portfolioId: string; quoteId: string },
     signerId: string,
@@ -292,6 +292,12 @@ export class ChainAdapter {
         return this.usdcTransfer(plan.to, toBaseUnits(plan.amount, USDC_DECIMALS).toString());
       }
       case 'pay_bill':
+        if (plan.asset === 'NEAR') {
+          return {
+            receiverId: plan.payee,
+            actions: [{ type: 'Transfer', deposit: toBaseUnits(plan.amount, 24).toString() }],
+          };
+        }
         return this.usdcTransfer(plan.payee, toBaseUnits(plan.amount, USDC_DECIMALS).toString());
       case 'errand':
         return {

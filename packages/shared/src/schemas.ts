@@ -63,7 +63,8 @@ export const PayBillPlan = z
     billId: z.string().min(1).max(128),
     payee: z.string().min(1).max(128),
     amount: Decimal,
-    asset: z.literal('USDC'),
+    /** USDC on mainnet; NEAR on testnet, where there is no USDC to pay with. */
+    asset: z.enum(['USDC', 'NEAR']),
   })
   .strict();
 
@@ -179,6 +180,7 @@ export function planAmount(p: MoneyPlan): { asset: 'USDC' | 'NEAR'; amount: stri
     case 'send':
       return { asset: p.asset, amount: p.amount };
     case 'pay_bill':
+      return { asset: p.asset, amount: p.amount };
     case 'errand':
       return { asset: 'USDC', amount: p.amount };
   }

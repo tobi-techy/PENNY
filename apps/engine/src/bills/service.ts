@@ -1,4 +1,4 @@
-import type { MoneyPlan } from '@penny/shared';
+import { fromBaseUnits, type MoneyPlan, toBaseUnits, toMicros } from '@penny/shared';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { MessagingPort } from '../ports/messaging.ts';
@@ -91,6 +91,13 @@ export type BillsDeps = {
   approvals?: ApprovalsRepo;
   /** Biller registry in force (resolveBillers); defaults to the built-in list. */
   billers?: readonly Biller[];
+  /**
+   * What bills are paid with. USDC on mainnet; NEAR on testnet, where there is
+   * no USDC, so a demo bill is a real testnet transfer.
+   */
+  settleIn?: 'USDC' | 'NEAR';
+  /** Explorer prefix for receipts, e.g. https://testnet.nearblocks.io/txns/ */
+  explorerTxUrl?: string;
   log: Logger;
   timeZone: string;
   now: () => Date;
@@ -114,6 +121,10 @@ export class BillsService {
 
   private get billers(): readonly Biller[] {
     return this.d.billers ?? BILLERS;
+  }
+
+  get settlesIn(): 'USDC' | 'NEAR' {
+    return this.d.settleIn ?? 'USDC';
   }
 
   today(): string {
@@ -230,6 +241,7 @@ export class BillsService {
   async paymentPlan(
     userId: string,
     billId: string,
+    near: { usdPriceMicros?: bigint; availableYocto?: bigint } = {},
   ): Promise<
     | { ok: true; plan: PayBillPlan; facts: { label: string; value: string }[] }
     | { ok: false; reason: string }
@@ -248,26 +260,63 @@ export class BillsService {
       );
       if (inFlight) return { ok: false, reason: 'there is already a card out for this bill' };
     }
+    const usd = bill.amount as string;
+    let amount = usd;
+    let amountFact = `${formatMoney(usd, bill.currency)} in USDC`;
+    if (this.settlesIn === 'NEAR') {
+      if (!near.usdPriceMicros || near.usdPriceMicros <= 0n)
+        return { ok: false, reason: "I can't get a NEAR price right now. try again in a minute." };
+      amount = usdToNear(usd, near.usdPriceMicros);
+      if (near.availableYocto !== undefined) {
+        const need = toBaseUnits(amount, 24) + NEAR_HEADROOM_YOCTO;
+        if (near.availableYocto < need) {
+          const user = await this.d.users.byId(userId);
+          return {
+            ok: false,
+            reason: `not enough testnet NEAR: this needs ${amount} NEAR and you have ${trimNear(near.availableYocto)} to spend. top up ${user?.accountId ?? 'your Penny account'} from the NEAR testnet faucet, then ask again.`,
+          };
+        }
+      }
+      amountFact = `${formatMoney(usd, bill.currency)} · ${amount} NEAR (testnet)`;
+    }
     const plan: PayBillPlan = {
       kind: 'pay_bill',
       billId: bill.id,
       payee: pay.biller.payTo,
-      amount: bill.amount as string,
-      asset: 'USDC',
+      amount,
+      asset: this.settlesIn,
     };
     const facts = [
       { label: 'Bill', value: pay.biller.name },
-      { label: 'Amount', value: `${formatMoney(bill.amount, bill.currency)} in USDC` },
+      { label: 'Amount', value: amountFact },
       { label: 'Pays', value: pay.biller.payTo },
       ...(bill.dueOn ? [{ label: 'Due', value: formatDay(bill.dueOn) }] : []),
     ];
     return { ok: true, plan, facts };
   }
 
-  /** Called when a bill payment settles on chain. */
-  async markPaid(userId: string, billId: string): Promise<void> {
+  /** Called when a bill payment settles on chain: mark it paid and text a receipt. */
+  async markPaid(
+    userId: string,
+    billId: string,
+    receipt: { txHash: string | null; dryRun: boolean } = { txHash: null, dryRun: true },
+  ): Promise<void> {
     const b = await this.d.bills.close(userId, billId, 'paid');
-    if (b) await this.d.reminders.cancelForBill(b.id);
+    if (!b) return;
+    await this.d.reminders.cancelForBill(b.id);
+    const target = await this.d.users.primarySpace(userId);
+    if (!target) return;
+    const link =
+      receipt.txHash && !receipt.dryRun && this.d.explorerTxUrl
+        ? `\nreceipt: ${this.d.explorerTxUrl}${receipt.txHash}`
+        : '';
+    const text = `paid ✓ ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder.${link}`;
+    await this.d.messaging.sendText(target.space, text);
+    await this.d.messages.add({
+      conversationId: target.conversationId,
+      direction: 'outbound',
+      text,
+    });
   }
 
   async close(userId: string, billId: string, to: 'paid' | 'dismissed') {
@@ -335,6 +384,24 @@ export class BillsService {
     }
     return sent;
   }
+}
+
+/** Spare NEAR kept on the account so a payment never empties it. */
+const NEAR_HEADROOM_YOCTO = 10n ** 21n; // 0.001 NEAR
+
+/** Dollars -> NEAR at a micro-USD price, rounded UP to 4 dp so the biller is never short. */
+export function usdToNear(usd: string, priceMicros: bigint): string {
+  const tenThousandths = (toMicros(usd) * 10_000n + priceMicros - 1n) / priceMicros;
+  const whole = tenThousandths / 10_000n;
+  const frac = (tenThousandths % 10_000n).toString().padStart(4, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : `${whole}`;
+}
+
+function trimNear(yocto: bigint): string {
+  const s = fromBaseUnits(yocto, 24);
+  const [w, f = ''] = s.split('.');
+  const f4 = f.slice(0, 4).replace(/0+$/, '');
+  return f4 ? `${w}.${f4}` : (w ?? '0');
 }
 
 export function newBillsText(fresh: BillRow[]): string {

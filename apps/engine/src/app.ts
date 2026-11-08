@@ -73,6 +73,8 @@ export type EngineDeps = {
   privacy?: PrivacyGate;
   /** User-facing IANA time zone for reminders and "now" (PENNY_TIMEZONE). */
   timeZone?: string;
+  /** Which NEAR network the chain adapter talks to; testnet pays bills in NEAR. Default mainnet. */
+  chainNetwork?: 'mainnet' | 'testnet';
   /** NEAR account of the demo biller (PENNY_DEMO_BILLER_ACCOUNT); unset = no demo biller. */
   demoBillerAccount?: string;
 };
@@ -149,7 +151,7 @@ export function createEngine(d: EngineDeps) {
         }
       : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
-    onBillPaid: (userId, billId) => bills.markPaid(userId, billId),
+    onBillPaid: (userId, billId, receipt) => bills.markPaid(userId, billId, receipt),
     onNeedsSetup: async (userId, space) => {
       await onboarding.sendSetupLink(userId, space);
     },
@@ -175,6 +177,11 @@ export function createEngine(d: EngineDeps) {
     ...(d.connectors ? { connectors: d.connectors } : {}),
     approvals: repos.approvals,
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
+    settleIn: d.chainNetwork === 'testnet' ? 'NEAR' : 'USDC',
+    explorerTxUrl:
+      d.chainNetwork === 'testnet'
+        ? 'https://testnet.nearblocks.io/txns/'
+        : 'https://nearblocks.io/txns/',
     log: d.log,
     timeZone,
     now,
