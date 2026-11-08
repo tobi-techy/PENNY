@@ -30,6 +30,8 @@ export type CardJson = {
   approvalId?: string;
   expiresAt?: string;
   receiptUrl?: string;
+  /** What happened, as the server knows it ("couldn't confirm…"). Shown as is. */
+  statusLine?: string;
 };
 
 export type ApprovalView = {
@@ -89,7 +91,7 @@ export function pillFor(state: CardState): string | null {
 export function closingLine(state: CardState): string | null {
   switch (state) {
     case 'sent':
-      return 'Done. It went through. Penny sent you a fresh card.';
+      return 'Done. It went through.';
     case 'blocked':
       return null;
     case 'expired':
@@ -97,7 +99,8 @@ export function closingLine(state: CardState): string | null {
     case 'declined':
       return 'You said no. Nothing moved.';
     case 'failed':
-      return "It didn't go through. Nothing moved.";
+      // only the server knows whether anything moved; its statusLine says so when it can
+      return "It didn't go through.";
     case 'undone':
       return 'Undone.';
     default:
@@ -152,6 +155,7 @@ export function readCard(raw: unknown): CardJson | null {
     state,
     ...(typeof r.approvalId === 'string' ? { approvalId: r.approvalId } : {}),
     ...(typeof r.expiresAt === 'string' ? { expiresAt: r.expiresAt } : {}),
+    ...(typeof r.statusLine === 'string' ? { statusLine: r.statusLine.slice(0, 120) } : {}),
     ...(typeof r.receiptUrl === 'string' && r.receiptUrl.startsWith('https://')
       ? { receiptUrl: r.receiptUrl }
       : {}),

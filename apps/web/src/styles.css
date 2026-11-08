@@ -291,3 +291,9 @@ input {
     "Geist Mono",
     monospace;
 }
+.pcard .note,
+.pcard .confirm p {
+  font-size: 13px;
+  color: #b1c3d8;
+  margin-top: 12px;
+}
