@@ -67,6 +67,10 @@ export const BOT_APPROVAL_TTL_MS = 10 * 60_000;
 export const MAX_REISSUES = 3;
 /** Not me / Get a new card keep working this long after a card expires. */
 export const AFTER_EXPIRY_BUTTON_MS = 24 * 60 * 60_000;
+/** Opening an invest card gets a fresh price when less than this is left. */
+export const FRESH_PRICE_BELOW_MS = 75_000;
+/** A card gets at most this many fresh prices. */
+export const MAX_FRESH_PRICES = 8;
 /** An Unfreeze card is good for 10 minutes. */
 export const UNFREEZE_CARD_TTL_MS = 10 * 60_000;
 /** User copy when the user froze Penny. */
@@ -497,6 +501,8 @@ export class ApprovalService {
     facts?: { label: string; value: string }[];
     subcaption?: string;
     reissuedFrom?: string;
+    /** Replace the approval behind this card in place (a fresh price on the same card). */
+    fromCard?: { id: string; tokenHash: string };
   }): Promise<CreateResult> {
     const { userId, plan, bot } = input;
     if (await this.frozen(userId)) return { decision: 'block', reasons: [FROZEN_TEXT] };
@@ -556,7 +562,9 @@ export class ApprovalService {
       device.publicKey,
       Math.ceil((expiresAt.getTime() - now.getTime()) / 1000),
     );
-    const { token, hash } = issueCardToken();
+    const issued = issueCardToken();
+    const token = input.fromCard ? '' : issued.token;
+    const hash = input.fromCard ? input.fromCard.tokenHash : issued.hash;
     const id = newId('apr');
     const policy = await this.effectivePolicy(userId);
     const amountDisplay = formatUsd(g.amountMicrosUsd);
@@ -608,21 +616,37 @@ export class ApprovalService {
       reasons: g.reasons,
     });
     await this.d.mood.on(userId, 'approval_created');
-    const url = await this.sendApprovalCard(
-      id,
-      input.space,
-      { token, hash },
-      {
-        userId,
-        agent: agentFor(plan.kind, bot),
-        type: cardTypeFor(plan.kind),
+    let url = '';
+    if (input.fromCard) {
+      // same card, same URL, no new message: the card now points at the fresh approval
+      await this.d.approvals.setCardId(id, input.fromCard.id);
+      await this.d.cards.update(input.fromCard.id, {
+        approvalId: id,
+        state: 'ready',
         title: cardTitleFor(plan),
         amount: amountFor(plan, amountDisplay),
-        lines: facts.slice(0, 4),
+        lines: facts.slice(0, 4).map((f) => ({ label: f.label.slice(0, 40), value: f.value })),
+        buttons: APPROVE_BUTTONS,
         expiresAt,
-        subcaption: input.subcaption ?? (recipient ? `to ${recipient}` : 'tap to approve'),
-      },
-    );
+        tokenExpiresAt: expiresAt,
+      });
+    } else {
+      url = await this.sendApprovalCard(
+        id,
+        input.space,
+        { token, hash },
+        {
+          userId,
+          agent: agentFor(plan.kind, bot),
+          type: cardTypeFor(plan.kind),
+          title: cardTitleFor(plan),
+          amount: amountFor(plan, amountDisplay),
+          lines: facts.slice(0, 4),
+          expiresAt,
+          subcaption: input.subcaption ?? (recipient ? `to ${recipient}` : 'tap to approve'),
+        },
+      );
+    }
     return {
       decision: 'allow_with_approval',
       approvalId: id,
@@ -678,6 +702,7 @@ export class ApprovalService {
     space: SpaceRef;
     note?: string;
     reissuedFrom?: string;
+    fromCard?: { id: string; tokenHash: string };
   }): Promise<CreateResult> {
     const { userId, bot, asset, amountUsd } = input;
     if (await this.frozen(userId)) return { decision: 'block', reasons: [FROZEN_TEXT] };
@@ -739,7 +764,73 @@ export class ApprovalService {
       facts: investFacts(q, this.d.now()),
       subcaption: `${input.note ? `${input.note} ` : ''}You'll get about ${q.amountOutDisplay} · tap to approve`,
       ...(input.reissuedFrom ? { reissuedFrom: input.reissuedFrom } : {}),
+      ...(input.fromCard ? { fromCard: input.fromCard } : {}),
     });
+  }
+
+  /**
+   * A fresh price when the card is opened. Invest quotes live 90 s, which is gone by the
+   * time someone opens a link, Safari and a passkey. Opening the card replaces the quote
+   * in place (same card, same URL, no new message) when less than FRESH_PRICE_BELOW_MS is
+   * left. Nothing signed is touched: only a pending approval whose challenge is unused.
+   */
+  async freshPriceByToken(token: string): Promise<{ refreshed: boolean }> {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+      throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    const card = await this.d.cardsRepo.byTokenHash(sha256Hex(token));
+    const now = this.d.now();
+    if (
+      !card?.approvalId ||
+      now.getTime() > card.tokenExpiresAt.getTime() + AFTER_EXPIRY_BUTTON_MS
+    ) {
+      throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    }
+    const row = await this.d.approvals.get(card.approvalId);
+    if (!row || row.kind !== 'invest' || row.challengeUsedAt) return { refreshed: false };
+    const live =
+      row.status === 'pending' && row.expiresAt.getTime() - now.getTime() > FRESH_PRICE_BELOW_MS;
+    if (live || (row.status !== 'pending' && row.status !== 'expired')) return { refreshed: false };
+    if ((await this.reissueDepth(row)) >= MAX_FRESH_PRICES) return { refreshed: false };
+    if (row.status === 'pending') {
+      try {
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'pending',
+          'cancelled',
+          'fresh price on open',
+        );
+      } catch {
+        return { refreshed: false }; // a concurrent open already did it
+      }
+    }
+    await this.d.ledger.setStatusForApproval(row.id, 'released');
+    const plan = row.plan as MoneyPlan & { kind: 'invest' };
+    const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
+    try {
+      const r = await this.createInvestApproval({
+        userId: row.userId,
+        bot,
+        asset: plan.portfolioId,
+        amountUsd: plan.amountUsd,
+        space: card.space ?? { spaceId: '', userHandle: '' },
+        reissuedFrom: row.id,
+        fromCard: { id: card.id, tokenHash: card.tokenHash },
+      });
+      if (r.decision === 'allow_with_approval') return { refreshed: true };
+      await this.d.cards.update(
+        card.id,
+        { state: 'expired' },
+        { subcaption: r.reasons[0] ?? 'ask penny again.' },
+      );
+    } catch {
+      await this.d.cards.update(
+        card.id,
+        { state: 'expired' },
+        { subcaption: "couldn't get a fresh price. ask penny again." },
+      );
+    }
+    return { refreshed: false };
   }
 
   /**
@@ -1680,7 +1771,12 @@ export class ApprovalService {
         },
       );
       await this.d.mood.on(row.userId, 'approval_failed');
-      await this.updateCard(row.id, 'failed', 'that did not go through. nothing was changed.');
+      // the outside app may have done it before the error came back
+      await this.updateCard(
+        row.id,
+        'failed',
+        "couldn't confirm this was done. check before trying again.",
+      );
       return { status: 'failed' };
     }
     await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'write executed');
@@ -1780,7 +1876,12 @@ export class ApprovalService {
       );
       await this.d.ledger.setStatusForApproval(row.id, 'released');
       await this.d.mood.on(row.userId, 'approval_failed');
-      await this.updateCard(row.id, 'failed', "didn't go through. nothing was sent.");
+      // A relay error can come after the broadcast: never claim nothing moved here.
+      await this.updateCard(
+        row.id,
+        'failed',
+        "couldn't confirm this went through. check your balance before trying again.",
+      );
       throw new ApprovalError(502, 'relay_failed', 'could not send to NEAR');
     }
     await this.d.approvals.transition(

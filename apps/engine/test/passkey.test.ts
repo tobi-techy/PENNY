@@ -184,13 +184,17 @@ describe('link card (no app)', () => {
 
   test('wrong challenge fails, the approval expires and a new card is sent', async () => {
     const r = await linkCard();
+    const sentBefore = t.messaging.texts.length;
     const res = await approve(r, { challenge: Buffer.alloc(32, 7).toString('base64url') });
     expect(res.status).toBe(422);
     expect(await status(r.approvalId)).toBe('expired');
     await failedWith(r.approvalId, 'bad_passkey');
     const next = await t.engine.repos.approvals.byReissuedFrom(r.approvalId);
     expect(next?.status).toBe('pending');
-    expect(tokenFromUrl(t.messaging.texts.at(-2)?.text)).not.toBe(r.cardToken);
+    // exactly one new message: the new card. The old card's expiry sends nothing.
+    const sent = t.messaging.texts.slice(sentBefore);
+    expect(sent).toHaveLength(1);
+    expect(tokenFromUrl(sent[0]?.text)).not.toBe(r.cardToken);
   });
 
   test('a reused challenge fails (no second relay)', async () => {

@@ -50,7 +50,7 @@ export class CardActions {
     return row;
   }
 
-  async press(token: string, buttonId: string): Promise<PressResult> {
+  async press(token: string, buttonId: string, confirm = false): Promise<PressResult> {
     // Not me (freeze) and Get a new card show on blocked/expired cards: allow them after expiry
     const row = await this.load(token, AFTER_EXPIRY_BUTTON_MS);
     const button = row.buttons.find((b) => b.id === buttonId);
@@ -135,6 +135,8 @@ export class CardActions {
         return { card: toCardDto(row), renewedApprovalId: r.approvalId };
       }
       case 'freeze': {
+        // freezing switches off every key: ask first ("Freeze everything?"), then do it
+        if (!confirm) throw new ApprovalError(409, 'confirm_freeze', 'confirm to freeze');
         await this.d.approvals.freeze(row.userId);
         if (row.space) {
           await this.d.sender.update(row.id, { buttons: [] }).catch(() => null);

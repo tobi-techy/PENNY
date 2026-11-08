@@ -36,11 +36,11 @@ afterAll(async () => {
   await t?.db.close();
 });
 
-const press = (token: string, buttonId: string) =>
+const press = (token: string, buttonId: string, confirm?: boolean) =>
   t.engine.app.request(`/v1/cards/by-token/${token}/press`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
-    body: JSON.stringify({ buttonId }),
+    body: JSON.stringify({ buttonId, ...(confirm !== undefined ? { confirm } : {}) }),
   });
 
 describe('needsApproval: one policy table, never the model', () => {
@@ -186,14 +186,31 @@ describe('live card (Photon customizedMiniApp)', () => {
       space: u.space,
     });
     if (r2.decision !== 'allow_with_approval') throw new Error('expected card');
+    // a state the user is waiting on (sent): three failures, then a fresh card, same URL
     t.messaging.failEdits = 3;
     attempts = t.messaging.editAttempts;
     cards = t.messaging.cards.length;
-    await t.engine.services.approvals.decline(r2.approvalId, r2.cardToken);
+    const cardId = (await t.engine.repos.approvals.get(r2.approvalId))?.cardId as string;
+    await t.engine.services.cards.update(cardId, { state: 'sent' }, { subcaption: 'sent ✓' });
     expect(t.messaging.editAttempts - attempts).toBe(3);
     expect(t.messaging.cards.length).toBe(cards + 1);
     expect(t.messaging.cards.at(-1)?.card.url).toBe(`https://penny.test/a/${r2.cardToken}`);
-    expect(t.messaging.cards.at(-1)?.card.subcaption).toBe('you said no. nothing moved.');
+    expect(t.messaging.cards.at(-1)?.card.subcaption).toBe('sent ✓');
+    // an unanswered card expiring is not worth a new message, even when the edit fails
+    const r3 = await t.engine.services.approvals.createMoneyApproval({
+      userId: u.userId,
+      bot: null,
+      plan: { kind: 'send', asset: 'USDC', amount: '1', to: 'ada.penny.near' },
+      space: u.space,
+    });
+    if (r3.decision !== 'allow_with_approval') throw new Error('expected card');
+    t.messaging.failEdits = 3;
+    cards = t.messaging.cards.length;
+    const texts = t.messaging.texts.length;
+    const id3 = (await t.engine.repos.approvals.get(r3.approvalId))?.cardId as string;
+    await t.engine.services.cards.update(id3, { state: 'expired' });
+    expect(t.messaging.cards.length).toBe(cards);
+    expect(t.messaging.texts.length).toBe(texts);
     t.messaging.failEdits = 0;
   });
 });
@@ -529,7 +546,12 @@ describe('freeze', () => {
     });
     expect(r.decision).toBe('block');
     const token = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
-    expect((await press(token, 'notme')).status).toBe(200);
+    // one tap is not enough: the client must ask "freeze everything?" first
+    const first = await press(token, 'notme');
+    expect(first.status).toBe(409);
+    expect(await first.json()).toEqual({ error: 'confirm_freeze' });
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeNull();
+    expect((await press(token, 'notme', true)).status).toBe(200);
     expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeTruthy();
     expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
   });

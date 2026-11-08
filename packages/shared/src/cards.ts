@@ -104,6 +104,8 @@ export const Card = z
     expiresAt: z.iso.datetime().optional(),
     /** A plain receipt link once something settled (e.g. the explorer page). */
     receiptUrl: z.url().optional(),
+    /** What happened, in one line, exactly as the server knows it (e.g. "couldn't confirm"). */
+    statusLine: z.string().max(120).optional(),
     createdAt: z.iso.datetime(),
   })
   .strict();
@@ -304,7 +306,13 @@ export const PasskeyRegistration = z
   .strict();
 export type PasskeyRegistration = z.infer<typeof PasskeyRegistration>;
 
-export const CardPressBody = z.object({ buttonId: z.string().max(24) }).strict();
+export const CardPressBody = z
+  .object({
+    buttonId: z.string().max(24),
+    /** "Not me" freezes everything: the client must ask and send confirm: true. */
+    confirm: z.boolean().optional(),
+  })
+  .strict();
 
 /** POST /v1/cards/by-token/:token/unfreeze: Face ID from the phone, or a passkey from the web. */
 export const UnfreezeBody = z.union([

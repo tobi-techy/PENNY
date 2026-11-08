@@ -83,6 +83,7 @@ export class CardsRepo {
         | 'expiresAt'
         | 'tokenExpiresAt'
         | 'messageRef'
+        | 'statusLine'
       >
     >,
   ): Promise<CardRow | null> {
