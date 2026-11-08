@@ -247,6 +247,13 @@ function titleFor(plan: IntentPlan): string {
   }
 }
 
+/** Postgres unique violation (23505), as raised by pglite or postgres-js under drizzle. */
+export function isUniqueViolation(e: unknown): boolean {
+  const code = (x: unknown) =>
+    x && typeof x === 'object' ? (x as { code?: unknown }).code : undefined;
+  return code(e) === '23505' || code((e as { cause?: unknown } | null)?.cause) === '23505';
+}
+
 /** Card type and crew agent for an approval kind (docs/DESIGN.md section 4). */
 function cardTypeFor(kind: ApprovalRow['kind']): string {
   switch (kind) {
@@ -503,6 +510,8 @@ export class ApprovalService {
     reissuedFrom?: string;
     /** Replace the approval behind this card in place (a fresh price on the same card). */
     fromCard?: { id: string; tokenHash: string };
+    /** Opening a card must never post a Blocked card into the chat. */
+    quiet?: boolean;
   }): Promise<CreateResult> {
     const { userId, plan, bot } = input;
     if (await this.frozen(userId)) return { decision: 'block', reasons: [FROZEN_TEXT] };
@@ -528,7 +537,7 @@ export class ApprovalService {
       });
       if (g.decision === 'block') {
         await this.d.mood.on(userId, 'guard_blocked', 'guard');
-        await this.sendBlockedCard(userId, input.space, g.reasons);
+        if (!input.quiet) await this.sendBlockedCard(userId, input.space, g.reasons);
       }
       return { decision: g.decision, reasons: g.reasons };
     }
@@ -548,7 +557,7 @@ export class ApprovalService {
           reasons,
         });
         await this.d.mood.on(userId, 'guard_blocked', 'guard');
-        await this.sendBlockedCard(userId, input.space, reasons);
+        if (!input.quiet) await this.sendBlockedCard(userId, input.space, reasons);
         return { decision: 'block', reasons };
       }
     }
@@ -703,6 +712,7 @@ export class ApprovalService {
     note?: string;
     reissuedFrom?: string;
     fromCard?: { id: string; tokenHash: string };
+    quiet?: boolean;
   }): Promise<CreateResult> {
     const { userId, bot, asset, amountUsd } = input;
     if (await this.frozen(userId)) return { decision: 'block', reasons: [FROZEN_TEXT] };
@@ -741,7 +751,7 @@ export class ApprovalService {
       });
       if (g0.decision === 'block') {
         await this.d.mood.on(userId, 'guard_blocked', 'guard');
-        await this.sendBlockedCard(userId, input.space, g0.reasons);
+        if (!input.quiet) await this.sendBlockedCard(userId, input.space, g0.reasons);
       }
       return { decision: g0.decision, reasons: g0.reasons };
     }
@@ -765,6 +775,7 @@ export class ApprovalService {
       subcaption: `${input.note ? `${input.note} ` : ''}You'll get about ${q.amountOutDisplay} · tap to approve`,
       ...(input.reissuedFrom ? { reissuedFrom: input.reissuedFrom } : {}),
       ...(input.fromCard ? { fromCard: input.fromCard } : {}),
+      ...(input.quiet ? { quiet: true } : {}),
     });
   }
 
@@ -790,44 +801,65 @@ export class ApprovalService {
     const live =
       row.status === 'pending' && row.expiresAt.getTime() - now.getTime() > FRESH_PRICE_BELOW_MS;
     if (live || (row.status !== 'pending' && row.status !== 'expired')) return { refreshed: false };
-    if ((await this.reissueDepth(row)) >= MAX_FRESH_PRICES) return { refreshed: false };
-    if (row.status === 'pending') {
-      try {
-        await this.d.approvals.transition(
-          row.id,
-          row.kind,
-          'pending',
-          'cancelled',
-          'fresh price on open',
-        );
-      } catch {
-        return { refreshed: false }; // a concurrent open already did it
-      }
-    }
-    await this.d.ledger.setStatusForApproval(row.id, 'released');
+    if ((await this.chain(row)).freshPrices >= MAX_FRESH_PRICES) return { refreshed: false };
+    if (!card.space) return { refreshed: false };
     const plan = row.plan as MoneyPlan & { kind: 'invest' };
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
+    // 1) Guard first, with this approval's own hold left out, so opening a card never
+    //    cancels one that Guard would refuse to replace.
+    const provisional: MoneyPlan = { ...plan, quoteId: 'pending' };
+    const ctx = await this.guardContext(row.userId, bot, {
+      quote: { id: 'pending', expiresAt: new Date(now.getTime() + 60_000) },
+    });
+    if (row.status === 'pending') {
+      ctx.spentLast24hMicros =
+        ctx.spentLast24hMicros > row.amountMicros ? ctx.spentLast24hMicros - row.amountMicros : 0n;
+      ctx.approvalsLast10Min = Math.max(0, ctx.approvalsLast10Min - 1);
+      if (ctx.bot) {
+        const b = ctx.bot.spentLast24hMicros;
+        ctx.bot.spentLast24hMicros = b > row.amountMicros ? b - row.amountMicros : 0n;
+      }
+    }
+    if (
+      evaluate(provisional, await this.effectivePolicy(row.userId), ctx).decision !==
+      'allow_with_approval'
+    ) {
+      return { refreshed: false };
+    }
+    // 2) Cancel only if Face ID hasn't started (challenge unused), atomically.
+    if (row.status === 'pending') {
+      if (!(await this.d.approvals.cancelIfUnused(row.id, 'fresh price on open'))) {
+        return { refreshed: false };
+      }
+      await this.d.ledger.setStatusForApproval(row.id, 'released');
+    }
+    // 3) The fresh quote on the same card. Quiet: never a Blocked card from opening a link.
     try {
       const r = await this.createInvestApproval({
         userId: row.userId,
         bot,
         asset: plan.portfolioId,
         amountUsd: plan.amountUsd,
-        space: card.space ?? { spaceId: '', userHandle: '' },
+        space: card.space,
         reissuedFrom: row.id,
         fromCard: { id: card.id, tokenHash: card.tokenHash },
+        quiet: true,
       });
       if (r.decision === 'allow_with_approval') return { refreshed: true };
       await this.d.cards.update(
         card.id,
-        { state: 'expired' },
-        { subcaption: r.reasons[0] ?? 'ask penny again.' },
+        { state: 'expired', buttons: [{ id: 'renew', label: 'Get a new card', action: 'renew' }] },
+        { subcaption: "couldn't get a fresh price. tap Get a new card." },
       );
-    } catch {
+    } catch (e) {
+      // two opens at once on an expired card: the other one made the fresh price
+      if (isUniqueViolation(e) && (await this.d.approvals.byReissuedFrom(row.id))) {
+        return { refreshed: true };
+      }
       await this.d.cards.update(
         card.id,
-        { state: 'expired' },
-        { subcaption: "couldn't get a fresh price. ask penny again." },
+        { state: 'expired', buttons: [{ id: 'renew', label: 'Get a new card', action: 'renew' }] },
+        { subcaption: "couldn't get a fresh price. tap Get a new card." },
       );
     }
     return { refreshed: false };
@@ -873,8 +905,9 @@ export class ApprovalService {
         note: 'New price.',
         reissuedFrom: row.id,
       });
-    } catch {
+    } catch (e) {
       // a concurrent request already made the replacement (approvals_reissued_from_uq)
+      if (!isUniqueViolation(e)) throw e;
       return (await this.d.approvals.byReissuedFrom(row.id))?.id ?? null;
     }
     if (r.decision === 'allow_with_approval') {
@@ -1250,14 +1283,27 @@ export class ApprovalService {
   }
 
   /** How many times this approval has already been replaced. */
-  private async reissueDepth(row: ApprovalRow): Promise<number> {
-    let depth = 0;
-    let from = row.reissuedFrom;
-    while (from && depth <= MAX_REISSUES) {
-      depth += 1;
-      from = (await this.d.approvals.get(from))?.reissuedFrom ?? null;
+  /**
+   * Walk the chain of approvals this one replaced. A link to an approval on the same
+   * card is a fresh price; a link to another card is a replacement card. The two have
+   * separate limits, so opening a card a few times never uses up "Get a new card".
+   */
+  private async chain(row: ApprovalRow): Promise<{ replacements: number; freshPrices: number }> {
+    let replacements = 0;
+    let freshPrices = 0;
+    let child = row;
+    for (let i = 0; i < MAX_REISSUES + MAX_FRESH_PRICES + 2 && child.reissuedFrom; i += 1) {
+      const parent = await this.d.approvals.get(child.reissuedFrom);
+      if (!parent) break;
+      if (parent.cardId && parent.cardId === child.cardId) freshPrices += 1;
+      else replacements += 1;
+      child = parent;
     }
-    return depth;
+    return { replacements, freshPrices };
+  }
+
+  private async reissueDepth(row: ApprovalRow): Promise<number> {
+    return (await this.chain(row)).replacements;
   }
 
   /**
@@ -1269,10 +1315,10 @@ export class ApprovalService {
     try {
       return await this.reissueOnce(row);
     } catch (e) {
-      // approvals_reissued_from_uq: a concurrent request already made the replacement
-      const existing = await this.d.approvals.byReissuedFrom(row.id);
-      if (existing) return existing.id;
-      throw e;
+      // approvals_reissued_from_uq: a concurrent request already made the replacement.
+      // Anything else is a real failure and is raised, never reported as a new card.
+      if (!isUniqueViolation(e)) throw e;
+      return (await this.d.approvals.byReissuedFrom(row.id))?.id ?? null;
     }
   }
 
@@ -1528,11 +1574,21 @@ export class ApprovalService {
    * holding the messages). It sends an Unfreeze card; only Face ID on it, with a key
    * the freeze switched off, brings the keys back.
    */
-  async startUnfreeze(userId: string, space: SpaceRef): Promise<'card_sent' | 'not_frozen'> {
+  async startUnfreeze(
+    userId: string,
+    space: SpaceRef,
+  ): Promise<'card_sent' | 'not_frozen' | 'unfrozen'> {
     if (!(await this.frozen(userId))) return 'not_frozen';
+    const frozen = await this.d.users.frozenDevices(userId);
+    if (frozen.length === 0) {
+      // nothing was switched off (frozen before any setup): no key to protect, so the
+      // text is enough. Setting up again still needs a fresh link from Penny.
+      await this.unfreeze(userId);
+      return 'unfrozen';
+    }
     // the freeze switched the keys off, so the card goes where that key lives:
     // a live card for the iPhone app, a link card for a browser passkey
-    const [device] = await this.d.users.frozenDevices(userId);
+    const [device] = frozen;
     await this.d.cards.send({
       forDevice: device ?? null,
       userId,
@@ -1566,19 +1622,13 @@ export class ApprovalService {
     ) {
       throw new ApprovalError(401, 'unauthorized', 'unauthorized');
     }
-    if (!(await this.d.cardsRepo.claimState(card.id, 'ready', 'approving'))) {
+    if (card.state !== 'ready') {
       throw new ApprovalError(409, 'challenge_used', 'this card was already used');
     }
-    const fail = async (code: string) => {
-      await this.d.cards.update(
-        card.id,
-        { state: 'failed', buttons: [] },
-        {
-          subcaption: "that didn't check out. text unfreeze for a new card.",
-        },
-      );
-      return new ApprovalError(422, code, "that didn't check out");
-    };
+    // A failed check leaves the card as it is: someone with the link but without the key
+    // must not be able to use up the user's Unfreeze card. The card is only spent
+    // (ready -> approving, once) after the signature checks out.
+    const fail = async (code: string) => new ApprovalError(422, code, "that didn't check out");
     if (!(await this.frozen(card.userId))) {
       await this.d.cards.update(card.id, { state: 'done', buttons: [] });
       return { status: 'not_frozen' };
@@ -1625,6 +1675,9 @@ export class ApprovalService {
       } catch {
         throw await fail('bad_passkey');
       }
+    }
+    if (!(await this.d.cardsRepo.claimState(card.id, 'ready', 'approving'))) {
+      throw new ApprovalError(409, 'challenge_used', 'this card was already used');
     }
     await this.unfreeze(card.userId);
     await this.d.cards.update(

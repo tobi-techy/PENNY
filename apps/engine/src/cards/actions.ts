@@ -75,13 +75,20 @@ export class CardActions {
       if (!(await this.d.cards.claimForApproval(row.id))) {
         throw new ApprovalError(409, 'already_sent', 'this draft is already waiting for Face ID');
       }
+      // seal what is in the card now (an edit may have landed between our read and the claim)
+      const claimed = await this.d.cards.get(row.id);
+      const sealed = WritePlan.safeParse(claimed?.payload?.writePlan);
+      if (!sealed.success) {
+        await this.d.cards.update(row.id, { kind: 'info' });
+        throw new ApprovalError(409, 'not_sendable', 'nothing to send here');
+      }
       const botId = typeof payload.botId === 'string' ? payload.botId : null;
       const bot = botId ? await this.d.bots.byId(botId) : null;
       const r = await this.d.approvals
         .createWriteApproval({
           userId: row.userId,
           bot,
-          plan: plan.data,
+          plan: sealed.data,
           space: row.space,
           fromCard: { id: row.id, tokenHash: row.tokenHash },
         })

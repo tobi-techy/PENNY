@@ -279,7 +279,7 @@ export class CardSender {
     // No handle (restart) or every edit failed: a fresh card. Without the token we
     // cannot rebuild the URL, so we say what changed in words. An unanswered card
     // expiring is not worth a new message: it shows Expired when opened.
-    if (!LINK_RESEND_STATES.has(card.state)) return;
+    if (card.state === 'expired') return;
     if (token && row.space) {
       await this.deliver(row, card, url, subcaption, false);
     } else if (row.space) {

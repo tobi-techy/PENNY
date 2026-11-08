@@ -139,3 +139,130 @@ describe('honest lines', () => {
     expect(t.messaging.texts.at(-1)?.text).toContain(`/a/${r.cardToken}?v=failed`);
   });
 });
+
+describe('PR #9 review: fresh prices', () => {
+  async function investCard() {
+    const r = await t.engine.services.approvals.createInvestApproval({
+      userId: u.userId,
+      bot: null,
+      asset: 'ETH',
+      amountUsd: '5',
+      space: u.space,
+    });
+    if (r.decision !== 'allow_with_approval') throw new Error(`${r.decision}: ${r.reasons}`);
+    return r;
+  }
+
+  test('at most 8 fresh prices per card, and they never use up Get a new card', async () => {
+    const r = await investCard();
+    const saved = t.clock.now;
+    let refreshed = 0;
+    try {
+      for (let i = 0; i < 11; i += 1) {
+        t.clock.now = new Date(t.clock.now.getTime() + 60_000);
+        if (((await (await fresh(r.cardToken)).json()) as { refreshed: boolean }).refreshed)
+          refreshed += 1;
+      }
+      expect(refreshed).toBe(8);
+      // let it expire, then Get a new card still works
+      t.clock.now = new Date(t.clock.now.getTime() + 5 * 60_000);
+      await t.engine.services.approvals.expireDue();
+      expect((await t.engine.services.approvals.renewByToken(r.cardToken)).approvalId).toBeTruthy();
+    } finally {
+      t.clock.now = saved;
+    }
+  });
+
+  test('when Guard would refuse the new price, opening the card changes nothing and posts nothing', async () => {
+    const r = await investCard();
+    const texts = t.messaging.texts.length;
+    await t.db.db.execute(
+      sql`update guard_policies set per_tx_usd = '1' where user_id = ${u.userId}`,
+    );
+    const saved = t.clock.now;
+    t.clock.now = new Date(saved.getTime() + 60_000);
+    try {
+      expect(await (await fresh(r.cardToken)).json()).toEqual({ refreshed: false });
+      expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('pending');
+      expect(t.messaging.texts.length).toBe(texts);
+    } finally {
+      t.clock.now = saved;
+      await t.db.db.execute(
+        sql`update guard_policies set per_tx_usd = '50' where user_id = ${u.userId}`,
+      );
+    }
+  });
+
+  test('never cancels an approval whose Face ID approve has started', async () => {
+    const r = await investCard();
+    await t.engine.repos.approvals.burnChallenge(r.approvalId, t.clock.now);
+    const saved = t.clock.now;
+    t.clock.now = new Date(saved.getTime() + 60_000);
+    try {
+      expect(await (await fresh(r.cardToken)).json()).toEqual({ refreshed: false });
+      expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('pending');
+      expect(await t.engine.repos.approvals.cancelIfUnused(r.approvalId, 'x')).toBe(false);
+    } finally {
+      t.clock.now = saved;
+    }
+  });
+
+  test('two opens at once on an expired card: one fresh price, the card stays ready', async () => {
+    const r = await investCard();
+    const saved = t.clock.now;
+    t.clock.now = new Date(saved.getTime() + 2 * 60_000);
+    try {
+      await t.engine.services.approvals.expireDue();
+      const both = await Promise.all([fresh(r.cardToken), fresh(r.cardToken)]);
+      const results = await Promise.all(both.map((x) => x.json()));
+      expect(
+        results.filter((x) => (x as { refreshed: boolean }).refreshed).length,
+      ).toBeGreaterThanOrEqual(1);
+      const view = await t.engine.services.approvals.getByToken(r.cardToken);
+      expect(view.card.state).toBe('ready');
+      expect(view.approval?.status).toBe('pending');
+    } finally {
+      t.clock.now = saved;
+    }
+  });
+});
+
+describe('PR #9 review: unfreeze', () => {
+  test('a junk request does not use up the Unfreeze card', async () => {
+    const f = await enrolledUser(t, '+15557000');
+    await t.engine.services.approvals.freeze(f.userId);
+    expect(await t.engine.services.approvals.startUnfreeze(f.userId, f.space)).toBe('card_sent');
+    const token = tokenOf(t.messaging.cards.at(-1)?.card.url);
+    const view = await t.engine.services.approvals.getByToken(token);
+    const post = (body: unknown) =>
+      t.engine.app.request(`/v1/cards/by-token/${token}/unfreeze`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+        body: JSON.stringify(body),
+      });
+    expect((await post({ deviceId: f.deviceId, signature: 'A'.repeat(86) })).status).toBe(422);
+    expect((await t.engine.services.approvals.getByToken(token)).card.state).toBe('ready');
+    const { unfreezeMessage } = await import('@penny/shared');
+    const ok = await post({
+      deviceId: f.deviceId,
+      signature: f.keys.sign(unfreezeMessage(view.card.id, view.unfreeze?.challenge as string)),
+    });
+    expect(ok.status).toBe(200);
+  });
+
+  test('frozen before any setup (no keys switched off): the text unfreezes', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15557001');
+    await t.engine.services.approvals.freeze(user.id);
+    expect(
+      await t.engine.services.approvals.startUnfreeze(user.id, {
+        spaceId: 's',
+        userHandle: '+15557001',
+      }),
+    ).toBe('unfrozen');
+    expect((await t.engine.repos.users.byId(user.id))?.frozenAt).toBeNull();
+  });
+});
+
+function tokenOf(url: string | undefined): string {
+  return /\/a\/([A-Za-z0-9_-]{43})/.exec(url ?? '')?.[1] ?? '';
+}
