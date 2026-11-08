@@ -70,3 +70,13 @@ export function approvalHash(a: {
 export function approvalSignMessage(approvalHashValue: string, challenge: string): string {
   return `penny-approval:v2:${approvalHashValue}:${challenge}`;
 }
+
+/**
+ * The WebAuthn challenge for an approval (or unfreeze) passkey prompt:
+ * base64url(sha256(UTF-8(message))). It binds the passkey to the exact action: the
+ * browser computes it from the approval hash it checked itself, and the server
+ * recomputes it from the stored hash. The single-use challenge inside keeps it fresh.
+ */
+export function passkeyChallengeFor(message: string): string {
+  return sha256Base64Url(message);
+}

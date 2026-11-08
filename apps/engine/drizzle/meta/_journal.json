@@ -43,6 +43,13 @@
       "when": 1794168854777,
       "tag": "0005_live_cards",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794172497998,
+      "tag": "0006_reissue_once",
+      "breakpoints": true
     }
   ]
 }

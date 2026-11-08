@@ -192,6 +192,10 @@ export const approvals = pgTable(
   (t) => [
     index('approvals_user_idx').on(t.userId, t.createdAt),
     index('approvals_card_token_idx').on(t.cardTokenHash),
+    // one replacement per approval: concurrent renews can't double-reserve the limit
+    uniqueIndex('approvals_reissued_from_uq')
+      .on(t.reissuedFrom)
+      .where(sql`${t.reissuedFrom} is not null`),
   ],
 );
 

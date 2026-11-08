@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "approvals_reissued_from_uq" ON "approvals" USING btree ("reissued_from") WHERE "approvals"."reissued_from" is not null;

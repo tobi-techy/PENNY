@@ -15,12 +15,15 @@ import {
   type MoneyPlan,
   type NearAction,
   type PasskeyApproveBody,
+  passkeyChallengeFor,
   planAmount,
   planApprovalMessage,
   planHash,
   planRecipient,
   type SignBody,
   toMicros,
+  type UnfreezeBody,
+  unfreezeMessage,
   type WritePlan,
 } from '@penny/shared';
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
@@ -64,6 +67,8 @@ export const BOT_APPROVAL_TTL_MS = 10 * 60_000;
 export const MAX_REISSUES = 3;
 /** Not me / Get a new card keep working this long after a card expires. */
 export const AFTER_EXPIRY_BUTTON_MS = 24 * 60 * 60_000;
+/** An Unfreeze card is good for 10 minutes. */
+export const UNFREEZE_CARD_TTL_MS = 10 * 60_000;
 /** User copy when the user froze Penny. */
 export const FROZEN_TEXT = 'Penny is frozen. Text unfreeze to start again.';
 export const REQUOTE_AFTER_EXPIRY_MS = 10 * 60_000;
@@ -766,15 +771,21 @@ export class ApprovalService {
       return null;
     }
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
-    const r = await this.createInvestApproval({
-      userId: row.userId,
-      bot,
-      asset: plan.portfolioId,
-      amountUsd: plan.amountUsd,
-      space,
-      note: 'New price.',
-      reissuedFrom: row.id,
-    });
+    let r: CreateResult;
+    try {
+      r = await this.createInvestApproval({
+        userId: row.userId,
+        bot,
+        asset: plan.portfolioId,
+        amountUsd: plan.amountUsd,
+        space,
+        note: 'New price.',
+        reissuedFrom: row.id,
+      });
+    } catch {
+      // a concurrent request already made the replacement (approvals_reissued_from_uq)
+      return (await this.d.approvals.byReissuedFrom(row.id))?.id ?? null;
+    }
     if (r.decision === 'allow_with_approval') {
       await this.updateCard(
         row.id,
@@ -962,6 +973,8 @@ export class ApprovalService {
         kind: 'approval',
         approvalId: id,
         state: 'ready',
+        type: 'write',
+        lines: writeFacts(plan).map((f) => ({ label: f.label.slice(0, 40), value: f.value })),
         buttons: APPROVE_BUTTONS,
         expiresAt,
         tokenExpiresAt: expiresAt,
@@ -1059,6 +1072,20 @@ export class ApprovalService {
     }
     const fresh = (await this.d.cards.get(card.id)) ?? null;
     if (!fresh) throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    if (
+      fresh.type === 'unfreeze' &&
+      fresh.state === 'ready' &&
+      now.getTime() <= card.tokenExpiresAt.getTime() &&
+      typeof card.payload?.challenge === 'string'
+    ) {
+      return {
+        card: fresh,
+        unfreeze: {
+          challenge: card.payload.challenge,
+          passkeys: await this.frozenPasskeyIds(card.userId),
+        },
+      };
+    }
     if (!row) return { card: fresh };
     const usable =
       row.status === 'pending' && !row.challengeUsedAt && now.getTime() <= row.expiresAt.getTime();
@@ -1148,6 +1175,17 @@ export class ApprovalService {
    * many re-issues, already re-issued, or frozen).
    */
   async reissue(row: ApprovalRow): Promise<string | null> {
+    try {
+      return await this.reissueOnce(row);
+    } catch (e) {
+      // approvals_reissued_from_uq: a concurrent request already made the replacement
+      const existing = await this.d.approvals.byReissuedFrom(row.id);
+      if (existing) return existing.id;
+      throw e;
+    }
+  }
+
+  private async reissueOnce(row: ApprovalRow): Promise<string | null> {
     if (await this.d.approvals.byReissuedFrom(row.id)) return null;
     if ((await this.reissueDepth(row)) >= MAX_REISSUES) return null;
     if (await this.frozen(row.userId)) return null;
@@ -1213,7 +1251,7 @@ export class ApprovalService {
     if (row.status === 'pending' && this.d.now().getTime() > row.expiresAt.getTime())
       await this.expire(row);
     const now = await this.d.approvals.get(id);
-    if (!now || now.status !== 'expired') {
+    if (now?.status !== 'expired') {
       // failed rows may have moved money (a relay that never reported back): never re-send
       throw new ApprovalError(409, 'not_expired', 'this card cannot be renewed');
     }
@@ -1285,7 +1323,10 @@ export class ApprovalService {
     try {
       verification = await verifyAuthenticationResponse({
         response: body.assertion as never,
-        expectedChallenge: row.challenge as string,
+        // bound to this exact action: sha256 of the approve message (hash + challenge)
+        expectedChallenge: passkeyChallengeFor(
+          approvalSignMessage(row.approvalHash as string, row.challenge as string),
+        ),
         expectedOrigin: base.origin,
         expectedRPID: base.hostname,
         credential: {
@@ -1379,6 +1420,128 @@ export class ApprovalService {
     await this.d.mood.on(userId, 'approval_expired');
     this.d.log.info({ userId, devices: revoked.length, approvals: n }, 'user froze penny');
     return { devices: revoked.length, approvals: n };
+  }
+
+  /** Passkeys whose device the freeze switched off (the only ones that may unfreeze). */
+  private async frozenPasskeyIds(userId: string): Promise<string[]> {
+    const out: string[] = [];
+    for (const p of await this.d.passkeys.allForUser(userId)) {
+      const dev = await this.d.users.deviceById(p.deviceId);
+      if (dev?.revokedReason === 'freeze') out.push(p.credentialId);
+    }
+    return out;
+  }
+
+  /**
+   * Text "unfreeze": never unfreezes by itself (whoever froze Penny may be the one
+   * holding the messages). It sends an Unfreeze card; only Face ID on it, with a key
+   * the freeze switched off, brings the keys back.
+   */
+  async startUnfreeze(userId: string, space: SpaceRef): Promise<'card_sent' | 'not_frozen'> {
+    if (!(await this.frozen(userId))) return 'not_frozen';
+    // the freeze switched the keys off, so the card goes where that key lives:
+    // a live card for the iPhone app, a link card for a browser passkey
+    const [device] = await this.d.users.frozenDevices(userId);
+    await this.d.cards.send({
+      forDevice: device ?? null,
+      userId,
+      space,
+      agent: 'guard',
+      kind: 'info',
+      type: 'unfreeze',
+      title: 'Unfreeze Penny',
+      lines: [{ value: "Confirm it's you with Face ID. Your keys come back on." }],
+      buttons: [{ id: 'unfreeze', label: 'Unfreeze with Face ID', action: 'unfreeze' }],
+      state: 'ready',
+      payload: { challenge: randomToken(32) },
+      tokenExpiresAt: new Date(this.d.now().getTime() + UNFREEZE_CARD_TTL_MS),
+    });
+    return 'card_sent';
+  }
+
+  /**
+   * POST /v1/cards/by-token/:token/unfreeze. The card is single use (ready -> approving
+   * before any check). The device key (app) or passkey (web) must belong to a device the
+   * freeze switched off; the signature or assertion is over this card's challenge.
+   */
+  async unfreezeByToken(token: string, body: UnfreezeBody): Promise<{ status: string }> {
+    const card = /^[A-Za-z0-9_-]{43}$/.test(token)
+      ? await this.d.cardsRepo.byTokenHash(sha256Hex(token))
+      : null;
+    if (
+      card?.type !== 'unfreeze' ||
+      this.d.now().getTime() > card.tokenExpiresAt.getTime() ||
+      typeof card.payload?.challenge !== 'string'
+    ) {
+      throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    }
+    if (!(await this.d.cardsRepo.claimState(card.id, 'ready', 'approving'))) {
+      throw new ApprovalError(409, 'challenge_used', 'this card was already used');
+    }
+    const fail = async (code: string) => {
+      await this.d.cards.update(
+        card.id,
+        { state: 'failed', buttons: [] },
+        {
+          subcaption: "that didn't check out. text unfreeze for a new card.",
+        },
+      );
+      return new ApprovalError(422, code, "that didn't check out");
+    };
+    if (!(await this.frozen(card.userId))) {
+      await this.d.cards.update(card.id, { state: 'done', buttons: [] });
+      return { status: 'not_frozen' };
+    }
+    const message = unfreezeMessage(card.id, card.payload.challenge);
+    if ('deviceId' in body) {
+      const dev = await this.d.users.deviceById(body.deviceId);
+      if (!dev || dev.userId !== card.userId || dev.revokedReason !== 'freeze') {
+        throw await fail('unknown_device');
+      }
+      const ok = verifyEd25519(
+        dev.publicKey,
+        new TextEncoder().encode(message),
+        Buffer.from(body.signature, 'base64url'),
+      );
+      if (!ok) throw await fail('bad_signature');
+    } else {
+      const pk = await this.d.passkeys.byCredentialId(body.assertion.id);
+      const dev = pk ? await this.d.users.deviceById(pk.deviceId) : null;
+      if (!pk || !dev || pk.userId !== card.userId || dev.revokedReason !== 'freeze') {
+        throw await fail('unknown_passkey');
+      }
+      const base = new URL(this.d.publicBaseUrl);
+      try {
+        const v = await verifyAuthenticationResponse({
+          response: body.assertion as never,
+          expectedChallenge: passkeyChallengeFor(message),
+          expectedOrigin: base.origin,
+          expectedRPID: base.hostname,
+          credential: {
+            id: pk.credentialId,
+            publicKey: new Uint8Array(Buffer.from(pk.publicKey, 'base64url')),
+            counter: pk.signCount,
+          },
+          requireUserVerification: true,
+        });
+        if (!v.verified || !v.authenticationInfo.userVerified) throw new Error('not verified');
+        const next = v.authenticationInfo.newCounter;
+        if (
+          !(await this.d.passkeys.advanceCount(pk.id, pk.signCount, Math.max(next, pk.signCount)))
+        ) {
+          throw new Error('count');
+        }
+      } catch {
+        throw await fail('bad_passkey');
+      }
+    }
+    await this.unfreeze(card.userId);
+    await this.d.cards.update(
+      card.id,
+      { state: 'done', title: 'Penny is unfrozen', buttons: [] },
+      { subcaption: "you're back." },
+    );
+    return { status: 'unfrozen' };
   }
 
   async unfreeze(userId: string): Promise<{ devices: number }> {

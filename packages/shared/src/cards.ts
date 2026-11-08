@@ -26,6 +26,7 @@ export const KNOWN_CARD_TYPES = [
   'plan',
   'found',
   'done',
+  'unfreeze',
 ] as const;
 export type KnownCardType = (typeof KNOWN_CARD_TYPES)[number];
 
@@ -46,6 +47,7 @@ export const CardButtonAction = z.enum([
   'decline',
   'renew',
   'freeze',
+  'unfreeze',
 ]);
 export type CardButtonAction = z.infer<typeof CardButtonAction>;
 
@@ -124,6 +126,7 @@ const STYLE: Record<KnownCardType, { color: string; tag: string }> = {
   plan: { color: '#B77DF8', tag: '☰ PLAN' },
   found: { color: '#FEA247', tag: '◉ FOUND IT' },
   done: { color: '#4FD57F', tag: '✓ DONE' },
+  unfreeze: { color: '#F6A8F0', tag: '◆ UNFREEZE' },
 };
 const PLAIN = { color: '#B1C3D8', tag: '● PENNY' };
 
@@ -213,6 +216,10 @@ export function parseCardLenient(raw: unknown): Card | null {
 
 export const ApprovalByTokenResponse = z.object({
   card: Card,
+  /** Unfreeze cards: the single-use challenge to sign (app) or answer with a passkey (web). */
+  unfreeze: z
+    .object({ challenge: z.string(), passkeys: z.array(z.string()).optional() })
+    .optional(),
   approval: z
     .object({
       id: z.string(),
@@ -298,3 +305,15 @@ export const PasskeyRegistration = z
 export type PasskeyRegistration = z.infer<typeof PasskeyRegistration>;
 
 export const CardPressBody = z.object({ buttonId: z.string().max(24) }).strict();
+
+/** POST /v1/cards/by-token/:token/unfreeze: Face ID from the phone, or a passkey from the web. */
+export const UnfreezeBody = z.union([
+  z.object({ deviceId: z.string().min(3).max(64), signature: Base64UrlStr.length(86) }).strict(),
+  z.object({ assertion: PasskeyAssertion }).strict(),
+]);
+export type UnfreezeBody = z.infer<typeof UnfreezeBody>;
+
+/** The message the device key signs to unfreeze. */
+export function unfreezeMessage(cardId: string, challenge: string): string {
+  return `penny-unfreeze:v1:${cardId}:${challenge}`;
+}

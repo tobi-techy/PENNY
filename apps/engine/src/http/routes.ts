@@ -10,6 +10,7 @@ import {
   policyUpdateMessage,
   SignBody,
   SpectrumMessagesEvent,
+  UnfreezeBody,
 } from '@penny/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -279,6 +280,22 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     return withIdempotency(c, d.idempotency, `press:${token.slice(0, 12)}`, raw, async () => {
       try {
         return { status: 200, body: await d.cardActions.press(token, body.buttonId) };
+      } catch (e) {
+        return asResult(e);
+      }
+    });
+  });
+
+  // Face ID on an Unfreeze card (device key from the app, passkey from the web)
+  r.post('/v1/cards/by-token/:token/unfreeze', approvalsRL, async (c) => {
+    const token = tokenOf(c.req.param('token'));
+    if (!token) return c.json({ error: 'unauthorized' }, 401);
+    const raw = await c.req.text();
+    const body = parseJson(UnfreezeBody, raw);
+    if (!body) return c.json({ error: 'bad_request' }, 400);
+    return withIdempotency(c, d.idempotency, `unfreeze:${token.slice(0, 12)}`, raw, async () => {
+      try {
+        return { status: 200, body: await d.approvals.unfreezeByToken(token, body) };
       } catch (e) {
         return asResult(e);
       }

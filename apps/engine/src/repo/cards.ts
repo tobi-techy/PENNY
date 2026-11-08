@@ -45,6 +45,26 @@ export class CardsRepo {
     return r.length === 1;
   }
 
+  /** Change a draft's payload only while it is still a draft (never after Send). */
+  async updateDraftPayload(id: string, payload: Record<string, unknown>): Promise<boolean> {
+    const r = await this.db
+      .update(cards)
+      .set({ payload, updatedAt: new Date() })
+      .where(and(eq(cards.id, id), eq(cards.kind, 'info')))
+      .returning({ id: cards.id });
+    return r.length === 1;
+  }
+
+  /** Move a card from one state to another exactly once (single-use buttons). */
+  async claimState(id: string, from: string, to: string): Promise<boolean> {
+    const r = await this.db
+      .update(cards)
+      .set({ state: to, updatedAt: new Date() })
+      .where(and(eq(cards.id, id), eq(cards.state, from)))
+      .returning({ id: cards.id });
+    return r.length === 1;
+  }
+
   async update(
     id: string,
     patch: Partial<
@@ -99,6 +119,11 @@ export class PasskeysRepo {
       .select()
       .from(passkeys)
       .where(and(eq(passkeys.userId, userId), isNull(passkeys.revokedAt)));
+  }
+
+  /** Every passkey for this user, revoked or not (unfreeze checks the device). */
+  async allForUser(userId: string): Promise<PasskeyRow[]> {
+    return this.db.select().from(passkeys).where(eq(passkeys.userId, userId));
   }
 
   async byCredentialId(credentialId: string): Promise<PasskeyRow | null> {

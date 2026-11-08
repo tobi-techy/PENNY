@@ -51,6 +51,8 @@ export type NewCard = {
   tokenExpiresAt?: Date;
   /** Live-card bubble lines. Defaults come from the card. */
   subcaption?: string;
+  /** Pick the channel from this device instead of the active one (unfreeze cards). */
+  forDevice?: DeviceRow | null;
 };
 
 export type CardSenderDeps = {
@@ -115,8 +117,11 @@ export class CardSender {
   async send(
     input: NewCard,
   ): Promise<{ card: Card; token: string; url: string; channel: Channel; ref?: string }> {
-    const device = await this.d.users.activeDevice(input.userId);
-    const channel = pickChannel(device);
+    const device =
+      input.forDevice !== undefined
+        ? input.forDevice
+        : await this.d.users.activeDevice(input.userId);
+    const channel = pickChannel(device ? { ...device, revokedAt: null } : null);
     const tok =
       input.token ??
       (() => {

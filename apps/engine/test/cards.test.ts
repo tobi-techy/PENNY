@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { Card, planApprovalMessage } from '@penny/shared';
+import { Card, planApprovalMessage, unfreezeMessage } from '@penny/shared';
 import { sql } from 'drizzle-orm';
 import { FROZEN_TEXT } from '../src/approvals/service.ts';
 import { BUILT_IN_BOTS } from '../src/brain/bots.ts';
@@ -8,7 +8,7 @@ import { APPROVAL_POLICY, needsApproval } from '../src/cards/policy.ts';
 import { renderCardPng } from '../src/cards/render.ts';
 import { linkSubcaptionStates, pickChannel } from '../src/cards/sender.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
-import { FREEZE_REPLY, freezeCommand } from '../src/inbound.ts';
+import { FREEZE_REPLY, freezeCommand, UNFREEZE_REPLY } from '../src/inbound.ts';
 import { createLogger } from '../src/lib/logger.ts';
 import type { DeviceRow } from '../src/repo/users.ts';
 import {
@@ -442,8 +442,39 @@ describe('freeze', () => {
     expect(next).toEqual({ decision: 'block', reasons: [FROZEN_TEXT] });
     expect(FROZEN_TEXT).toBe('Penny is frozen. Text unfreeze to start again.');
 
+    // texting "unfreeze" alone never unfreezes: it sends an Unfreeze card
     await handleInbound(deps, inbound(f.space.userHandle, 'unfreeze'));
+    expect(t.messaging.texts.at(-1)?.text).toBe(UNFREEZE_REPLY);
+    expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
+    const ufToken = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    const uf = await t.engine.services.approvals.getByToken(ufToken);
+    expect(uf.card.type).toBe('unfreeze');
+    const challenge = uf.unfreeze?.challenge as string;
+    const unfreeze = (body: unknown) =>
+      t.engine.app.request(`/v1/cards/by-token/${ufToken}/unfreeze`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+        body: JSON.stringify(body),
+      });
+    // pressing the button is not enough: only Face ID (a signature) unfreezes
+    expect((await press(ufToken, 'unfreeze')).status).toBe(409);
+    // Face ID on the phone: the frozen device key signs this card's challenge
+    const res = await unfreeze({
+      deviceId: f.deviceId,
+      signature: f.keys.sign(unfreezeMessage(uf.card.id, challenge)),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'unfrozen' });
     expect((await t.engine.repos.users.activeDevice(f.userId))?.id).toBe(f.deviceId);
+    // the card is single use
+    expect(
+      (
+        await unfreeze({
+          deviceId: f.deviceId,
+          signature: f.keys.sign(unfreezeMessage(uf.card.id, challenge)),
+        })
+      ).status,
+    ).toBe(409);
     const after = await t.engine.services.approvals.createMoneyApproval({
       userId: f.userId,
       bot: null,
@@ -451,6 +482,41 @@ describe('freeze', () => {
       space: f.space,
     });
     expect(after.decision).toBe('allow_with_approval');
+  });
+
+  test('an Unfreeze card signed with another key fails and keeps Penny frozen', async () => {
+    const f = await enrolledUser(t, '+15554002');
+    await t.engine.services.approvals.freeze(f.userId);
+    expect(await t.engine.services.approvals.startUnfreeze(f.userId, f.space)).toBe('card_sent');
+    const token = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    const uf = await t.engine.services.approvals.getByToken(token);
+    const rogue = (await import('./helpers.ts')).deviceKeys();
+    const res = await t.engine.app.request(`/v1/cards/by-token/${token}/unfreeze`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({
+        deviceId: f.deviceId,
+        signature: rogue.sign(unfreezeMessage(uf.card.id, uf.unfreeze?.challenge as string)),
+      }),
+    });
+    expect(res.status).toBe(422);
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeTruthy();
+    expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
+    // a device the freeze did not switch off (another user's) can't unfreeze either
+    const other = await enrolledUser(t, '+15554003');
+    expect(await t.engine.services.approvals.startUnfreeze(f.userId, f.space)).toBe('card_sent');
+    const token2 = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    const uf2 = await t.engine.services.approvals.getByToken(token2);
+    const res2 = await t.engine.app.request(`/v1/cards/by-token/${token2}/unfreeze`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({
+        deviceId: other.deviceId,
+        signature: other.keys.sign(unfreezeMessage(uf2.card.id, uf2.unfreeze?.challenge as string)),
+      }),
+    });
+    expect(res2.status).toBe(422);
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeTruthy();
   });
 
   test('"Not me" on a Blocked card freezes', async () => {

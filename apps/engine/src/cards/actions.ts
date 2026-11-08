@@ -62,7 +62,7 @@ export class CardActions {
     const payload = row.payload ?? {};
 
     // Policy decides, not the card: approve happens only through Face ID endpoints.
-    if (button.action === 'approve') {
+    if (button.action === 'approve' || button.action === 'unfreeze') {
       throw new ApprovalError(409, 'use_face_id', 'approve with Face ID');
     }
     if (needsApproval({ button: button.action })) {
@@ -155,7 +155,10 @@ export class CardActions {
     if (!plan.success || row.kind !== 'info')
       throw new ApprovalError(409, 'not_editable', 'nothing to edit');
     const next = { ...plan.data, arguments: { ...plan.data.arguments, body: text.slice(0, 5000) } };
-    await this.d.cards.update(row.id, { payload: { ...payload, writePlan: next } });
+    // atomic: once Send turned the draft into an approval, the text is sealed
+    if (!(await this.d.cards.updateDraftPayload(row.id, { ...payload, writePlan: next }))) {
+      throw new ApprovalError(409, 'not_editable', 'this draft is already waiting for Face ID');
+    }
     const lines = row.lines.map((l, i) =>
       i === row.lines.length - 1 && !l.label ? { value: text.slice(0, 120) || '(empty)' } : l,
     );
