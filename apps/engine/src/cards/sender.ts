@@ -325,3 +325,34 @@ export function linkUpdateText(card: Card): string {
       return card.title;
   }
 }
+
+/** Every user-facing bubble and update line, for the plain-words (jargon) test. */
+export function linkSubcaptionStates(): string[] {
+  const states: CardState[] = [
+    'ready',
+    'approving',
+    'sent',
+    'done',
+    'blocked',
+    'expired',
+    'declined',
+    'failed',
+    'undone',
+  ];
+  const base: Card = {
+    id: 'crd_00000000000000000000000000',
+    userId: 'u',
+    agent: 'penny',
+    kind: 'approval',
+    type: 'send',
+    title: 'Send 1 USDC',
+    lines: [{ label: 'To', value: 'ada.testnet' }],
+    buttons: [],
+    state: 'ready',
+    createdAt: new Date(0).toISOString(),
+  };
+  return states.flatMap((state) => [
+    liveSubcaption({ ...base, state }),
+    linkUpdateText({ ...base, state }),
+  ]);
+}

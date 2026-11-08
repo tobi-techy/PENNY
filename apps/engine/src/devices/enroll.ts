@@ -190,6 +190,8 @@ export class EnrollService {
     const claim = await this.users.enrollCodeUser(codeHash, this.now());
     // unknown, used and expired all look the same
     if (!claim) throw new EnrollError(401, 'invalid_code');
+    // A frozen Penny stays frozen: linking a new key would get around the freeze.
+    if ((await this.users.byId(claim.userId))?.frozenAt) throw new EnrollError(409, 'frozen');
 
     const existing = await this.users.activeDevice(claim.userId);
     if (existing) {

@@ -166,6 +166,7 @@ const engine = createEngine({
   log,
   publicBaseUrl: env.PUBLIC_BASE_URL,
   renderCardImage: (card) => renderCardPng(card, new Date()),
+  ...(env.PENNY_PROVE_SECRET ? { proveSecret: env.PENNY_PROVE_SECRET } : {}),
   explorerBaseUrl:
     env.NEAR_NETWORK === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io',
   ...(env.PENNY_ENV === 'mainnet'

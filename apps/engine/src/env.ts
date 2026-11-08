@@ -81,6 +81,9 @@ const BaseEnv = z.object({
   LANGFUSE_SECRET_KEY: optionalStr,
   LANGFUSE_BASE_URL: z.url().default('https://cloud.langfuse.com'),
 
+  /** Turns on the testnet proof routes for `bun run prove`. Refused on mainnet. */
+  PENNY_PROVE_SECRET: optionalStr,
+
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_PER_USER_PER_MIN: z.coerce.number().int().positive().default(30),
   MAX_BODY_BYTES: z.coerce.number().int().positive().max(1_048_576).default(65_536),
@@ -99,6 +102,29 @@ const MAINNET_REQUIRED = [
 ] as const;
 
 export const EnvSchema = BaseEnv.superRefine((env, ctx) => {
+  if (env.PENNY_PROVE_SECRET && (env.PENNY_ENV === 'mainnet' || env.NEAR_NETWORK !== 'testnet')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PENNY_PROVE_SECRET'],
+      message: 'the proof routes are testnet only',
+    });
+  }
+  if (env.PENNY_PROVE_SECRET && env.PENNY_PROVE_SECRET.length < 32) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PENNY_PROVE_SECRET'],
+      message: 'use at least 32 characters',
+    });
+  }
+  // Card links and passkeys (origin + rpId) are built from PUBLIC_BASE_URL, never from a
+  // request's Host header, so a live engine must say where it lives.
+  if (env.SPECTRUM_PROJECT_ID && !env.PUBLIC_BASE_URL.startsWith('https://')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PUBLIC_BASE_URL'],
+      message: 'set PUBLIC_BASE_URL to the public https URL when Spectrum is configured',
+    });
+  }
   if (env.PENNY_ENV !== 'mainnet') return;
   for (const key of MAINNET_REQUIRED) {
     if (!env[key]) {

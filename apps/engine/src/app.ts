@@ -17,6 +17,7 @@ import { CardSender } from './cards/sender.ts';
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
+import { buildProveRoutes } from './http/prove.ts';
 import { buildRoutes } from './http/routes.ts';
 import {
   type AppVars,
@@ -73,6 +74,8 @@ export type EngineDeps = {
   renderCardImage?: (card: import('@penny/shared').Card) => Promise<Uint8Array>;
   /** Explorer base for receipts, e.g. https://testnet.nearblocks.io */
   explorerBaseUrl?: string;
+  /** Testnet proof routes (scripts/prove.ts). Only set from env on testnet. */
+  proveSecret?: string;
   /** Test hook: no real waits between live-card edit retries. */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -303,6 +306,18 @@ export function createEngine(d: EngineDeps) {
     return new Response(await readFile(file), { headers: { 'content-type': type } });
   });
 
+  if (d.proveSecret) {
+    app.route(
+      '/',
+      buildProveRoutes({
+        secret: d.proveSecret,
+        users: repos.users,
+        approvals,
+        market: d.market,
+      }),
+    );
+  }
+
   app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
   const inboundDeps = {
@@ -363,7 +378,18 @@ export function createEngine(d: EngineDeps) {
   return {
     app,
     repos,
-    services: { approvals, bots: botService, crew, enroll, mood, memory, reflection, scheduler },
+    services: {
+      approvals,
+      bots: botService,
+      cards: cardSender,
+      cardActions,
+      crew,
+      enroll,
+      mood,
+      memory,
+      reflection,
+      scheduler,
+    },
   };
 }
 
