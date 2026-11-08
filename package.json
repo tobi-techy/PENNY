@@ -11,10 +11,12 @@
     "test": "bun test",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "dev": "bun run --cwd apps/engine dev"
+    "dev": "bun run --cwd apps/engine dev",
+    "prove": "bun scripts/prove.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.5",
+    "@noble/curves": "2.4.0",
     "@types/bun": "1.4.4",
     "typescript": "5.9.3"
   }

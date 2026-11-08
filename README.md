@@ -13,6 +13,23 @@ Penny is a crew of AI agents that helps run your everyday life from iMessage. Te
 
 Start here: `AGENT.md`, then `docs/IDEA.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/DESIGN.md`.
 
+## Try it
+
+Text Penny's number on iMessage. Everything Penny does or proposes shows up as a card in the thread: a reminder set, an email drafted, a bill found, a payment. Small things (Undo a reminder, Edit a draft) are one tap. Anything that spends money or acts in your name (send, pay, post, send an email) needs Face ID. There are two ways to get the cards:
+
+**1. With the app (live cards).** Install Penny from TestFlight, open it once and tap the setup link Penny texted you. Your key is made on the phone, behind Face ID, and never leaves it. From then on cards are live iMessage cards that change in place. Try:
+
+- "send 0.1 NEAR to amara.testnet" → a Send card with a countdown → Approve with Face ID → the card flips to Sent with a receipt link.
+- "remind me to call mum at 7" → "Reminder set for 7am" with Undo. No Face ID.
+- "email Amara the invoice" → "Email to Amara ready" with Send and Edit. Send asks for Face ID.
+- "send 5000 NEAR to stranger.testnet" → a Blocked card. No approval card is ever sent for it.
+
+**2. Without the app (picture cards).** Just text Penny. Tap the setup link: your browser makes an approval key and a passkey behind Face ID. Cards arrive as picture links; tap one, then Approve with Face ID on the page. Penny checks the passkey on its server, sends the move, and sends a fresh card showing Sent or Blocked.
+
+Text **freeze** any time (or tap Not me on a Blocked card): every key Penny trusts for you is switched off and every open card is cancelled. Text **unfreeze** to start again.
+
+Testnet only for now (`NEAR_NETWORK=testnet`). Proof of the approval path: `bun run prove`, results in `PROOF.md`.
+
 ## Repo
 
 ```
@@ -38,9 +55,27 @@ docs/             contracts and design
 
 More: `apps/engine/README.md`. iOS: `ios/README.md`.
 
+### Run the testnet proof
+
+`bun run prove` with no settings runs every check against an in-process engine (fake chain, no transactions). For the real proof against a deployed testnet engine, set on the engine `NEAR_NETWORK=testnet`, `DRY_RUN=0`, the testnet relayer keys and `PENNY_PROVE_SECRET`, then run locally with `PUBLIC_BASE_URL`, `PENNY_PROVE_SECRET`, `PENNY_PROVE_ACCOUNT_ID` (a funded `*.testnet` account) and `PENNY_PROVE_PRIVATE_KEY` (its test key). The proof routes are off unless the secret is set and the engine refuses to boot with it on mainnet.
+
 ## Safety defaults
 
 - `DRY_RUN=1` until someone explicitly says go. Live relay needs `PENNY_ENV=mainnet` **and** `DRY_RUN=0` **and** a relayer key; the env schema fails closed.
 - No user keys on the server. Ever.
 - Mood never overrides money rules.
 - `NEARAI_ATTESTATION=enforce` in `.env.example` (code default `off`). `enforce` needs `NEARAI_API_KEY` and blocks money and mail turns unless NEAR AI's TEE attestation and the response signature verify.
+
+## Libraries
+
+Bun · TypeScript · Hono · Drizzle ORM · Postgres (Neon) and PGlite with pgvector · zod · Vercel AI SDK · NEAR AI Cloud · `@near-js/*` · `@noble/curves` and `@noble/hashes` · Photon Spectrum (`spectrum-ts`, `@spectrum-ts/imessage`) · `@simplewebauthn/server` and `@simplewebauthn/browser` · `@resvg/resvg-js` · Composio · Langfuse · pino · ulid · `@phala/dcap-qvl` · React and Vite · Biome · Geist fonts (SIL OFL) · iOS: SwiftUI, CryptoKit, LocalAuthentication, Messages, App Attest, XcodeGen.
+
+## About this code
+
+Much of this code was written with AI coding agents, under human review: every change is a pull request with tests, checked by CI (typecheck, tests, Biome, gitleaks).
+
+Code counts from 19 Oct 2026.
+
+## License
+
+MIT. See `LICENSE`.
