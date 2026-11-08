@@ -98,7 +98,8 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
     slug: 'errand',
     name: 'Errand',
     toolIds: [
-      'propose_errand',
+      // propose_errand stays out until errands have a real task and bid source; its
+      // chain action (ft_transfer_call to intents.near with a made-up memo) is a stub.
       'check_guard',
       'connect_app',
       'propose_write',

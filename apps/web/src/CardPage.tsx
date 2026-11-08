@@ -10,6 +10,7 @@ import {
   styleFor,
 } from './cardView.ts';
 import { type ApprovalForSigning, signApproval } from './chain/sign.ts';
+import { describeAction, passkeyChallengeFor, verifyApproval } from './chain/verify.ts';
 import { loadDeviceKey } from './keys/deviceKey.ts';
 import { assertPasskey } from './keys/passkey.ts';
 
@@ -45,6 +46,19 @@ export function CardPage({ token }: { token: string }) {
     return () => clearInterval(t);
   }, [load]);
 
+  // What the passkey will cover, derived from the verified plan (never from server text).
+  const [approving, setApproving] = useState<string | null>(null);
+  useEffect(() => {
+    const a = view?.approval;
+    if (!a) {
+      setApproving(null);
+      return;
+    }
+    verifyApproval(a)
+      .then((x) => setApproving(describeAction(x)))
+      .catch(() => setApproving(''));
+  }, [view]);
+
   async function approve() {
     const a = view?.approval;
     if (!view || !a?.challenge) return;
@@ -56,9 +70,11 @@ export function CardPage({ token }: { token: string }) {
         setErr('No approval key in this browser yet. Open the setup link Penny sent you first.');
         return;
       }
+      // 0) check the approval hangs together before anything is signed (same as iPhone)
+      await verifyApproval(a);
       // 1) Face ID on this phone (the tap above is what lets Safari start it)
       const assertion = await assertPasskey({
-        challenge: a.challenge,
+        challenge: await passkeyChallengeFor(a.approvalHash, a.challenge),
         rpId: window.location.hostname,
         passkeys: a.passkeys ?? [],
       });
@@ -80,11 +96,13 @@ export function CardPage({ token }: { token: string }) {
     } catch (e) {
       const name = (e as Error).name;
       setErr(
-        name === 'PasskeyCancelled'
-          ? 'Face ID was cancelled. Nothing was sent.'
-          : name === 'PasskeyUnavailable'
-            ? 'This phone has no passkey for Penny. Open the setup link Penny sent you.'
-            : "That didn't go through. Nothing moved.",
+        name === 'ApprovalMismatch'
+          ? "This card doesn't add up, so I didn't sign it. Nothing moved. Ask Penny for a new one."
+          : name === 'PasskeyCancelled'
+            ? 'Face ID was cancelled. Nothing was sent.'
+            : name === 'PasskeyUnavailable'
+              ? 'This phone has no passkey for Penny. Open the setup link Penny sent you.'
+              : "That didn't go through. Nothing moved.",
       );
     } finally {
       setBusy(false);
@@ -203,6 +221,13 @@ export function CardPage({ token }: { token: string }) {
             </div>
           )}
 
+          {state === 'ready' && card.kind === 'approval' && approving !== null && (
+            <p className={approving ? 'approving' : 'err'}>
+              {approving
+                ? `You're approving: ${approving}`
+                : "This card doesn't add up, so it can't be approved. Ask Penny for a new one."}
+            </p>
+          )}
           {state === 'ready' && card.kind === 'approval' && (
             <>
               <button type="button" className="pill" disabled={busy} onClick={approve}>

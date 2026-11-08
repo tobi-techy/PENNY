@@ -197,6 +197,8 @@ export const approvals = pgTable(
   (t) => [
     index('approvals_user_idx').on(t.userId, t.createdAt),
     index('approvals_card_token_idx').on(t.cardTokenHash),
+    // One replacement per approval: two racing "get a new card" calls can't both win.
+    uniqueIndex('approvals_reissued_from_uq').on(t.reissuedFrom),
   ],
 );
 

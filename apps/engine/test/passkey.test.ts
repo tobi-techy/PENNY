@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { type MoneyPlan, planApprovalMessage } from '@penny/shared';
+import { type MoneyPlan, passkeyChallengeFor, planApprovalMessage } from '@penny/shared';
 import { sql } from 'drizzle-orm';
 import { deviceKeys, idemKey, makeEngine, type TestEngine, tokenFromUrl } from './helpers.ts';
 import { assertion, makePasskey, registration, type SoftPasskey } from './webauthn.ts';
@@ -74,7 +74,9 @@ async function approve(
 ) {
   const view = await t.engine.services.approvals.getByToken(r.cardToken);
   const a = assertion(opts.pk ?? w.pk, {
-    challenge: view.approval?.challenge ?? 'none',
+    challenge: view.approval?.challenge
+      ? passkeyChallengeFor(view.approval.approvalHash, view.approval.challenge)
+      : 'none',
     origin: ORIGIN,
     rpId: RP,
     ...opts,
@@ -185,7 +187,10 @@ describe('link card (no app)', () => {
   test('a reused challenge fails (no second relay)', async () => {
     const r = await linkCard();
     const view = await t.engine.services.approvals.getByToken(r.cardToken);
-    const challenge = view.approval?.challenge as string;
+    const challenge = passkeyChallengeFor(
+      view.approval?.approvalHash as string,
+      view.approval?.challenge as string,
+    );
     expect((await approve(r, { challenge })).status).toBe(200);
     const relays = t.chain.relayCalls.length;
     const again = await approve(r, { challenge, signCount: 9 });
@@ -238,6 +243,13 @@ describe('link card (no app)', () => {
     await t.db.db.execute(sql`update passkeys set sign_count = 0 where id = ${pk.id}`);
   });
 
+  test('a passkey signed over the bare challenge (not bound to the approval) fails', async () => {
+    const r = await linkCard();
+    const view = await t.engine.services.approvals.getByToken(r.cardToken);
+    const res = await approve(r, { challenge: view.approval?.challenge as string });
+    expect(res.status).toBe(422);
+  });
+
   test('expired fails', async () => {
     const r = await linkCard();
     const view = await t.engine.services.approvals.getByToken(r.cardToken);
@@ -245,7 +257,10 @@ describe('link card (no app)', () => {
     t.clock.now = new Date(saved.getTime() + 601_000);
     try {
       const a = assertion(w.pk, {
-        challenge: view.approval?.challenge as string,
+        challenge: passkeyChallengeFor(
+          view.approval?.approvalHash as string,
+          view.approval?.challenge as string,
+        ),
         origin: ORIGIN,
         rpId: RP,
       });
@@ -323,7 +338,10 @@ describe('link card (no app)', () => {
       if (r.decision !== 'allow_with_approval') throw new Error('expected card');
       const view = await t2.engine.services.approvals.getByToken(r.cardToken);
       const a = assertion(u2.pk, {
-        challenge: view.approval?.challenge as string,
+        challenge: passkeyChallengeFor(
+          view.approval?.approvalHash as string,
+          view.approval?.challenge as string,
+        ),
         origin: ORIGIN,
         rpId: RP,
       });

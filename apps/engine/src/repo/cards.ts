@@ -45,6 +45,22 @@ export class CardsRepo {
     return r.length === 1;
   }
 
+  /**
+   * Change a draft only while it is still a draft (kind info). Once Send flips it to
+   * an approval card, edits fail, so what Face ID approves is what gets sent.
+   */
+  async updateDraft(
+    id: string,
+    patch: Pick<CardRow, 'payload' | 'lines'>,
+  ): Promise<CardRow | null> {
+    const [r] = await this.db
+      .update(cards)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(and(eq(cards.id, id), eq(cards.kind, 'info')))
+      .returning();
+    return r ?? null;
+  }
+
   async update(
     id: string,
     patch: Partial<

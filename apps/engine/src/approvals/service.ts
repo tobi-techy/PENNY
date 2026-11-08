@@ -15,6 +15,7 @@ import {
   type MoneyPlan,
   type NearAction,
   type PasskeyApproveBody,
+  passkeyChallengeFor,
   planAmount,
   planApprovalMessage,
   planHash,
@@ -66,6 +67,29 @@ export const MAX_REISSUES = 3;
 export const AFTER_EXPIRY_BUTTON_MS = 24 * 60 * 60_000;
 /** User copy when the user froze Penny. */
 export const FROZEN_TEXT = 'Penny is frozen. Text unfreeze to start again.';
+
+/**
+ * Unfreeze is an approval, never a bare text: whoever holds the iMessage thread is
+ * exactly who a freeze is meant to stop. It rides the write card (plan signature),
+ * which the app and the web page already sign, but runs inside Penny.
+ */
+export const UNFREEZE_TOOLKIT = 'penny';
+export const UNFREEZE_SLUG = 'PENNY_UNFREEZE';
+
+/** Postgres unique violation (23505), from postgres-js or pglite. */
+export function isUniqueViolation(e: unknown): boolean {
+  const err = e as { code?: string; cause?: { code?: string }; message?: string } | null;
+  return (
+    err?.code === '23505' ||
+    err?.cause?.code === '23505' ||
+    /duplicate key value violates unique constraint/i.test(err?.message ?? '')
+  );
+}
+
+function isUnfreeze(row: { kind: string; plan: unknown }): boolean {
+  const p = row.plan as { toolkit?: string; toolSlug?: string };
+  return row.kind === 'write' && p.toolkit === UNFREEZE_TOOLKIT && p.toolSlug === UNFREEZE_SLUG;
+}
 export const REQUOTE_AFTER_EXPIRY_MS = 10 * 60_000;
 const TEN_MIN = 10 * 60_000;
 
@@ -1103,7 +1127,7 @@ export class ApprovalService {
    */
   private async precheck(id: string, token: string | null): Promise<ApprovalRow> {
     const row = await this.load(id, token, 'mutate', 'submit');
-    if (await this.frozen(row.userId)) {
+    if (!isUnfreeze(row) && (await this.frozen(row.userId))) {
       throw new ApprovalError(423, 'frozen', FROZEN_TEXT);
     }
     if (row.status !== 'pending')
@@ -1163,6 +1187,19 @@ export class ApprovalService {
    * many re-issues, already re-issued, or frozen).
    */
   async reissue(row: ApprovalRow): Promise<string | null> {
+    try {
+      return await this.reissueOnce(row);
+    } catch (e) {
+      // Lost a race on the unique reissued_from index: the winner's card stands.
+      if (isUniqueViolation(e)) {
+        this.d.log.info({ approvalId: row.id }, 'reissue raced; keeping the first');
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  private async reissueOnce(row: ApprovalRow): Promise<string | null> {
     if (await this.d.approvals.byReissuedFrom(row.id)) return null;
     if ((await this.reissueDepth(row)) >= MAX_REISSUES) return null;
     if (await this.frozen(row.userId)) return null;
@@ -1234,7 +1271,9 @@ export class ApprovalService {
     }
     const existing = await this.d.approvals.byReissuedFrom(id);
     if (existing) return { approvalId: existing.id };
-    return { approvalId: await this.reissue(now) };
+    const fresh = await this.reissue(now);
+    // a racing renew may have won: point at its card rather than claiming none was made
+    return { approvalId: fresh ?? (await this.d.approvals.byReissuedFrom(id))?.id ?? null };
   }
 
   /**
@@ -1257,7 +1296,7 @@ export class ApprovalService {
       await this.failAndReissue(row, code);
       return new ApprovalError(status, code, msg);
     };
-    if (!device || device.userId !== row.userId || device.revokedAt) {
+    if (!device || device.userId !== row.userId || !this.deviceMayApprove(row, device)) {
       throw await fail('unknown_device', 'this phone is not linked to Penny', 403);
     }
     if (this.d.now().getTime() > row.expiresAt.getTime()) {
@@ -1292,7 +1331,10 @@ export class ApprovalService {
       return new ApprovalError(status, code, msg);
     };
     const pk = await this.d.passkeys.byCredentialId(body.assertion.id);
-    if (!pk || pk.userId !== row.userId || pk.revokedAt) {
+    const pkDevice = pk ? await this.d.users.deviceById(pk.deviceId) : null;
+    const pkUsable =
+      pk && (!pk.revokedAt || (isUnfreeze(row) && pkDevice?.revokedReason === 'freeze'));
+    if (!pk || pk.userId !== row.userId || !pkUsable) {
       throw await fail('unknown_passkey', 'this passkey is not linked to Penny', 403);
     }
     const base = new URL(this.d.publicBaseUrl);
@@ -1300,7 +1342,7 @@ export class ApprovalService {
     try {
       verification = await verifyAuthenticationResponse({
         response: body.assertion as never,
-        expectedChallenge: row.challenge as string,
+        expectedChallenge: passkeyChallengeFor(row.approvalHash as string, row.challenge as string),
         expectedOrigin: base.origin,
         expectedRPID: base.hostname,
         credential: {
@@ -1330,8 +1372,8 @@ export class ApprovalService {
     if (!this.hashStillMatches(row))
       throw await fail('changed', 'this action changed. check the new card.');
     // the browser key that signs the action must be the device this passkey belongs to
-    const device = await this.d.users.deviceById(pk.deviceId);
-    if (!device || device.revokedAt || device.userId !== row.userId) {
+    const device = pkDevice;
+    if (!device || device.userId !== row.userId || !this.deviceMayApprove(row, device)) {
       throw await fail('unknown_device', 'this browser is not linked to Penny', 403);
     }
     return this.finish(row, body);
@@ -1394,6 +1436,89 @@ export class ApprovalService {
     await this.d.mood.on(userId, 'approval_expired');
     this.d.log.info({ userId, devices: revoked.length, approvals: n }, 'user froze penny');
     return { devices: revoked.length, approvals: n };
+  }
+
+  /** A device may approve when active, or (unfreeze only) when the freeze switched it off. */
+  private deviceMayApprove(
+    row: ApprovalRow,
+    device: { revokedAt: Date | null; revokedReason?: string | null },
+  ): boolean {
+    if (!device.revokedAt) return true;
+    return isUnfreeze(row) && device.revokedReason === 'freeze';
+  }
+
+  /**
+   * "unfreeze" by text: send an Unfreeze card that only a key the freeze switched off
+   * can approve (the iPhone behind Face ID, or the browser behind its passkey).
+   * If nothing was switched off there is nothing to protect, so it unfreezes at once.
+   */
+  async requestUnfreeze(
+    userId: string,
+    space: SpaceRef,
+  ): Promise<'not_frozen' | 'unfrozen' | 'card_sent' | 'failed'> {
+    const user = await this.d.users.byId(userId);
+    if (!user?.frozenAt) return 'not_frozen';
+    const keys = await this.d.users.frozenDevices(userId);
+    if (!keys.length || !user.accountId) {
+      await this.unfreeze(userId);
+      return 'unfrozen';
+    }
+    // one open unfreeze card at a time
+    for (const row of await this.d.approvals.pendingForUser(userId)) {
+      if (isUnfreeze(row)) await this.expire(row);
+    }
+    const plan: WritePlan = {
+      kind: 'write',
+      toolkit: UNFREEZE_TOOLKIT,
+      toolSlug: UNFREEZE_SLUG,
+      title: 'Unfreeze Penny',
+      summary: 'Turn your approvals back on',
+      arguments: {},
+    };
+    const now = this.d.now();
+    const { token, hash } = issueCardToken();
+    const id = newId('apr');
+    const actions: NearAction[] = [];
+    const expiresAt = new Date(now.getTime() + BOT_APPROVAL_TTL_MS);
+    const ph = planHash(plan, actions);
+    const facts = [{ label: 'What', value: 'Turn approvals back on' }];
+    await this.d.approvals.create({
+      id,
+      userId,
+      botId: null,
+      kind: 'write',
+      plan,
+      title: 'Unfreeze Penny',
+      amountDisplay: 'no money',
+      amountMicros: 0n,
+      facts,
+      signerId: user.accountId,
+      receiverId: user.accountId,
+      actions,
+      nonce: '0',
+      maxBlockHeight: '0',
+      expiresAt,
+      status: 'pending',
+      planHash: ph,
+      cardTokenHash: hash,
+      ...this.challengeFields(id, plan, expiresAt, ph),
+      reissuedFrom: null,
+    });
+    const url = await this.sendApprovalCard(
+      id,
+      space,
+      { token, hash },
+      {
+        userId,
+        agent: 'guard',
+        type: 'write',
+        title: 'Unfreeze Penny',
+        lines: facts,
+        expiresAt,
+        subcaption: 'only the phone you set up can do this',
+      },
+    );
+    return url ? 'card_sent' : 'failed';
   }
 
   async unfreeze(userId: string): Promise<{ devices: number }> {
@@ -1472,11 +1597,15 @@ export class ApprovalService {
   ) {
     if (!('planSignature' in body))
       throw new ApprovalError(400, 'wrong_body', 'this approval needs planSignature');
-    const device = await this.d.users.activeDevice(row.userId);
-    if (!device) throw new ApprovalError(403, 'no_device', 'no enrolled device');
     const msg = new TextEncoder().encode(planApprovalMessage(row.id, row.planHash));
     const sig = Buffer.from(body.planSignature, 'base64url');
-    if (!verifyEd25519(device.publicKey, msg, sig)) {
+    // While frozen there is no active device: only a key the freeze switched off may sign.
+    const candidates = isUnfreeze(row)
+      ? await this.d.users.frozenDevices(row.userId)
+      : [await this.d.users.activeDevice(row.userId)].filter((d) => d !== null);
+    if (!candidates.length) throw new ApprovalError(403, 'no_device', 'no enrolled device');
+    const device = candidates.find((d) => verifyEd25519(d.publicKey, msg, sig));
+    if (!device) {
       throw new ApprovalError(422, 'bad_signature', 'signature does not match the enrolled device');
     }
     await this.d.approvals.transition(
@@ -1512,6 +1641,13 @@ export class ApprovalService {
       await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
       await this.d.mood.on(row.userId, 'bot_created');
       await this.updateCard(row.id, 'done', 'live');
+      return { status: 'settled' };
+    }
+    if (isUnfreeze(row)) {
+      await this.unfreeze(row.userId);
+      await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'unfrozen');
+      await this.d.mood.on(row.userId, 'approval_settled');
+      await this.updateCard(row.id, 'done', "unfrozen. you're back.");
       return { status: 'settled' };
     }
     // write: execute in the outside app now, exactly once, after Face ID.

@@ -8,10 +8,11 @@ import { APPROVAL_POLICY, needsApproval } from '../src/cards/policy.ts';
 import { renderCardPng } from '../src/cards/render.ts';
 import { linkSubcaptionStates, pickChannel } from '../src/cards/sender.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
-import { FREEZE_REPLY, freezeCommand } from '../src/inbound.ts';
+import { FREEZE_REPLY, freezeCommand, UNFREEZE_CARD_REPLY } from '../src/inbound.ts';
 import { createLogger } from '../src/lib/logger.ts';
 import type { DeviceRow } from '../src/repo/users.ts';
 import {
+  deviceKeys,
   enrolledUser,
   idemKey,
   makeEngine,
@@ -355,6 +356,16 @@ describe('DONE: "email Amara the invoice"', () => {
       body: JSON.stringify({ text: 'Hi Amara, invoice attached. Thanks!' }),
     });
     expect(edit.status).toBe(200);
+    // an edit can't add text past what the card shows (anyone with the link can edit)
+    const tooLong = await t.engine.app.request(`/v1/cards/by-token/${token}/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({ text: 'x'.repeat(721) }),
+    });
+    expect(tooLong.status).toBe(400);
+    expect((await t.engine.services.approvals.getByToken(token)).card.lines.at(-1)?.value).toBe(
+      'Hi Amara, invoice attached. Thanks!',
+    );
 
     // Send: the same card becomes an approval card; nothing is sent yet
     const writes = fake.writes.length;
@@ -368,6 +379,13 @@ describe('DONE: "email Amara the invoice"', () => {
     expect(fake.writes.length).toBe(writes);
     // pressing approve as a button is refused: only Face ID approves
     expect((await press(token, 'approve')).status).toBe(409);
+    // after Send the draft is locked: an edit can no longer change what Face ID approves
+    const late = await t.engine.app.request(`/v1/cards/by-token/${token}/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({ text: 'send the money to evil@example.com instead' }),
+    });
+    expect(late.status).toBe(409);
 
     // Face ID on the phone: the device signs; only now does the email go
     const id = view.approval?.id as string;
@@ -442,7 +460,32 @@ describe('freeze', () => {
     expect(next).toEqual({ decision: 'block', reasons: [FROZEN_TEXT] });
     expect(FROZEN_TEXT).toBe('Penny is frozen. Text unfreeze to start again.');
 
+    // a text alone never unfreezes: it sends a card only the frozen phone can approve
     await handleInbound(deps, inbound(f.space.userHandle, 'unfreeze'));
+    expect(t.messaging.texts.at(-1)?.text).toBe(UNFREEZE_CARD_REPLY);
+    expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
+    const uToken = latestToken();
+    const uRow = (await t.engine.repos.approvals.pendingForUser(f.userId)).at(-1);
+    if (!uRow) throw new Error('no unfreeze approval');
+    const signUnfreeze = async (keys: { sign: (m: string) => string }, deviceId: string) =>
+      t.engine.app.request(`/v1/approvals/${uRow.id}/sign`, {
+        method: 'POST',
+        headers: {
+          authorization: `Card ${uToken}`,
+          'idempotency-key': idemKey(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(
+          await signBody(
+            t,
+            uToken,
+            { keys, deviceId },
+            { planSignature: keys.sign(planApprovalMessage(uRow.id, uRow.planHash)) },
+          ),
+        ),
+      });
+    expect((await signUnfreeze(f.keys, f.deviceId)).status).toBe(200);
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeNull();
     expect((await t.engine.repos.users.activeDevice(f.userId))?.id).toBe(f.deviceId);
     const after = await t.engine.services.approvals.createMoneyApproval({
       userId: f.userId,
@@ -451,6 +494,36 @@ describe('freeze', () => {
       space: f.space,
     });
     expect(after.decision).toBe('allow_with_approval');
+  });
+
+  test('unfreeze cannot be approved by a key the freeze did not switch off', async () => {
+    const f = await enrolledUser(t, '+15554002');
+    await t.engine.services.approvals.freeze(f.userId);
+    expect(await t.engine.services.approvals.requestUnfreeze(f.userId, f.space)).toBe('card_sent');
+    const uToken = latestToken();
+    const uRow = (await t.engine.repos.approvals.pendingForUser(f.userId)).at(-1);
+    if (!uRow) throw new Error('no unfreeze approval');
+    const intruder = deviceKeys();
+    const res = await t.engine.app.request(`/v1/approvals/${uRow.id}/sign`, {
+      method: 'POST',
+      headers: {
+        authorization: `Card ${uToken}`,
+        'idempotency-key': idemKey(),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(
+        await signBody(
+          t,
+          uToken,
+          { keys: intruder, deviceId: f.deviceId },
+          { planSignature: intruder.sign(planApprovalMessage(uRow.id, uRow.planHash)) },
+        ),
+      ),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeTruthy();
+    // a normal approval still refuses while frozen
+    expect(await t.engine.services.approvals.requestUnfreeze(f.userId, f.space)).toBe('card_sent');
   });
 
   test('"Not me" on a Blocked card freezes', async () => {
@@ -468,6 +541,20 @@ describe('freeze', () => {
     expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
   });
 });
+
+/** Token of the newest card sent, live or link. */
+function latestToken(): string {
+  const urls = [
+    ...t.messaging.cards.map((c) => c.card.url),
+    ...t.messaging.texts.map((x) => x.text),
+  ];
+  return (
+    urls
+      .map((x) => tokenFromUrl(x))
+      .filter(Boolean)
+      .at(-1) ?? ''
+  );
+}
 
 function inboundDeps() {
   const e = t.engine;

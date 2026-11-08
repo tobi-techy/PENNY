@@ -1,5 +1,5 @@
 {
-  "id": "b81da878-35c3-495c-8810-0ae8095ca4d0",
+  "id": "509a0e86-261c-4138-9248-35042045cbba",
   "prevId": "3d1b6d2c-4aad-4be7-a0ce-73f34562a173",
   "version": "7",
   "dialect": "postgresql",
@@ -322,6 +322,21 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "approvals_reissued_from_uq": {
+          "name": "approvals_reissued_from_uq",
+          "columns": [
+            {
+              "expression": "reissued_from",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}

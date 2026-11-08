@@ -20,6 +20,26 @@ export function clockLabel(iso: string): string {
   return min === '00' ? `${h12}${suffix}` : `${h12}:${min}${suffix}`;
 }
 
+/** Body characters a draft card can show (6 lines of 120). Edits may never go past it. */
+export const DRAFT_VISIBLE_CHARS = 720;
+
+/** Card lines for an email draft: To, Subject, then the body as it will be sent. */
+export function draftLines(toEmail: string, subject: string, body: string) {
+  const chunks: string[] = [];
+  const shown = body.slice(0, DRAFT_VISIBLE_CHARS);
+  for (let i = 0; i < shown.length; i += 120) chunks.push(shown.slice(i, i + 120));
+  const rest = body.length - shown.length;
+  if (rest > 0) {
+    chunks.splice(5);
+    chunks.push(`…and ${rest + (DRAFT_VISIBLE_CHARS - 600)} more characters`);
+  }
+  return [
+    { label: 'To', value: toEmail.slice(0, 120) },
+    { label: 'Subject', value: (subject || '(no subject)').slice(0, 120) },
+    ...(chunks.length ? chunks.map((value) => ({ value })) : [{ value: '(empty)' }]),
+  ];
+}
+
 export async function setReminder(
   d: { reminders: RemindersRepo; cards: CardSender; now: () => Date },
   input: { userId: string; space: SpaceRef; agent: string; text: string; dueAt: string },
@@ -79,11 +99,7 @@ export async function draftEmail(
     kind: 'info',
     type: 'email_draft',
     title: `Email to ${input.toName} ready`.slice(0, 80),
-    lines: [
-      { label: 'To', value: input.toEmail.slice(0, 120) },
-      { label: 'Subject', value: (input.subject || '(no subject)').slice(0, 120) },
-      { value: input.body.slice(0, 120) || '(empty)' },
-    ],
+    lines: draftLines(input.toEmail, input.subject, input.body),
     buttons: [
       { id: 'send', label: 'Send', action: 'send' },
       { id: 'edit', label: 'Edit', action: 'edit' },

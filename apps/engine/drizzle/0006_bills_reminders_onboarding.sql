@@ -31,6 +31,7 @@ ALTER TABLE "connect_watches" ADD CONSTRAINT "connect_watches_user_id_users_id_f
 CREATE UNIQUE INDEX "bills_user_source_uq" ON "bills" USING btree ("user_id","source_key");--> statement-breakpoint
 CREATE INDEX "bills_user_status_idx" ON "bills" USING btree ("user_id","status");--> statement-breakpoint
 CREATE INDEX "connect_watches_status_idx" ON "connect_watches" USING btree ("status","expires_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "approvals_reissued_from_uq" ON "approvals" USING btree ("reissued_from");--> statement-breakpoint
 CREATE INDEX "conversations_user_idx" ON "conversations" USING btree ("user_id","created_at");--> statement-breakpoint
 CREATE INDEX "reminders_user_idx" ON "reminders" USING btree ("user_id","status");--> statement-breakpoint
 CREATE UNIQUE INDEX "reminders_bill_uq" ON "reminders" USING btree ("bill_id");

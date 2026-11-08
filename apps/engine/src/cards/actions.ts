@@ -8,6 +8,7 @@ import { sha256Hex } from '../lib/crypto.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { BotsRepo } from '../repo/bots.ts';
 import type { CardRow, CardsRepo, RemindersRepo } from '../repo/cards.ts';
+import { DRAFT_VISIBLE_CHARS, draftLines } from './everyday.ts';
 import { needsApproval } from './policy.ts';
 import { type CardSender, toCardDto } from './sender.ts';
 
@@ -75,13 +76,21 @@ export class CardActions {
       if (!(await this.d.cards.claimForApproval(row.id))) {
         throw new ApprovalError(409, 'already_sent', 'this draft is already waiting for Face ID');
       }
+      // Re-read after the claim: an edit that landed before it is what gets approved,
+      // and none can land after it (updateDraft only changes info cards).
+      const claimed = await this.d.cards.get(row.id);
+      const finalPlan = WritePlan.safeParse(claimed?.payload?.writePlan);
+      if (!finalPlan.success) {
+        await this.d.cards.update(row.id, { kind: 'info' });
+        throw new ApprovalError(409, 'not_sendable', 'nothing to send here');
+      }
       const botId = typeof payload.botId === 'string' ? payload.botId : null;
       const bot = botId ? await this.d.bots.byId(botId) : null;
       const r = await this.d.approvals
         .createWriteApproval({
           userId: row.userId,
           bot,
-          plan: plan.data,
+          plan: finalPlan.data,
           space: row.space,
           fromCard: { id: row.id, tokenHash: row.tokenHash },
         })
@@ -154,12 +163,22 @@ export class CardActions {
     const plan = WritePlan.safeParse(payload.writePlan);
     if (!plan.success || row.kind !== 'info')
       throw new ApprovalError(409, 'not_editable', 'nothing to edit');
-    const next = { ...plan.data, arguments: { ...plan.data.arguments, body: text.slice(0, 5000) } };
-    await this.d.cards.update(row.id, { payload: { ...payload, writePlan: next } });
-    const lines = row.lines.map((l, i) =>
-      i === row.lines.length - 1 && !l.label ? { value: text.slice(0, 120) || '(empty)' } : l,
-    );
+    // Anyone holding the link can edit, so an edit may never add text the card can't show.
+    if (text.length > DRAFT_VISIBLE_CHARS)
+      throw new ApprovalError(
+        400,
+        'too_long',
+        `keep it under ${DRAFT_VISIBLE_CHARS} characters so it all fits on the card`,
+      );
+    const next = { ...plan.data, arguments: { ...plan.data.arguments, body: text } };
+    const args = plan.data.arguments as { recipient_email?: unknown; subject?: unknown };
+    const lines = draftLines(String(args.recipient_email ?? ''), String(args.subject ?? ''), text);
+    const updated = await this.d.cards.updateDraft(row.id, {
+      payload: { ...payload, writePlan: next },
+      lines,
+    });
+    if (!updated) throw new ApprovalError(409, 'not_editable', 'this draft was already sent');
     const card = await this.d.sender.update(row.id, { lines });
-    return card ?? toCardDto(row);
+    return card ?? toCardDto(updated);
   }
 }

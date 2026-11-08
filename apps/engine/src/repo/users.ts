@@ -166,6 +166,14 @@ export class UsersRepo {
     });
   }
 
+  /** Keys the freeze switched off: the only keys that may approve an unfreeze. */
+  async frozenDevices(userId: string): Promise<DeviceRow[]> {
+    return this.db
+      .select()
+      .from(devices)
+      .where(and(eq(devices.userId, userId), eq(devices.revokedReason, 'freeze')));
+  }
+
   /** Unfreeze: clears the flag and brings back only the keys the freeze revoked. */
   async unfreeze(userId: string): Promise<string[]> {
     return this.db.transaction(async (tx) => {
