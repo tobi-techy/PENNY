@@ -50,7 +50,8 @@ public enum CardState: String, Sendable, CaseIterable {
         case .sent: return "Done. It went through."
         case .expired: return "This card ran out of time. Nothing moved."
         case .declined: return "You said no. Nothing moved."
-        case .failed: return "It didn't go through. Nothing moved."
+        // only the server knows whether anything moved: PennyCard.statusLine says so when it can
+        case .failed: return "It didn't go through."
         case .undone: return "Undone."
         default: return nil
         }
@@ -96,6 +97,8 @@ public struct PennyCard: Equatable, Sendable {
     public let approvalId: String?
     public let expiresAt: Date?
     public let receiptURL: URL?
+    /// What happened, as the server knows it ("couldn't confirm…"). Shown as is.
+    public var statusLine: String? = nil
 
     public static func parse(_ json: JSONValue) throws -> PennyCard {
         guard let o = json.objectValue, let title = o["title"]?.stringValue, !title.isEmpty else {
@@ -111,7 +114,7 @@ public struct PennyCard: Equatable, Sendable {
                                   value: item["value"]?.stringValue)
         }
         let receipt = o["receiptUrl"]?.stringValue.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
-        return PennyCard(
+        var card = PennyCard(
             id: o["id"]?.stringValue ?? "",
             agent: o["agent"]?.stringValue ?? "penny",
             isApproval: o["kind"]?.stringValue == "approval",
@@ -125,6 +128,8 @@ public struct PennyCard: Equatable, Sendable {
             expiresAt: o["expiresAt"]?.stringValue.flatMap(Validate.date),
             receiptURL: receipt
         )
+        card.statusLine = o["statusLine"]?.stringValue.map { String($0.prefix(120)) }
+        return card
     }
 }
 
@@ -238,6 +243,8 @@ public struct ApprovalTicket: Equatable, Sendable {
 public struct CardByToken: Equatable, Sendable {
     public let card: PennyCard
     public let ticket: ApprovalTicket?
+    /// Unfreeze cards only: the single-use challenge Face ID signs.
+    public var unfreezeChallenge: String? = nil
 
     public static func parse(_ data: Data) throws -> CardByToken {
         let root = try JSONParser.parse(data)
@@ -245,7 +252,19 @@ public struct CardByToken: Equatable, Sendable {
         let card = try PennyCard.parse(cardJSON)
         let ticket = try root["approval"].map(ApprovalTicket.parse)
         if let ticket, let linked = card.approvalId, linked != ticket.id { throw PennyError.invalidResponse("card link") }
-        return CardByToken(card: card, ticket: ticket)
+        var out = CardByToken(card: card, ticket: ticket)
+        if let ch = root["unfreeze"]?["challenge"]?.stringValue {
+            guard Validate.base64URL(ch, length: 43) else { throw PennyError.invalidResponse("unfreeze challenge") }
+            out.unfreezeChallenge = ch
+        }
+        return out
+    }
+}
+
+/// The message the frozen device key signs to unfreeze (penny-unfreeze:v1:<cardId>:<challenge>).
+public enum UnfreezeMessage {
+    public static func message(cardId: String, challenge: String) -> Data {
+        Data("penny-unfreeze:v1:\(cardId):\(challenge)".utf8)
     }
 }
 

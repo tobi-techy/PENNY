@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { Card, planApprovalMessage } from '@penny/shared';
+import { Card, planApprovalMessage, unfreezeMessage } from '@penny/shared';
 import { sql } from 'drizzle-orm';
 import { FROZEN_TEXT } from '../src/approvals/service.ts';
 import { BUILT_IN_BOTS } from '../src/brain/bots.ts';
@@ -8,7 +8,7 @@ import { APPROVAL_POLICY, needsApproval } from '../src/cards/policy.ts';
 import { renderCardPng } from '../src/cards/render.ts';
 import { linkSubcaptionStates, pickChannel } from '../src/cards/sender.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
-import { FREEZE_REPLY, freezeCommand } from '../src/inbound.ts';
+import { FREEZE_REPLY, freezeCommand, UNFREEZE_REPLY } from '../src/inbound.ts';
 import { createLogger } from '../src/lib/logger.ts';
 import type { DeviceRow } from '../src/repo/users.ts';
 import {
@@ -36,11 +36,11 @@ afterAll(async () => {
   await t?.db.close();
 });
 
-const press = (token: string, buttonId: string) =>
+const press = (token: string, buttonId: string, confirm?: boolean) =>
   t.engine.app.request(`/v1/cards/by-token/${token}/press`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
-    body: JSON.stringify({ buttonId }),
+    body: JSON.stringify({ buttonId, ...(confirm !== undefined ? { confirm } : {}) }),
   });
 
 describe('needsApproval: one policy table, never the model', () => {
@@ -186,14 +186,31 @@ describe('live card (Photon customizedMiniApp)', () => {
       space: u.space,
     });
     if (r2.decision !== 'allow_with_approval') throw new Error('expected card');
+    // a state the user is waiting on (sent): three failures, then a fresh card, same URL
     t.messaging.failEdits = 3;
     attempts = t.messaging.editAttempts;
     cards = t.messaging.cards.length;
-    await t.engine.services.approvals.decline(r2.approvalId, r2.cardToken);
+    const cardId = (await t.engine.repos.approvals.get(r2.approvalId))?.cardId as string;
+    await t.engine.services.cards.update(cardId, { state: 'sent' }, { subcaption: 'sent ✓' });
     expect(t.messaging.editAttempts - attempts).toBe(3);
     expect(t.messaging.cards.length).toBe(cards + 1);
     expect(t.messaging.cards.at(-1)?.card.url).toBe(`https://penny.test/a/${r2.cardToken}`);
-    expect(t.messaging.cards.at(-1)?.card.subcaption).toBe('you said no. nothing moved.');
+    expect(t.messaging.cards.at(-1)?.card.subcaption).toBe('sent ✓');
+    // an unanswered card expiring is not worth a new message, even when the edit fails
+    const r3 = await t.engine.services.approvals.createMoneyApproval({
+      userId: u.userId,
+      bot: null,
+      plan: { kind: 'send', asset: 'USDC', amount: '1', to: 'ada.penny.near' },
+      space: u.space,
+    });
+    if (r3.decision !== 'allow_with_approval') throw new Error('expected card');
+    t.messaging.failEdits = 3;
+    cards = t.messaging.cards.length;
+    const texts = t.messaging.texts.length;
+    const id3 = (await t.engine.repos.approvals.get(r3.approvalId))?.cardId as string;
+    await t.engine.services.cards.update(id3, { state: 'expired' });
+    expect(t.messaging.cards.length).toBe(cards);
+    expect(t.messaging.texts.length).toBe(texts);
     t.messaging.failEdits = 0;
   });
 });
@@ -442,8 +459,39 @@ describe('freeze', () => {
     expect(next).toEqual({ decision: 'block', reasons: [FROZEN_TEXT] });
     expect(FROZEN_TEXT).toBe('Penny is frozen. Text unfreeze to start again.');
 
+    // texting "unfreeze" alone never unfreezes: it sends an Unfreeze card
     await handleInbound(deps, inbound(f.space.userHandle, 'unfreeze'));
+    expect(t.messaging.texts.at(-1)?.text).toBe(UNFREEZE_REPLY);
+    expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
+    const ufToken = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    const uf = await t.engine.services.approvals.getByToken(ufToken);
+    expect(uf.card.type).toBe('unfreeze');
+    const challenge = uf.unfreeze?.challenge as string;
+    const unfreeze = (body: unknown) =>
+      t.engine.app.request(`/v1/cards/by-token/${ufToken}/unfreeze`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+        body: JSON.stringify(body),
+      });
+    // pressing the button is not enough: only Face ID (a signature) unfreezes
+    expect((await press(ufToken, 'unfreeze')).status).toBe(409);
+    // Face ID on the phone: the frozen device key signs this card's challenge
+    const res = await unfreeze({
+      deviceId: f.deviceId,
+      signature: f.keys.sign(unfreezeMessage(uf.card.id, challenge)),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'unfrozen' });
     expect((await t.engine.repos.users.activeDevice(f.userId))?.id).toBe(f.deviceId);
+    // the card is single use
+    expect(
+      (
+        await unfreeze({
+          deviceId: f.deviceId,
+          signature: f.keys.sign(unfreezeMessage(uf.card.id, challenge)),
+        })
+      ).status,
+    ).toBe(409);
     const after = await t.engine.services.approvals.createMoneyApproval({
       userId: f.userId,
       bot: null,
@@ -451,6 +499,41 @@ describe('freeze', () => {
       space: f.space,
     });
     expect(after.decision).toBe('allow_with_approval');
+  });
+
+  test('an Unfreeze card signed with another key fails and keeps Penny frozen', async () => {
+    const f = await enrolledUser(t, '+15554002');
+    await t.engine.services.approvals.freeze(f.userId);
+    expect(await t.engine.services.approvals.startUnfreeze(f.userId, f.space)).toBe('card_sent');
+    const token = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    const uf = await t.engine.services.approvals.getByToken(token);
+    const rogue = (await import('./helpers.ts')).deviceKeys();
+    const res = await t.engine.app.request(`/v1/cards/by-token/${token}/unfreeze`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({
+        deviceId: f.deviceId,
+        signature: rogue.sign(unfreezeMessage(uf.card.id, uf.unfreeze?.challenge as string)),
+      }),
+    });
+    expect(res.status).toBe(422);
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeTruthy();
+    expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
+    // a device the freeze did not switch off (another user's) can't unfreeze either
+    const other = await enrolledUser(t, '+15554003');
+    expect(await t.engine.services.approvals.startUnfreeze(f.userId, f.space)).toBe('card_sent');
+    const token2 = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    const uf2 = await t.engine.services.approvals.getByToken(token2);
+    const res2 = await t.engine.app.request(`/v1/cards/by-token/${token2}/unfreeze`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({
+        deviceId: other.deviceId,
+        signature: other.keys.sign(unfreezeMessage(uf2.card.id, uf2.unfreeze?.challenge as string)),
+      }),
+    });
+    expect(res2.status).toBe(422);
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeTruthy();
   });
 
   test('"Not me" on a Blocked card freezes', async () => {
@@ -463,7 +546,12 @@ describe('freeze', () => {
     });
     expect(r.decision).toBe('block');
     const token = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
-    expect((await press(token, 'notme')).status).toBe(200);
+    // one tap is not enough: the client must ask "freeze everything?" first
+    const first = await press(token, 'notme');
+    expect(first.status).toBe(409);
+    expect(await first.json()).toEqual({ error: 'confirm_freeze' });
+    expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeNull();
+    expect((await press(token, 'notme', true)).status).toBe(200);
     expect((await t.engine.repos.users.byId(f.userId))?.frozenAt).toBeTruthy();
     expect(await t.engine.repos.users.activeDevice(f.userId)).toBeNull();
   });

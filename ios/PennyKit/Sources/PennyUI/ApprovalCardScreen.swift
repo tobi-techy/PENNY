@@ -39,6 +39,31 @@ public struct ApprovalCardScreen: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    if model.confirmingFreeze != nil {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Freeze Penny? Every key is switched off and every open card is cancelled.")
+                                .font(.geist(12.5))
+                                .foregroundStyle(PennyColor.text)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button { Task { await model.confirmFreeze() } } label: {
+                                Text("Yes, freeze everything")
+                                    .font(.geist(12.5, medium: true))
+                                    .foregroundStyle(PennyColor.errorText)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 38)
+                                    .background(Capsule().fill(CardPalette.red.tagBackground))
+                            }
+                            .buttonStyle(.plain)
+                            Button { model.cancelFreeze() } label: {
+                                Text("Cancel")
+                                    .font(.geist(12.5))
+                                    .foregroundStyle(PennyColor.meta)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 38)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                     if let note = model.note {
                         Text(note)
                             .font(.geist(12))

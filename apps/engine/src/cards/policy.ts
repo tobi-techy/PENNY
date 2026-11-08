@@ -55,6 +55,7 @@ const BUTTON_POLICY: Readonly<Record<string, boolean>> = {
   freeze: false, // freezing only takes power away; it never needs Face ID
   send: true,
   approve: true,
+  unfreeze: true, // gives power back: Face ID on the card, never a plain press
 };
 
 export type PolicyAction =

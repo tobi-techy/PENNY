@@ -10,12 +10,8 @@ export const INFO_CARD_TTL_MS = 24 * 60 * 60_000;
 /** Live card edits: 3 tries with backoff, then a fresh card. */
 export const EDIT_BACKOFF_MS = [200, 800, 2_000] as const;
 /** Link cards can't change in place; Penny sends a fresh one for these states only. */
-const LINK_RESEND_STATES: ReadonlySet<CardState> = new Set([
-  'sent',
-  'blocked',
-  'failed',
-  'expired',
-]);
+/** Only the outcome of something the user did; an unanswered card expiring sends nothing. */
+const LINK_RESEND_STATES: ReadonlySet<CardState> = new Set(['sent', 'blocked', 'failed']);
 
 export type Channel = 'live' | 'link';
 
@@ -51,6 +47,8 @@ export type NewCard = {
   tokenExpiresAt?: Date;
   /** Live-card bubble lines. Defaults come from the card. */
   subcaption?: string;
+  /** Pick the channel from this device instead of the active one (unfreeze cards). */
+  forDevice?: DeviceRow | null;
 };
 
 export type CardSenderDeps = {
@@ -80,6 +78,7 @@ export function toCardDto(r: CardRow): Card {
     ...(r.approvalId ? { approvalId: r.approvalId } : {}),
     ...(r.expiresAt ? { expiresAt: r.expiresAt.toISOString() } : {}),
     ...(r.receiptUrl ? { receiptUrl: r.receiptUrl } : {}),
+    ...(r.statusLine ? { statusLine: r.statusLine } : {}),
     createdAt: r.createdAt.toISOString(),
   };
 }
@@ -115,8 +114,11 @@ export class CardSender {
   async send(
     input: NewCard,
   ): Promise<{ card: Card; token: string; url: string; channel: Channel; ref?: string }> {
-    const device = await this.d.users.activeDevice(input.userId);
-    const channel = pickChannel(device);
+    const device =
+      input.forDevice !== undefined
+        ? input.forDevice
+        : await this.d.users.activeDevice(input.userId);
+    const channel = pickChannel(device ? { ...device, revokedAt: null } : null);
     const tok =
       input.token ??
       (() => {
@@ -161,7 +163,17 @@ export class CardSender {
   ): Promise<Card | null> {
     const before = await this.d.cards.get(cardId);
     if (!before) return null;
-    const row = await this.d.cards.update(cardId, patch);
+    // the status line follows the state: a new state without a line clears the old one
+    const statusLine =
+      opts.subcaption !== undefined
+        ? opts.subcaption.slice(0, 120)
+        : patch.state && patch.state !== before.state
+          ? null
+          : undefined;
+    const row = await this.d.cards.update(cardId, {
+      ...patch,
+      ...(statusLine !== undefined ? { statusLine } : {}),
+    });
     if (!row) return null;
     const card = toCardDto(row);
     const stateChanged = before.state !== row.state;
@@ -265,7 +277,9 @@ export class CardSender {
       }
     }
     // No handle (restart) or every edit failed: a fresh card. Without the token we
-    // cannot rebuild the URL, so we say what changed in words.
+    // cannot rebuild the URL, so we say what changed in words. An unanswered card
+    // expiring is not worth a new message: it shows Expired when opened.
+    if (card.state === 'expired') return;
     if (token && row.space) {
       await this.deliver(row, card, url, subcaption, false);
     } else if (row.space) {
@@ -304,7 +318,8 @@ export function liveSubcaption(card: Card): string {
     case 'declined':
       return 'you said no. nothing moved.';
     case 'failed':
-      return "didn't go through. nothing moved.";
+      // only the server knows whether anything moved: it sets the exact line
+      return card.statusLine ?? "didn't go through.";
     case 'undone':
       return 'undone';
     default: {
@@ -323,7 +338,7 @@ export function linkUpdateText(card: Card): string {
     case 'blocked':
       return `blocked: ${card.lines[0]?.value ?? card.title}`;
     case 'failed':
-      return `${card.title.toLowerCase()} didn't go through. nothing moved.`;
+      return `${card.title.toLowerCase()}: ${card.statusLine ?? "didn't go through."}`;
     case 'expired':
       return `${card.title.toLowerCase()} expired. ask me again for a new card.`;
     default:

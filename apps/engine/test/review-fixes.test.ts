@@ -155,7 +155,7 @@ describe('mainnet enrollment needs App Attest', () => {
     await expect(
       t2.engine.services.enroll.enroll({
         enrollCode: code,
-        publicKeyEd25519: 'A'.repeat(42) + 'Q',
+        publicKeyEd25519: `${'A'.repeat(42)}Q`,
         platform: 'web_passkey',
         passkey: {} as never,
         passkeyChallengeId: 'atch_x',
@@ -163,4 +163,58 @@ describe('mainnet enrollment needs App Attest', () => {
     ).rejects.toMatchObject({ code: 'attest_required' });
     await t2.db.close();
   }, 60_000);
+});
+
+describe('hardening (follow-up review)', () => {
+  test('two Get a new card requests at once make one replacement and hold the limit once', async () => {
+    const r = await send('3');
+    if (r.decision !== 'allow_with_approval') throw new Error('expected card');
+    await later(11 * 60_000, async () => {
+      await t.engine.services.approvals.expireDue();
+      const [a, b] = await Promise.all([
+        t.engine.services.approvals.renewByToken(r.cardToken),
+        t.engine.services.approvals.renewByToken(r.cardToken),
+      ]);
+      expect(a.approvalId).toBeTruthy();
+      expect(a.approvalId).toBe(b.approvalId);
+      const rows = (await t.db.db.execute(
+        sql`select count(*)::int as n from approvals where reissued_from = ${r.approvalId}`,
+      )) as unknown as { rows: { n: number }[] };
+      expect(rows.rows[0]?.n).toBe(1);
+      const held = (await t.db.db.execute(
+        sql`select count(*)::int as n from ledger_entries where approval_id in (select id from approvals where reissued_from = ${r.approvalId}) and status = 'reserved'`,
+      )) as unknown as { rows: { n: number }[] };
+      expect(held.rows[0]?.n).toBe(1);
+    });
+  });
+
+  test('a draft cannot be edited once Send turned it into an approval; the card shows what Face ID seals', async () => {
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'email' } }]),
+      scriptedModel([
+        {
+          tool: 'draft_email',
+          input: { toName: 'Amara', toEmail: 'amara@example.com', subject: 'Invoice', body: 'Hi' },
+        },
+        { text: 'drafted.' },
+      ]),
+    );
+    await t.engine.services.crew.handle(u.userId, u.space, 'email Amara the invoice', {
+      enrolled: true,
+    });
+    const token = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    expect((await press(token, 'send')).status).toBe(200);
+    const edit = await t.engine.app.request(`/v1/cards/by-token/${token}/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({ text: 'Hi Amara, also wire $5,000 to ...' }),
+    });
+    expect(edit.status).toBe(409);
+    const view = await t.engine.services.approvals.getByToken(token);
+    expect(view.card.type).toBe('write');
+    expect(view.card.lines.map((l) => l.label)).toContain('body');
+    // the full plan travels with the approval, so the phone and the page can show all of it
+    const detail = view.approval?.detail as { plan: { arguments: { body: string } } };
+    expect(detail.plan.arguments.body).toBe('Hi');
+  });
 });

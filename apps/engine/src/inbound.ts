@@ -29,7 +29,9 @@ export const WELCOME_TEXT =
 /** User copy for freeze. Plain words; checked by the jargon test. */
 export const FREEZE_REPLY =
   "frozen. nothing can move and every open card is cancelled. text unfreeze when you're ready.";
-export const UNFREEZE_REPLY = "unfrozen. you're back. ask me again for anything you need.";
+export const UNFREEZE_REPLY = "to unfreeze, confirm it's you with Face ID on the card.";
+export const UNFROZEN_REPLY = "unfrozen. there were no keys to switch back on, so you're set.";
+export const NOT_FROZEN_REPLY = "penny isn't frozen. you're good.";
 
 /** "freeze" / "unfreeze" are commands, never sent to the model. */
 export function freezeCommand(text: string): 'freeze' | 'unfreeze' | null {
@@ -69,9 +71,15 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
 
   const cmd = d.approvals ? freezeCommand(text) : null;
   if (cmd && d.approvals) {
-    if (cmd === 'freeze') await d.approvals.freeze(user.id);
-    else await d.approvals.unfreeze(user.id);
-    const reply = cmd === 'freeze' ? FREEZE_REPLY : UNFREEZE_REPLY;
+    let reply = FREEZE_REPLY;
+    if (cmd === 'freeze') {
+      await d.approvals.freeze(user.id);
+    } else {
+      // a text alone never unfreezes: Face ID on the Unfreeze card does
+      const r = await d.approvals.startUnfreeze(user.id, space);
+      reply =
+        r === 'card_sent' ? UNFREEZE_REPLY : r === 'unfrozen' ? UNFROZEN_REPLY : NOT_FROZEN_REPLY;
+    }
     await d.messaging.sendText(space, reply);
     await d.messages.add({ conversationId, direction: 'outbound', text: reply });
     return;

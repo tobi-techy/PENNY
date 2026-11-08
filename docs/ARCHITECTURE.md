@@ -67,11 +67,13 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 ### Approval hash and challenge (live cards)
 - `approvalHash = base64url(sha256(JCS({ action, expiresAt, id, planHash })))`, `action = {type, to, amount, asset}` derived from the plan (`approvalActionOf` in packages/shared; Swift `ApprovalIntent`). Vector: `packages/shared/test-vectors/09-approval-hash.json`.
 - `challenge`: 32 random bytes (base64url), single use, burned on the first approve attempt whatever its outcome.
+- Web passkey challenge (link page): base64url(sha256(`penny-approval:v2:<approvalHash>:<challenge>`)), so the passkey answer is tied to this exact action. The page recomputes the hashes before it asks.
+- A replaced approval (`reissued_from`) has at most one replacement (unique index).
 - Lifetime: 90 s for anything priced by a quote (invest), 10 min for plain sends, bills, errands, writes and new bots. The NEAR max block height is set to cover the lifetime.
 - States reuse the approval state machine: card Ready = `pending`, Approving = `signed`/`relayed`, Sent = `settled`, Blocked = Guard `cancelled` (or no approval at all when Guard said no first), Expired = `expired`.
 
 ### Card (packages/shared `Card`)
-`{ id, userId, agent, kind: info|approval, type, title, amount?, lines[], buttons[], state, approvalId?, expiresAt?, receiptUrl?, createdAt }`. Types: the DESIGN.md table plus `reminder`, `email_draft`, `plan`, `found`, `done`; unknown types render as a plain card. Which actions need Face ID is decided only by `needsApproval()` (apps/engine/src/cards/policy.ts): read tools never, money and write tools always, anything new that writes defaults to yes. Info card buttons that change something small (Undo, Edit, Pick) need no Face ID; a button that sends, pays or posts turns the card into an approval card first.
+`{ id, userId, agent, kind: info|approval, type, title, amount?, lines[], buttons[], state, approvalId?, expiresAt?, receiptUrl?, createdAt }`. Cards carry `statusLine`: what happened, exactly as the server knows it (e.g. "couldn't confirm this went through" after a relay error); clients show it instead of generic copy, and "nothing moved" is only said when it is certain. Link cards get a fresh message only for an outcome the user caused (sent, blocked, failed); an unanswered card expiring sends nothing and shows Expired when opened. Types: the DESIGN.md table plus `reminder`, `email_draft`, `plan`, `found`, `done`; unknown types render as a plain card. Which actions need Face ID is decided only by `needsApproval()` (apps/engine/src/cards/policy.ts): read tools never, money and write tools always, anything new that writes defaults to yes. Info card buttons that change something small (Undo, Edit, Pick) need no Face ID; a button that sends, pays or posts turns the card into an approval card first.
 
 ### Engine HTTP API (all JSON, all zod-validated, TLS only)
 - `POST /v1/photon/webhook` — Photon events (HMAC verify per Photon docs, 5-min tolerance, dedupe by event id).
@@ -80,8 +82,10 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - `GET  /v1/approvals/by-token/:token` → `{ card, approval?: { id, action, approvalHash, challenge?, expiresAt, status, passkeys?, detail: Approval } }`.
 - `POST /v1/approvals/:id/sign` (Card auth) `{deviceId, signature, signedDelegateAction | planSignature}` → `{status}` (app).
 - `POST /v1/approvals/:id/passkey` (Card auth) `{assertion, signedDelegateAction | planSignature}` → `{status}` (link page; WebAuthn verified on the server).
-- `POST /v1/approvals/by-token/:token/renew` → a fresh card ("Get a new card").
+- `POST /v1/approvals/by-token/:token/renew` → `{approvalId | null}`: a fresh card ("Get a new card"), or none (Guard said no, too many replacements).
+- `POST /v1/approvals/by-token/:token/fresh-price` → invest only: opening the card replaces a quote with under 75 s left by a fresh one on the same card and link (no new message; at most 8 per card; never once Face ID started).
 - `POST /v1/cards/by-token/:token/press` `{buttonId}`, `POST /v1/cards/by-token/:token/edit` `{text}` → info card buttons.
+- `POST /v1/cards/by-token/:token/unfreeze` `{deviceId, signature} | {assertion}` → Face ID on an Unfreeze card (texting "unfreeze" only sends the card).
 - `POST /v1/devices/passkey/challenge` `{enrollCode}` → registration challenge for web enrollment (`platform: web_passkey` + `passkey` on `/v1/devices/enroll`).
 - `GET /a/:token` (page + Open Graph tags), `GET /a/:token/card.png` (the card for its current state).
 - `POST /v1/approvals/:id/submit` is retired (410): it had no challenge check.

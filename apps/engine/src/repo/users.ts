@@ -165,6 +165,15 @@ export class UsersRepo {
     });
   }
 
+  /** Devices the freeze switched off, newest first (the only ones that may unfreeze). */
+  async frozenDevices(userId: string): Promise<DeviceRow[]> {
+    return this.db
+      .select()
+      .from(devices)
+      .where(and(eq(devices.userId, userId), eq(devices.revokedReason, 'freeze')))
+      .orderBy(desc(devices.enrolledAt));
+  }
+
   /** Unfreeze: clears the flag and brings back only the keys the freeze revoked. */
   async unfreeze(userId: string): Promise<string[]> {
     return this.db.transaction(async (tx) => {

@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { type MoneyPlan, planApprovalMessage } from '@penny/shared';
+import {
+  approvalSignMessage,
+  type MoneyPlan,
+  passkeyChallengeFor,
+  planApprovalMessage,
+  unfreezeMessage,
+} from '@penny/shared';
 import { sql } from 'drizzle-orm';
 import { deviceKeys, idemKey, makeEngine, type TestEngine, tokenFromUrl } from './helpers.ts';
 import { assertion, makePasskey, registration, type SoftPasskey } from './webauthn.ts';
@@ -74,7 +80,7 @@ async function approve(
 ) {
   const view = await t.engine.services.approvals.getByToken(r.cardToken);
   const a = assertion(opts.pk ?? w.pk, {
-    challenge: view.approval?.challenge ?? 'none',
+    challenge: bound(view.approval),
     origin: ORIGIN,
     rpId: RP,
     ...opts,
@@ -88,6 +94,11 @@ async function approve(
     },
     body: JSON.stringify({ assertion: a, signedDelegateAction: 'AAAAAAAA' }),
   });
+}
+
+/** What the page asks the passkey to sign: bound to this approval's hash + challenge. */
+function bound(a?: { approvalHash: string; challenge?: string }): string {
+  return passkeyChallengeFor(approvalSignMessage(a?.approvalHash ?? '', a?.challenge ?? 'none'));
 }
 
 const status = async (id: string) => (await t.engine.repos.approvals.get(id))?.status;
@@ -173,24 +184,44 @@ describe('link card (no app)', () => {
 
   test('wrong challenge fails, the approval expires and a new card is sent', async () => {
     const r = await linkCard();
+    const sentBefore = t.messaging.texts.length;
     const res = await approve(r, { challenge: Buffer.alloc(32, 7).toString('base64url') });
     expect(res.status).toBe(422);
     expect(await status(r.approvalId)).toBe('expired');
     await failedWith(r.approvalId, 'bad_passkey');
     const next = await t.engine.repos.approvals.byReissuedFrom(r.approvalId);
     expect(next?.status).toBe('pending');
-    expect(tokenFromUrl(t.messaging.texts.at(-2)?.text)).not.toBe(r.cardToken);
+    // exactly one new message: the new card. The old card's expiry sends nothing.
+    const sent = t.messaging.texts.slice(sentBefore);
+    expect(sent).toHaveLength(1);
+    expect(tokenFromUrl(sent[0]?.text)).not.toBe(r.cardToken);
   });
 
   test('a reused challenge fails (no second relay)', async () => {
     const r = await linkCard();
     const view = await t.engine.services.approvals.getByToken(r.cardToken);
-    const challenge = view.approval?.challenge as string;
+    const challenge = bound(view.approval);
     expect((await approve(r, { challenge })).status).toBe(200);
     const relays = t.chain.relayCalls.length;
     const again = await approve(r, { challenge, signCount: 9 });
     expect(again.status).toBe(409);
     expect(t.chain.relayCalls.length).toBe(relays);
+  });
+
+  test('the raw challenge (not bound to the approval) fails', async () => {
+    const r = await linkCard();
+    const view = await t.engine.services.approvals.getByToken(r.cardToken);
+    expect((await approve(r, { challenge: view.approval?.challenge as string })).status).toBe(422);
+    await failedWith(r.approvalId, 'bad_passkey');
+  });
+
+  test('a passkey answer for one approval does not approve another', async () => {
+    const a = await linkCard();
+    const b = await linkCard();
+    const va = await t.engine.services.approvals.getByToken(a.cardToken);
+    // the assertion is over approval A's bound challenge, sent to approval B
+    expect((await approve(b, { challenge: bound(va.approval) })).status).toBe(422);
+    await failedWith(b.approvalId, 'bad_passkey');
   });
 
   test('wrong origin fails', async () => {
@@ -245,7 +276,7 @@ describe('link card (no app)', () => {
     t.clock.now = new Date(saved.getTime() + 601_000);
     try {
       const a = assertion(w.pk, {
-        challenge: view.approval?.challenge as string,
+        challenge: bound(view.approval),
         origin: ORIGIN,
         rpId: RP,
       });
@@ -275,6 +306,27 @@ describe('link card (no app)', () => {
     expect(res.status).toBe(422);
     expect(await status(r.approvalId)).toBe('expired');
     await failedWith(r.approvalId, 'changed');
+  });
+
+  test('unfreeze from the web: the passkey of the frozen browser answers the Unfreeze card', async () => {
+    const f = await webUser('+15553010');
+    await t.engine.services.approvals.freeze(f.userId);
+    const before = t.messaging.texts.length;
+    expect(await t.engine.services.approvals.startUnfreeze(f.userId, f.space)).toBe('card_sent');
+    // a no-app user gets the Unfreeze card as a link card
+    const token = tokenFromUrl(t.messaging.texts.slice(before).at(-1)?.text);
+    const view = await t.engine.services.approvals.getByToken(token);
+    expect(view.unfreeze?.passkeys).toEqual([Buffer.from(f.pk.credentialId).toString('base64url')]);
+    const challenge = passkeyChallengeFor(
+      unfreezeMessage(view.card.id, view.unfreeze?.challenge as string),
+    );
+    const res = await t.engine.app.request(`/v1/cards/by-token/${token}/unfreeze`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({ assertion: assertion(f.pk, { challenge, origin: ORIGIN, rpId: RP }) }),
+    });
+    expect(res.status).toBe(200);
+    expect((await t.engine.repos.users.activeDevice(f.userId))?.id).toBe(f.deviceId);
   });
 
   test('an over-limit send on the link path: Blocked card, no approval card', async () => {
@@ -323,7 +375,7 @@ describe('link card (no app)', () => {
       if (r.decision !== 'allow_with_approval') throw new Error('expected card');
       const view = await t2.engine.services.approvals.getByToken(r.cardToken);
       const a = assertion(u2.pk, {
-        challenge: view.approval?.challenge as string,
+        challenge: bound(view.approval),
         origin: ORIGIN,
         rpId: RP,
       });
