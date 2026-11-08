@@ -84,6 +84,17 @@ public struct EngineClient: Sendable {
                            body: CanonicalJSON.data(.object([:])), idempotencyKey: idempotencyKey)
     }
 
+    // POST /v1/cards/by-token/:token/unfreeze {deviceId, signature}: Face ID with the frozen key
+    public func unfreeze(_ token: CardToken, deviceId: String, signature: Data,
+                         idempotencyKey: String = UUID().uuidString) async throws {
+        let body = CanonicalJSON.data(.object([
+            "deviceId": .string(deviceId),
+            "signature": .string(signature.base64URLEncodedString()),
+        ]))
+        _ = try await send("POST", "/v1/cards/by-token/\(token.value)/unfreeze", cardToken: nil,
+                           body: body, idempotencyKey: idempotencyKey)
+    }
+
     // POST /v1/cards/by-token/:token/press {buttonId}: Undo, Edit, Send (turns into an approval card), Not me
     public func press(_ token: CardToken, buttonId: String, idempotencyKey: String = UUID().uuidString) async throws {
         _ = try await send("POST", "/v1/cards/by-token/\(token.value)/press", cardToken: nil,

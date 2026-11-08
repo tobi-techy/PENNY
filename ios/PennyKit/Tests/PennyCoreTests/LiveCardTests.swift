@@ -161,6 +161,31 @@ final class SignApprovalTests: XCTestCase {
     }
 }
 
+final class UnfreezeCardTests: XCTestCase {
+    func testTheUnfreezeChallengeIsReadAndTheMessageMatchesTheEngine() throws {
+        let challenge = String(repeating: "B", count: 42) + "A"
+        let data = CanonicalJSON.data(.object([
+            "card": .object(["id": "crd_01JC0000000000000000000000", "title": "Unfreeze Penny", "type": "unfreeze",
+                             "kind": "info", "state": "ready",
+                             "buttons": .array([.object(["id": "unfreeze", "label": "Unfreeze with Face ID", "action": "unfreeze"])])]),
+            "unfreeze": .object(["challenge": .string(challenge)]),
+        ]))
+        let parsed = try CardByToken.parse(data)
+        XCTAssertEqual(parsed.unfreezeChallenge, challenge)
+        XCTAssertEqual(parsed.card.buttons.first?.action, "unfreeze")
+        XCTAssertEqual(String(decoding: UnfreezeMessage.message(cardId: parsed.card.id, challenge: challenge), as: UTF8.self),
+                       "penny-unfreeze:v1:crd_01JC0000000000000000000000:\(challenge)")
+    }
+
+    func testABadUnfreezeChallengeIsRefused() {
+        let data = CanonicalJSON.data(.object([
+            "card": .object(["title": "Unfreeze Penny"]),
+            "unfreeze": .object(["challenge": "short"]),
+        ]))
+        XCTAssertThrowsError(try CardByToken.parse(data))
+    }
+}
+
 final class CardStateTests: XCTestCase {
     func testPillsInPlainWords() {
         XCTAssertEqual(CardState.ready.pillTitle, "Approve with Face ID")

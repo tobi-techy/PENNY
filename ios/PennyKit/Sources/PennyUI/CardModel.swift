@@ -253,7 +253,8 @@ extension CardContent {
             }
         } else if card.state == .done || card.state == .ready || card.state == .blocked {
             buttons = card.buttons.map { b in
-                CardButton(b.label, style: .outline, action: b.action == "freeze" ? .notMe : .button(b.id))
+                CardButton(b.label, style: b.action == "unfreeze" ? .faceID : .outline,
+                           action: b.action == "freeze" ? .notMe : .button(b.id))
             }
         }
         let rows = card.lines.map { line -> CardRow in

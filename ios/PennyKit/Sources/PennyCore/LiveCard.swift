@@ -238,6 +238,8 @@ public struct ApprovalTicket: Equatable, Sendable {
 public struct CardByToken: Equatable, Sendable {
     public let card: PennyCard
     public let ticket: ApprovalTicket?
+    /// Unfreeze cards only: the single-use challenge Face ID signs.
+    public var unfreezeChallenge: String? = nil
 
     public static func parse(_ data: Data) throws -> CardByToken {
         let root = try JSONParser.parse(data)
@@ -245,7 +247,19 @@ public struct CardByToken: Equatable, Sendable {
         let card = try PennyCard.parse(cardJSON)
         let ticket = try root["approval"].map(ApprovalTicket.parse)
         if let ticket, let linked = card.approvalId, linked != ticket.id { throw PennyError.invalidResponse("card link") }
-        return CardByToken(card: card, ticket: ticket)
+        var out = CardByToken(card: card, ticket: ticket)
+        if let ch = root["unfreeze"]?["challenge"]?.stringValue {
+            guard Validate.base64URL(ch, length: 43) else { throw PennyError.invalidResponse("unfreeze challenge") }
+            out.unfreezeChallenge = ch
+        }
+        return out
+    }
+}
+
+/// The message the frozen device key signs to unfreeze (penny-unfreeze:v1:<cardId>:<challenge>).
+public enum UnfreezeMessage {
+    public static func message(cardId: String, challenge: String) -> Data {
+        Data("penny-unfreeze:v1:\(cardId):\(challenge)".utf8)
     }
 }
 
