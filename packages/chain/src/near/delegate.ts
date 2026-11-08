@@ -233,7 +233,7 @@ export interface VerifyPolicy {
    * Callers relaying Guard-approved amounts must raise it deliberately.
    */
   maxTotalDeposit?: bigint;
-  /** Reject a maxBlockHeight more than this many blocks ahead of the chain. Default 600 (~10 min). */
+  /** Reject a maxBlockHeight more than this many blocks ahead of the chain. Default 1500 (~15 min at 0.6 s blocks; 10-min sends need ~1260). */
   maxBlocksAhead?: bigint;
   /** If set, the delegate must be signed by exactly this key (the enrolled device key). */
   expectedPublicKey?: string;
@@ -243,7 +243,7 @@ export const DEFAULT_POLICY = {
   maxGasPerAction: 100n * 10n ** 12n,
   maxTotalGas: MAX_TX_GAS,
   maxTotalDeposit: 10n ** 22n,
-  maxBlocksAhead: 600n,
+  maxBlocksAhead: 1500n,
 } as const;
 
 const fail = (reason: VerifyFailure, detail: string): VerifyResult => ({
