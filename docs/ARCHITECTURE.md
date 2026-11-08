@@ -67,6 +67,8 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 ### Approval hash and challenge (live cards)
 - `approvalHash = base64url(sha256(JCS({ action, expiresAt, id, planHash })))`, `action = {type, to, amount, asset}` derived from the plan (`approvalActionOf` in packages/shared; Swift `ApprovalIntent`). Vector: `packages/shared/test-vectors/09-approval-hash.json`.
 - `challenge`: 32 random bytes (base64url), single use, burned on the first approve attempt whatever its outcome.
+- Web passkey challenge (link page): base64url(sha256(`penny-approval:v2:<approvalHash>:<challenge>`)), so the passkey answer is tied to this exact action. The page recomputes the hashes before it asks.
+- A replaced approval (`reissued_from`) has at most one replacement (unique index).
 - Lifetime: 90 s for anything priced by a quote (invest), 10 min for plain sends, bills, errands, writes and new bots. The NEAR max block height is set to cover the lifetime.
 - States reuse the approval state machine: card Ready = `pending`, Approving = `signed`/`relayed`, Sent = `settled`, Blocked = Guard `cancelled` (or no approval at all when Guard said no first), Expired = `expired`.
 
@@ -82,6 +84,7 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - `POST /v1/approvals/:id/passkey` (Card auth) `{assertion, signedDelegateAction | planSignature}` → `{status}` (link page; WebAuthn verified on the server).
 - `POST /v1/approvals/by-token/:token/renew` → a fresh card ("Get a new card").
 - `POST /v1/cards/by-token/:token/press` `{buttonId}`, `POST /v1/cards/by-token/:token/edit` `{text}` → info card buttons.
+- `POST /v1/cards/by-token/:token/unfreeze` `{deviceId, signature} | {assertion}` → Face ID on an Unfreeze card (texting "unfreeze" only sends the card).
 - `POST /v1/devices/passkey/challenge` `{enrollCode}` → registration challenge for web enrollment (`platform: web_passkey` + `passkey` on `/v1/devices/enroll`).
 - `GET /a/:token` (page + Open Graph tags), `GET /a/:token/card.png` (the card for its current state).
 - `POST /v1/approvals/:id/submit` is retired (410): it had no challenge check.
