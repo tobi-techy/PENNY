@@ -11,6 +11,16 @@ public protocol MessageSigner: Sendable {
     func publicKey() throws -> NearPublicKey
     /// Signs `message` (the 32-byte NEP-461 hash). `reason` is shown in the Face ID sheet.
     func sign(_ message: Data, reason: String) async throws -> Data
+    /// Signs several messages behind one Face ID (the approval message + the signed action).
+    func signMany(_ messages: [Data], reason: String) async throws -> [Data]
+}
+
+extension MessageSigner {
+    public func signMany(_ messages: [Data], reason: String) async throws -> [Data] {
+        var out: [Data] = []
+        for m in messages { out.append(try await sign(m, reason: reason)) }
+        return out
+    }
 }
 
 /// Test / preview signer. Never use for real funds.
@@ -35,6 +45,42 @@ public struct InMemorySigner: MessageSigner {
 }
 
 public enum ApprovalSigning {
+    /// Live card approve: one Face ID signs the approval message (approvalHash + single-use
+    /// challenge) and the action itself (NEP-366 delegate action, or the plan message for
+    /// writes and new bots). Refuses before Face ID if the card is not ready to sign.
+    public static func signForApproval(_ ticket: ApprovalTicket, with signer: MessageSigner,
+                                       expectedAccountId: String?, now: Date = Date()) async throws -> ApprovalSignatures {
+        let approval = ticket.detail
+        guard ticket.status == .pending, approval.status == .pending else { throw PennyError.notPending }
+        guard ticket.expiresAt > now else { throw PennyError.expired }
+        guard let challenge = ticket.challenge else { throw PennyError.notPending }
+        if let expectedAccountId, expectedAccountId != approval.signerId { throw PennyError.wrongAccount }
+
+        let publicKey = try signer.publicKey()
+        let approveMessage = ApprovalHash.message(hash: ticket.approvalHash, challenge: challenge)
+        let verifyKey = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey.raw)
+
+        if approval.kind.isPlanSigned {
+            let planMessage = Data("penny-approval:v1:\(approval.id):\(approval.planHash)".utf8)
+            let sigs = try await signer.signMany([approveMessage, planMessage], reason: ticket.faceIDReason)
+            guard sigs.count == 2, verifyKey.isValidSignature(sigs[0], for: approveMessage),
+                  verifyKey.isValidSignature(sigs[1], for: planMessage) else {
+                throw PennyError.invalidInput("signature self-check failed")
+            }
+            return ApprovalSignatures(signature: sigs[0], signedDelegateAction: nil, planSignature: sigs[1])
+        }
+        let delegate = try approval.delegateAction(publicKey: publicKey)
+        let delegateHash = delegate.signableHash()
+        let sigs = try await signer.signMany([approveMessage, delegateHash], reason: ticket.faceIDReason)
+        guard sigs.count == 2, verifyKey.isValidSignature(sigs[0], for: approveMessage),
+              verifyKey.isValidSignature(sigs[1], for: delegateHash) else {
+            throw PennyError.invalidInput("signature self-check failed")
+        }
+        return ApprovalSignatures(signature: sigs[0],
+                                  signedDelegateAction: try SignedDelegateAction(delegateAction: delegate, signature: sigs[1]),
+                                  planSignature: nil)
+    }
+
     /// Builds the NEP-366 delegate action from the approval fields, hashes it per NEP-461 and signs it.
     /// Refuses expired, non-pending, or other-account approvals before Face ID is ever shown.
     public static func sign(_ approval: Approval, with signer: MessageSigner, expectedAccountId: String?, now: Date = Date()) async throws -> SignedDelegateAction {
