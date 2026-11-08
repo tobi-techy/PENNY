@@ -78,16 +78,6 @@ describe('buildActions (real money path, deterministic)', () => {
     ]);
   });
 
-  test('a NEAR bill payment (testnet) is one plain transfer to the biller', async () => {
-    const { adapter } = world(null);
-    const r = await adapter.buildActions(
-      { kind: 'pay_bill', payee: 'demo-biller.testnet', amount: '1.25', asset: 'NEAR' },
-      'tobi.penny.near',
-    );
-    expect(r.receiverId).toBe('demo-biller.testnet');
-    expect(r.actions).toEqual([{ type: 'Transfer', deposit: '1250000000000000000000000' }]);
-  });
-
   test('invest without a cached quote fails closed', async () => {
     const { adapter } = world();
     await expect(

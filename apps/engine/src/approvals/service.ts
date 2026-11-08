@@ -1706,9 +1706,7 @@ export class ApprovalService {
     const recheckPlan: MoneyPlan =
       plan.kind === 'send' && plan.asset === 'NEAR'
         ? { kind: 'send', asset: 'USDC', amount: fromMicros(row.amountMicros), to: plan.to }
-        : plan.kind === 'pay_bill' && plan.asset === 'NEAR'
-          ? { ...plan, asset: 'USDC', amount: fromMicros(row.amountMicros) }
-          : plan;
+        : plan;
     const g = evaluate(recheckPlan, policy, ctx);
     if (g.decision === 'block') {
       await this.d.guardDecisions.record({

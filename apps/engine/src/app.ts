@@ -209,7 +209,6 @@ export function createEngine(d: EngineDeps) {
     ...(d.connectors ? { connectors: d.connectors } : {}),
     approvals: repos.approvals,
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
-    settleIn: d.chainNetwork === 'testnet' ? 'NEAR' : 'USDC',
     explorerTxUrl: `${d.explorerBaseUrl ?? (d.chainNetwork === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io')}/txns/`,
     log: d.log,
     timeZone,

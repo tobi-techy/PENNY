@@ -64,8 +64,11 @@ export const PayBillPlan = z
     billId: z.string().min(1).max(128),
     payee: z.string().min(1).max(128),
     amount: Decimal,
-    /** USDC on mainnet; NEAR on testnet, where there is no USDC to pay with. */
-    asset: z.enum(['USDC', 'NEAR']),
+    /**
+     * USDC (tUSD on testnet). Never native NEAR: in a meta-transaction the relayer,
+     * not the user, pays any attached NEAR, so a NEAR bill would be paid by Penny.
+     */
+    asset: z.literal('USDC'),
   })
   .strict();
 

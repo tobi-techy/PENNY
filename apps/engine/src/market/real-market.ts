@@ -3,7 +3,6 @@ import {
   type ChainAdapter,
   type PriceFeed,
   PriceUnavailable,
-  STORAGE_PRICE_PER_BYTE,
 } from '@penny/chain';
 import type { MarketPort } from '../brain/registry.ts';
 import { formatUnits, INVEST_ASSETS } from './invest.ts';
@@ -23,14 +22,6 @@ export class RealMarket implements MarketPort {
     private readonly adapter: ChainAdapter,
     private readonly prices: PriceFeed,
   ) {}
-
-  /** Spendable NEAR from view_account only (no USDC lookups, so it also works on testnet). */
-  async nearAvailableYocto(accountId: string): Promise<bigint> {
-    const acct = await this.adapter.rpc.viewAccount(accountId);
-    if (!acct) return 0n;
-    const storage = BigInt(acct.storageUsage) * STORAGE_PRICE_PER_BYTE;
-    return acct.amount > storage ? acct.amount - storage : 0n;
-  }
 
   async getBalances(accountId: string) {
     const b = await this.adapter.getBalances(accountId);

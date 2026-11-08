@@ -8,9 +8,8 @@ import {
   parseBills,
   parseDueDate,
 } from '../src/bills/parse.ts';
-import { billSearchQuery, newBillsText, usdToNear } from '../src/bills/service.ts';
+import { billSearchQuery, newBillsText } from '../src/bills/service.ts';
 import { describeNow, localDate, localTimeOn, tzOffsetMinutes } from '../src/bills/time.ts';
-import { FakeMarket } from '../src/brain/tools.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
 import type { BillRow } from '../src/repo/bills.ts';
 import {
@@ -453,7 +452,7 @@ describe('paying a bill in USDC (demo biller)', () => {
   });
 });
 
-describe('testnet: bills are paid in real testnet NEAR', () => {
+describe('testnet: bills pay in the test dollar (tUSD), never native NEAR', () => {
   const DEMO = 'penny-demo-biller.testnet';
   const demoMail = {
     messageId: 'demo-t1',
@@ -463,15 +462,13 @@ describe('testnet: bills are paid in real testnet NEAR', () => {
     snippet: 'Your bill of $5.00 is due 14 Nov.',
   };
   let t: TestEngine;
-  let market: FakeMarket;
   let u: Awaited<ReturnType<typeof enrolledUser>>;
 
   beforeEach(async () => {
     const inbox = new InboxConnector();
-    market = new FakeMarket(); // NEAR at $4.00, 3.2 NEAR spendable
     t = await makeEngine({
       connectors: inbox,
-      extra: { demoBillerAccount: DEMO, chainNetwork: 'testnet', market },
+      extra: { demoBillerAccount: DEMO, chainNetwork: 'testnet' },
     });
     t.clock.now = new Date('2026-11-08T12:00:00Z');
     u = await enrolledUser(t);
@@ -480,42 +477,25 @@ describe('testnet: bills are paid in real testnet NEAR', () => {
     await t.engine.services.bills.scan(u.userId, { interactive: true });
   });
 
-  const payViaCrew = async () => {
+  test('the card is a token transfer from the user (ft_transfer), not a NEAR Transfer the relayer pays', async () => {
     const [bill] = await t.engine.services.bills.open(u.userId);
-    if (!bill) throw new Error('no bill');
     t.setModels(
       scriptedModel([{ tool: 'route', input: { bot: 'mail', reason: 'pay' } }]),
-      scriptedModel([{ tool: 'propose_pay_bill', input: { billId: bill.billId } }, { text: 'ok' }]),
+      scriptedModel([
+        { tool: 'propose_pay_bill', input: { billId: bill?.billId } },
+        { text: 'ok' },
+      ]),
     );
     await t.engine.services.crew.handle(u.userId, u.space, 'pay it');
-    return bill;
-  };
-
-  test('dollars convert to NEAR, rounded up so the biller is never short', () => {
-    expect(usdToNear('5', 4_000_000n)).toBe('1.25');
-    expect(usdToNear('5', 3_000_000n)).toBe('1.6667');
-    expect(usdToNear('12.5', 2_500_000n)).toBe('5');
-  });
-
-  test('the card is a plain NEAR transfer to the demo biller, sized in dollars by Guard', async () => {
-    await payViaCrew();
     const row = (await t.engine.repos.approvals.listForUser(u.userId, 5)).find(
       (a) => a.kind === 'pay_bill',
     );
     if (!row) throw new Error('no approval');
-    expect(row.plan).toMatchObject({ asset: 'NEAR', amount: '1.25', payee: DEMO });
-    expect(row.receiverId).toBe(DEMO);
-    expect(row.actions).toEqual([{ type: 'Transfer', deposit: '1250000000000000000000000' }]);
-    expect(row.amountMicros).toBe(5_000_000n);
-    expect(row.facts.find((f) => f.label === 'Amount')?.value).toBe('$5.00 · 1.25 NEAR (testnet)');
-  });
+    expect(row.plan).toMatchObject({ asset: 'USDC', amount: '5', payee: DEMO });
+    const actions = row.actions as { type: string; methodName?: string; deposit: string }[];
+    expect(actions.every((a) => a.type === 'FunctionCall')).toBe(true);
+    expect(actions.at(-1)).toMatchObject({ methodName: 'ft_transfer', deposit: '1' });
 
-  test('a live testnet transfer settles, marks the bill paid and texts a NearBlocks receipt', async () => {
-    await payViaCrew();
-    const row = (await t.engine.repos.approvals.listForUser(u.userId, 5)).find(
-      (a) => a.kind === 'pay_bill',
-    );
-    if (!row) throw new Error('no approval');
     t.chain.nextRelay = { ok: true, txHash: 'TESTNET_TX_1', dryRun: false };
     t.chain.statuses.set('TESTNET_TX_1', 'settled');
     const out = await approveLatest(t, u, row.id);
@@ -526,29 +506,14 @@ describe('testnet: bills are paid in real testnet NEAR', () => {
     );
   });
 
-  test('not enough testnet NEAR: no card, and Penny says how much and where to top up', async () => {
-    market.nearAvailable = 10n ** 23n; // 0.1 NEAR
-    const cards = t.messaging.cards.length;
+  test('not enough dollars: no card, and Penny says how much is needed', async () => {
     const [bill] = await t.engine.services.bills.open(u.userId);
     const p = await t.engine.services.bills.paymentPlan(u.userId, bill?.billId ?? '', {
-      usdPriceMicros: 4_000_000n,
-      availableYocto: market.nearAvailable,
+      usdc: '2.5',
     });
-    expect(p.ok).toBe(false);
-    if (p.ok) return;
-    expect(p.reason).toBe(
-      `not enough testnet NEAR: this needs 1.25 NEAR and you have 0.1 to spend. top up ${u.accountId} from the NEAR testnet faucet, then ask again.`,
-    );
-    await payViaCrew();
-    expect(t.messaging.cards.length).toBe(cards);
-  });
-
-  test('no NEAR price: refused plainly', async () => {
-    const [bill] = await t.engine.services.bills.open(u.userId);
-    const p = await t.engine.services.bills.paymentPlan(u.userId, bill?.billId ?? '');
     expect(p).toEqual({
       ok: false,
-      reason: "I can't get a NEAR price right now. try again in a minute.",
+      reason: 'not enough dollars on your penny account: this needs $5.00 and you have $2.50.',
     });
   });
 });
