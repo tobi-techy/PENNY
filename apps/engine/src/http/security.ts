@@ -123,7 +123,10 @@ export function accessLog(log: Logger): MiddlewareHandler {
       {
         rid: c.get('requestId'),
         method: c.req.method,
-        path: c.req.path.replace(/apr_[0-9A-Z]{26}/g, 'apr_:id'),
+        // card tokens ride in /a/<token> and /by-token/<token>: never log them
+        path: c.req.path
+          .replace(/apr_[0-9A-Z]{26}/g, 'apr_:id')
+          .replace(/(^|\/)[A-Za-z0-9_-]{43}(?=\/|$)/g, '$1:token'),
         status: c.res.status,
         ms: Math.round(performance.now() - t),
       },

@@ -7,16 +7,26 @@ import { newId } from '../lib/ids.ts';
 export class AttestChallengesRepo {
   constructor(private readonly db: Db) {}
 
-  async create(codeHash: string, challengeB64: string, expiresAt: Date): Promise<string> {
+  async create(
+    codeHash: string,
+    challengeB64: string,
+    expiresAt: Date,
+    purpose: 'app_attest' | 'passkey' = 'app_attest',
+  ): Promise<string> {
     const id = newId('atch');
     await this.db
       .insert(attestChallenges)
-      .values({ id, codeHash, challenge: challengeB64, expiresAt });
+      .values({ id, codeHash, challenge: challengeB64, expiresAt, purpose });
     return id;
   }
 
-  /** Atomically consume a challenge; returns its raw bytes or null. */
-  async consume(id: string, codeHash: string, now: Date): Promise<Uint8Array | null> {
+  /** Atomically consume a challenge for its purpose; returns its raw bytes or null. */
+  async consume(
+    id: string,
+    codeHash: string,
+    now: Date,
+    purpose: 'app_attest' | 'passkey' = 'app_attest',
+  ): Promise<Uint8Array | null> {
     const rows = await this.db
       .update(attestChallenges)
       .set({ usedAt: now })
@@ -24,6 +34,7 @@ export class AttestChallengesRepo {
         and(
           eq(attestChallenges.id, id),
           eq(attestChallenges.codeHash, codeHash),
+          eq(attestChallenges.purpose, purpose),
           isNull(attestChallenges.usedAt),
           gt(attestChallenges.expiresAt, now),
         ),

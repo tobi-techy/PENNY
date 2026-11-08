@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { bots, conversations, messages, moods, soulsChangelog } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
@@ -85,6 +85,21 @@ export class BotsRepo {
       .from(bots)
       .where(and(eq(bots.userId, userId), eq(bots.slug, slug)))
       .limit(1);
+    return r ?? null;
+  }
+
+  /** A re-issued Face ID card for a new bot: the bot follows the new approval. */
+  async moveApproval(fromApprovalId: string, toApprovalId: string): Promise<BotRow | null> {
+    const [r] = await this.db
+      .update(bots)
+      .set({ approvalId: toApprovalId, status: 'pending_approval' })
+      .where(
+        and(
+          eq(bots.approvalId, fromApprovalId),
+          inArray(bots.status, ['pending_approval', 'archived']),
+        ),
+      )
+      .returning();
     return r ?? null;
   }
 

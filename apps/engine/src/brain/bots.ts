@@ -31,6 +31,8 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'connect_app',
       'propose_write',
       'find_bills',
+      'set_reminder',
+      'draft_email',
     ],
   },
   {
@@ -55,6 +57,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'propose_pay_bill',
       'connect_app',
       'propose_write',
+      'draft_email',
       'remember',
       'recall',
     ],
@@ -82,6 +85,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'check_guard',
       'connect_app',
       'propose_write',
+      'set_reminder',
       'remember',
       'recall',
     ],
@@ -229,6 +233,10 @@ export class BotService {
   async onApprovalSettled(approvalId: string): Promise<void> {
     const bot = await this.d.bots.byApproval(approvalId);
     if (bot) await this.d.bots.setStatus(bot.id, 'pending_approval', 'active');
+  }
+
+  async onApprovalReissued(fromId: string, toId: string): Promise<void> {
+    await this.d.bots.moveApproval(fromId, toId);
   }
 
   async onApprovalDeclined(approvalId: string): Promise<void> {

@@ -70,6 +70,8 @@ const DAY = 24 * HOUR;
 
 export type SchedulerJobDeps = {
   expireApprovals: (now: Date) => Promise<unknown>;
+  /** Send reminders that are due (each exactly once). */
+  fireReminders?: (now: Date) => Promise<unknown>;
   refreshRelayed?: () => Promise<unknown>;
   /** Release approvals stuck in `signed` after a relay that never reported back. */
   reconcileStuckSigned?: () => Promise<unknown>;
@@ -110,6 +112,14 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       name: 'reconcile_stuck_signed',
       everyMs: 60_000,
       run: async () => void (await d.reconcileStuckSigned?.()),
+    });
+  }
+  if (d.fireReminders) {
+    const fire = d.fireReminders;
+    jobs.push({
+      name: 'fire_reminders',
+      everyMs: 15_000,
+      run: async (now) => void (await fire(now)),
     });
   }
   if (d.weeklyReflection) {

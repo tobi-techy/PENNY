@@ -67,41 +67,34 @@ function post(
 }
 
 describe('POST /v1/photon/webhook', () => {
-  test('valid delivery -> 200 fast, then a welcome text and a live setup card', async () => {
+  test('valid delivery -> 200 fast, then a welcome text and a setup picture link card', async () => {
+    const before = t.messaging.cards.length;
     const res = await post(event('spc-msg-1', 'hi penny'));
     expect(res.status).toBe(200);
     await tick();
-    expect(t.messaging.texts.at(-1)?.text).toContain('just talk to me here');
-    const card = t.messaging.setupCards.at(-1)?.card;
-    expect(card?.url).toMatch(/^https:\/\/penny\.test\/setup#code=[A-Z2-9]{8}$/);
-    expect(card?.caption).toBe('set up penny');
-    expect(card?.live).toBe(true);
-    // the setup link is the card's payload, not a text the user has to tap
-    expect(t.messaging.texts.map((x) => x.text).join('\n')).not.toContain('/setup#code=');
+    const texts = t.messaging.texts.map((x) => x.text);
+    expect(texts.at(-2)).toContain('just talk to me here');
+    // a picture link card: no app yet, so never a mini app card
+    expect(texts.at(-1)).toMatch(/^https:\/\/penny\.test\/setup#code=[A-Z2-9]{8}$/);
+    expect(t.messaging.cards.length).toBe(before);
+    // iMessage draws it from /setup's Open Graph tags
+    const page = await t.engine.app.request('/setup');
+    const html = await page.text();
+    expect(html).toContain('og:image" content="https://penny.test/setup/card.png"');
+    expect(html).toContain('og:title" content="Set up Penny"');
+    const png = await t.engine.app.request('/setup/card.png');
+    expect(png.headers.get('content-type')).toBe('image/png');
   });
 
-  test('setup card uses the host the webhook arrived on, not PUBLIC_BASE_URL', async () => {
-    const res = await post(event('spc-msg-origin', 'hi penny', '+15550111'), {
-      host: 'penny.live',
-      proto: 'https',
-    });
-    expect(res.status).toBe(200);
-    await tick();
-    expect(t.messaging.setupCards.at(-1)?.card.url).toMatch(
-      /^https:\/\/penny\.live\/setup#code=[A-Z2-9]{8}$/,
-    );
-  });
-
-  test('a Host header that is not a real hostname never becomes a card link', async () => {
-    // A crafted Host would otherwise point the user's setup/approval link at a
-    // host we do not control.
-    for (const host of ['evil', 'user@evil.test', '169.254.169.254', 'a..b']) {
-      await post(event(`spc-msg-badhost-${host}`, 'hi penny', `+1555020${host.length}`), {
+  test('links use PUBLIC_BASE_URL, never the Host the webhook arrived on', async () => {
+    // Passkeys bind to PUBLIC_BASE_URL, and a crafted Host must never become a card link.
+    for (const host of ['penny.live', 'evil', 'user@evil.test', '169.254.169.254', 'a..b']) {
+      await post(event(`spc-msg-host-${host}`, 'hi penny', `+1555020${host.length}${host[0]}`), {
         host,
         proto: 'https',
       });
       await tick();
-      const url = t.messaging.setupCards.at(-1)?.card.url ?? '';
+      const url = t.messaging.texts.at(-1)?.text ?? '';
       expect(url).not.toContain(host);
       expect(url).toMatch(/^https:\/\/penny\.test\/setup#code=/);
     }

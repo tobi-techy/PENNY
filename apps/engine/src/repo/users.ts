@@ -6,6 +6,7 @@ import { newId } from '../lib/ids.ts';
 
 export type UserRow = typeof users.$inferSelect;
 export type DeviceRow = typeof devices.$inferSelect;
+export type DevicePlatform = 'ios_app' | 'web_passkey';
 
 export class UsersRepo {
   constructor(private readonly db: Db) {}
@@ -72,6 +73,7 @@ export class UsersRepo {
     accountId: string,
     dryRun: boolean,
     attest?: { keyId: string; publicKeyXY: string },
+    platform: DevicePlatform = 'ios_app',
   ): Promise<DeviceRow> {
     return this.db.transaction(async (tx) => {
       const [d] = await tx
@@ -80,6 +82,8 @@ export class UsersRepo {
           id: newId('dev'),
           userId,
           publicKey,
+          platform,
+          hasExtension: platform === 'ios_app',
           ...(attest
             ? {
                 appAttest: attest.keyId,
@@ -140,10 +144,38 @@ export class UsersRepo {
   async revokeDevice(deviceId: string): Promise<boolean> {
     const r = await this.db
       .update(devices)
-      .set({ revokedAt: new Date() })
+      .set({ revokedAt: new Date(), revokedReason: 'user' })
       .where(and(eq(devices.id, deviceId), isNull(devices.revokedAt)))
       .returning({ id: devices.id });
     return r.length === 1;
+  }
+
+  /**
+   * Freeze: every device key for this user is revoked (reason 'freeze') and the
+   * user is marked frozen. Returns the devices it revoked.
+   */
+  async freeze(userId: string, at: Date): Promise<DeviceRow[]> {
+    return this.db.transaction(async (tx) => {
+      await tx.update(users).set({ frozenAt: at }).where(eq(users.id, userId));
+      return tx
+        .update(devices)
+        .set({ revokedAt: at, revokedReason: 'freeze' })
+        .where(and(eq(devices.userId, userId), isNull(devices.revokedAt)))
+        .returning();
+    });
+  }
+
+  /** Unfreeze: clears the flag and brings back only the keys the freeze revoked. */
+  async unfreeze(userId: string): Promise<string[]> {
+    return this.db.transaction(async (tx) => {
+      await tx.update(users).set({ frozenAt: null }).where(eq(users.id, userId));
+      const r = await tx
+        .update(devices)
+        .set({ revokedAt: null, revokedReason: null })
+        .where(and(eq(devices.userId, userId), eq(devices.revokedReason, 'freeze')))
+        .returning({ id: devices.id });
+      return r.map((d) => d.id);
+    });
   }
 
   async activeDevice(userId: string): Promise<DeviceRow | null> {
@@ -161,6 +193,7 @@ export class UsersRepo {
     userId: string,
     publicKey: string,
     attest?: { keyId: string; publicKeyXY: string },
+    platform: DevicePlatform = 'ios_app',
   ): Promise<DeviceRow> {
     const [d] = await this.db
       .insert(devices)
@@ -168,6 +201,8 @@ export class UsersRepo {
         id: newId('dev'),
         userId,
         publicKey,
+        platform,
+        hasExtension: platform === 'ios_app',
         ...(attest
           ? {
               appAttest: attest.keyId,

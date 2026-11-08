@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { Approval, ApprovalStatusResponse, type MoneyPlan } from '@penny/shared';
 import { sql } from 'drizzle-orm';
-import { enrolledUser, idemKey, makeEngine, type TestEngine } from './helpers.ts';
+import { enrolledUser, idemKey, makeEngine, signBody, type TestEngine } from './helpers.ts';
 
 let t: TestEngine;
 let u: Awaited<ReturnType<typeof enrolledUser>>;
@@ -46,20 +46,27 @@ const req = (path: string, init: RequestInit & { token?: string; idem?: string }
 };
 
 describe('create money approval', () => {
-  test('Guard allows, card sent with live:true and token in URL fragment only', async () => {
+  test('Guard allows, live card sent with the card token in the URL, hash + challenge stored', async () => {
     const before = t.messaging.cards.length;
     const r = await create();
     expect(t.messaging.cards.length).toBe(before + 1);
     const card = t.messaging.cards.at(-1)?.card;
     expect(card?.live).toBe(true);
-    expect(card?.url).toBe(`https://penny.test/a/${r.approvalId}#t=${r.cardToken}`);
+    expect(card?.url).toBe(`https://penny.test/a/${r.cardToken}`);
+    expect(card?.caption).toBe('Send 10 USDC');
+    expect(card?.subcaption).toBe('to ada.penny.near');
+    expect(card?.trailingCaption).toBe('10:00 left');
     const row = await t.engine.repos.approvals.get(r.approvalId);
     expect(row?.cardTokenHash).not.toBe(r.cardToken);
     expect(row?.status).toBe('pending');
-    expect(row && row.expiresAt.getTime() - t.clock.now.getTime()).toBeLessThanOrEqual(120_000);
+    expect(row?.challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(row?.approvalHash).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // plain sends live 10 minutes
+    expect(row && row.expiresAt.getTime() - t.clock.now.getTime()).toBe(600_000);
   });
-  test('Guard block creates no approval and no card', async () => {
+  test('Guard block creates no approval and sends the Blocked card, never an approval card', async () => {
     const before = t.messaging.cards.length;
+    const approvalsBefore = (await t.engine.repos.approvals.listForUser(u.userId, 50)).length;
     const r = await t.engine.services.approvals.createMoneyApproval({
       userId: u.userId,
       bot: null,
@@ -67,7 +74,17 @@ describe('create money approval', () => {
       space: u.space,
     });
     expect(r.decision).toBe('block');
-    expect(t.messaging.cards.length).toBe(before);
+    expect(t.messaging.cards.length).toBe(before + 1);
+    const blocked = t.messaging.cards.at(-1)?.card;
+    expect(blocked?.caption).toBe('Not today');
+    const view = await t.engine.services.approvals.getByToken(
+      blocked?.url.split('/a/')[1] as string,
+    );
+    expect(view.card.kind).toBe('info');
+    expect(view.card.type).toBe('guard_block');
+    expect(view.card.state).toBe('blocked');
+    expect(view.approval).toBeUndefined();
+    expect((await t.engine.repos.approvals.listForUser(u.userId, 50)).length).toBe(approvalsBefore);
     expect(await t.engine.services.mood.get(u.userId, 'guard')).toBe('blocked');
   });
   test('user without a device gets needs_more_info', async () => {
@@ -111,11 +128,11 @@ describe('GET /v1/approvals/:id (card token auth)', () => {
 describe('submit', () => {
   test('happy path: pending -> signed -> relayed -> settled, audit trail append-only', async () => {
     const r = await create(send('5'));
-    const res = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const res = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ signedDelegateAction: 'AAAAAAAA' }),
+      body: JSON.stringify(await signBody(t, r.cardToken, u)),
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: 'settled' });
@@ -128,12 +145,10 @@ describe('submit', () => {
     expect(ApprovalStatusResponse.safeParse(sb).success).toBe(true);
     expect(sb.status).toBe('settled');
     expect(sb.txHash).toMatch(/^dry_/);
-    // card edited in place
-    expect(
-      t.messaging.edits.some(
-        (e) => e.handle.approvalId === r.approvalId && e.card.subcaption === 'done ✓',
-      ),
-    ).toBe(true);
+    // card edited in place: approving, then sent
+    const cardId = (await t.engine.repos.approvals.get(r.approvalId))?.cardId;
+    const mine = t.messaging.edits.filter((e) => e.handle.cardId === cardId);
+    expect(mine.map((e) => e.card.subcaption)).toEqual(['approving…', 'sending…', 'sent ✓']);
     // approval_events is append-only at the DB level
     await expect(
       Promise.resolve(t.db.db.execute(sql`update approval_events set reason = 'x'`)),
@@ -145,10 +160,10 @@ describe('submit', () => {
 
   test('approvals are single use: re-submit with a new key -> 409', async () => {
     const r = await create(send('1'));
-    const body = JSON.stringify({ signedDelegateAction: 'AAAAAAAA' });
+    const body = JSON.stringify(await signBody(t, r.cardToken, u));
     expect(
       (
-        await req(`/v1/approvals/${r.approvalId}/submit`, {
+        await req(`/v1/approvals/${r.approvalId}/sign`, {
           method: 'POST',
           token: r.cardToken,
           idem: idemKey(),
@@ -156,7 +171,7 @@ describe('submit', () => {
         })
       ).status,
     ).toBe(200);
-    const again = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const again = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
@@ -167,11 +182,11 @@ describe('submit', () => {
 
   test('concurrent submits relay once', async () => {
     const r = await create(send('1'));
-    const body = JSON.stringify({ signedDelegateAction: 'AAAAAAAA' });
+    const body = JSON.stringify(await signBody(t, r.cardToken, u));
     const before = t.chain.relayCalls.length;
     const results = await Promise.all(
       [1, 2, 3].map(() =>
-        req(`/v1/approvals/${r.approvalId}/submit`, {
+        req(`/v1/approvals/${r.approvalId}/sign`, {
           method: 'POST',
           token: r.cardToken,
           idem: idemKey(),
@@ -187,14 +202,14 @@ describe('submit', () => {
   test('idempotency: same key + same body replays; same key + different body -> 422; missing key -> 400', async () => {
     const r = await create(send('1'));
     const key = idemKey();
-    const body = JSON.stringify({ signedDelegateAction: 'AAAAAAAA' });
-    const a = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const body = JSON.stringify(await signBody(t, r.cardToken, u));
+    const a = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: key,
       body,
     });
-    const b = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const b = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: key,
@@ -203,14 +218,14 @@ describe('submit', () => {
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
     expect(b.headers.get('idempotent-replayed')).toBe('true');
-    const c = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const c = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: key,
-      body: JSON.stringify({ signedDelegateAction: 'BBBBBBBB' }),
+      body: JSON.stringify(await signBody(t, r.cardToken, u, { signedDelegateAction: 'BBBBBBBB' })),
     });
     expect(c.status).toBe(422);
-    const d = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const d = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       body,
@@ -218,28 +233,31 @@ describe('submit', () => {
     expect(d.status).toBe(400);
   });
 
-  test('delegate action mismatch -> 422 and stays pending', async () => {
+  test('delegate action mismatch -> 422, expired (never retried) and a new card is sent', async () => {
     const r = await create(send('1'));
     t.chain.nextVerify = { ok: false, reason: 'receiver mismatch' };
-    const res = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const res = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ signedDelegateAction: 'AAAAAAAA' }),
+      body: JSON.stringify(await signBody(t, r.cardToken, u)),
     });
     t.chain.nextVerify = { ok: true };
     expect(res.status).toBe(422);
-    expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('pending');
+    expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('expired');
+    const next = await t.engine.repos.approvals.byReissuedFrom(r.approvalId);
+    expect(next?.status).toBe('pending');
+    expect(next?.challenge).not.toBe((await t.engine.repos.approvals.get(r.approvalId))?.challenge);
   });
 
   test('relay failure -> failed, ledger released', async () => {
     const r = await create(send('1'));
     t.chain.nextRelay = { ok: false, reason: 'rpc down' };
-    const res = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const res = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ signedDelegateAction: 'AAAAAAAA' }),
+      body: JSON.stringify(await signBody(t, r.cardToken, u)),
     });
     t.chain.nextRelay = null;
     expect(res.status).toBe(502);
@@ -248,26 +266,27 @@ describe('submit', () => {
 
   test('unknown body keys rejected; planSignature on a money approval rejected', async () => {
     const r = await create(send('1'));
-    const extra = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const extra = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ signedDelegateAction: 'AAAAAAAA', receiverId: 'evil.near' }),
+      body: JSON.stringify({ ...(await signBody(t, r.cardToken, u)), receiverId: 'evil.near' }),
     });
     expect(extra.status).toBe(400);
-    const wrong = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const wrong = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ planSignature: 'A'.repeat(86) }),
+      body: JSON.stringify(await signBody(t, r.cardToken, u, { planSignature: 'A'.repeat(86) })),
     });
     expect(wrong.status).toBe(400);
   });
 });
 
 describe('decline, expiry, guard re-check', () => {
-  test('decline -> cancelled, then submit -> 409', async () => {
+  test('decline -> cancelled, then sign -> 409', async () => {
     const r = await create(send('1'));
+    const signed = JSON.stringify(await signBody(t, r.cardToken, u));
     const d = await req(`/v1/approvals/${r.approvalId}/decline`, {
       method: 'POST',
       token: r.cardToken,
@@ -276,24 +295,25 @@ describe('decline, expiry, guard re-check', () => {
     });
     expect(d.status).toBe(200);
     expect(await d.json()).toEqual({ status: 'cancelled' });
-    const s = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const s = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ signedDelegateAction: 'AAAAAAAA' }),
+      body: signed,
     });
     expect(s.status).toBe(409);
   });
 
-  test('expired approval: submit -> 410 and status becomes expired', async () => {
+  test('expired approval: sign -> 410 and status becomes expired', async () => {
     const r = await create(send('1'));
+    const body = JSON.stringify(await signBody(t, r.cardToken, u));
     const saved = t.clock.now;
-    t.clock.now = new Date(saved.getTime() + 121_000);
-    const s = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    t.clock.now = new Date(saved.getTime() + 601_000);
+    const s = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ signedDelegateAction: 'AAAAAAAA' }),
+      body,
     });
     expect(s.status).toBe(410);
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('expired');
@@ -306,7 +326,7 @@ describe('decline, expiry, guard re-check', () => {
   test('sweeper expires due approvals', async () => {
     const r = await create(send('1'));
     const saved = t.clock.now;
-    t.clock.now = new Date(saved.getTime() + 200_000);
+    t.clock.now = new Date(saved.getTime() + 601_000);
     expect(await t.engine.services.approvals.expireDue()).toBeGreaterThanOrEqual(1);
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('expired');
     t.clock.now = saved;
@@ -317,11 +337,11 @@ describe('decline, expiry, guard re-check', () => {
     await t.db.db.execute(
       sql`update guard_policies set per_tx_usd = '5' where user_id = ${u.userId}`,
     );
-    const s = await req(`/v1/approvals/${r.approvalId}/submit`, {
+    const s = await req(`/v1/approvals/${r.approvalId}/sign`, {
       method: 'POST',
       token: r.cardToken,
       idem: idemKey(),
-      body: JSON.stringify({ signedDelegateAction: 'AAAAAAAA' }),
+      body: JSON.stringify(await signBody(t, r.cardToken, u)),
     });
     await t.db.db.execute(
       sql`update guard_policies set per_tx_usd = '50' where user_id = ${u.userId}`,

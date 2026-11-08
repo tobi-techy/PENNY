@@ -14,7 +14,7 @@ import {
 } from './attestation.ts';
 import type { MemoryService } from './memory.ts';
 import type { MoodService } from './mood.ts';
-import type { BotOps, MarketPort, ToolRegistry } from './registry.ts';
+import type { BotOps, MarketPort, ToolContext, ToolRegistry } from './registry.ts';
 import type { Tracer } from './tracing.ts';
 
 /**
@@ -45,6 +45,7 @@ export type CrewDeps = {
   mood: MoodService;
   market: MarketPort;
   botOps: BotOps;
+  everyday?: ToolContext['everyday'];
   tracer: Tracer;
   log: Logger;
   /** NEAR AI TEE attestation gate (NEARAI_ATTESTATION); absent or mode off = no change. */
@@ -61,8 +62,8 @@ export type CrewReply = {
   privacy?: CrewPrivacy;
 };
 
-/** Registry tools that never touch money or mail; everything else is gated. */
-const UNGATED_READ_EXCEPTIONS = new Set(['find_bills']);
+/** Read tools that still touch mail content, so they are gated like money and mail tools. */
+const UNGATED_READ_EXCEPTIONS = new Set(['find_bills', 'draft_email']);
 
 export type HistoryMessage = { direction: 'inbound' | 'outbound'; text: string };
 
@@ -183,6 +184,7 @@ export class Crew {
       mood: this.d.mood,
       market: this.d.market,
       botOps: this.d.botOps,
+      ...(this.d.everyday ? { everyday: this.d.everyday } : {}),
     };
     const tools = this.d.registry.toAiTools(ctx);
     let connectorNote = '';

@@ -11,7 +11,10 @@ export type IdPrefix =
   | 'led'
   | 'gdc'
   | 'atch'
-  | 'evt';
+  | 'evt'
+  | 'crd'
+  | 'pky'
+  | 'rmd';
 
 export function newId<P extends IdPrefix>(prefix: P): `${P}_${string}` {
   return `${prefix}_${ulid()}`;

@@ -1,5 +1,5 @@
 import type { ApprovalKind, ApprovalStatus } from '@penny/shared';
-import { and, asc, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { assertTransition } from '../approvals/state.ts';
 import type { Db } from '../db/client.ts';
 import { approvalEvents, approvals } from '../db/schema.ts';
@@ -82,6 +82,47 @@ export class ApprovalsRepo {
       });
       return updated;
     });
+  }
+
+  /**
+   * Burn the single-use challenge. Only the first attempt on a pending approval
+   * wins; every later attempt (replay, race, retry) gets false.
+   */
+  async burnChallenge(id: string, now: Date): Promise<boolean> {
+    const r = await this.db
+      .update(approvals)
+      .set({ challengeUsedAt: now })
+      .where(
+        and(
+          eq(approvals.id, id),
+          eq(approvals.status, 'pending'),
+          isNull(approvals.challengeUsedAt),
+        ),
+      )
+      .returning({ id: approvals.id });
+    return r.length === 1;
+  }
+
+  async setCardId(id: string, cardId: string): Promise<void> {
+    await this.db.update(approvals).set({ cardId }).where(eq(approvals.id, id));
+  }
+
+  async byReissuedFrom(id: string): Promise<ApprovalRow | null> {
+    const [r] = await this.db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.reissuedFrom, id))
+      .limit(1);
+    return r ?? null;
+  }
+
+  /** Approvals still waiting on the user (freeze expires these). */
+  async pendingForUser(userId: string): Promise<ApprovalRow[]> {
+    return this.db
+      .select()
+      .from(approvals)
+      .where(and(eq(approvals.userId, userId), eq(approvals.status, 'pending')))
+      .limit(500);
   }
 
   async events(approvalId: string) {

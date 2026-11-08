@@ -20,11 +20,16 @@ const BaseEnv = z.object({
   DATABASE_URL: optionalStr,
 
   SPECTRUM_PROJECT_ID: optionalStr,
+  /** Filled from SPECTRUM_SECRET (preferred name) when set. */
   SPECTRUM_PROJECT_SECRET: optionalStr,
   SPECTRUM_WEBHOOK_SECRET: optionalStr,
   IMESSAGE_APP_NAME: z.string().default('Penny'),
+  /** Filled from PENNY_IMESSAGE_EXT_BUNDLE_ID (preferred name) when set. */
   IMESSAGE_EXTENSION_BUNDLE_ID: z.string().default('money.penny.host.messages'),
+  /** Filled from APPLE_TEAM_ID (preferred name) when set. */
   IMESSAGE_TEAM_ID: optionalStr,
+  /** The host app's bundle id; with APPLE_TEAM_ID it gives the App Attest app id. */
+  PENNY_IOS_BUNDLE_ID: optionalStr,
 
   NEARAI_BASE_URL: z.url().default('https://cloud-api.near.ai/v1'),
   NEARAI_API_KEY: optionalStr,
@@ -123,8 +128,24 @@ export class EnvError extends Error {
 }
 
 /** Parse env or throw. Error lists only key names, never values. */
+/** Preferred env names (live cards) -> the names the engine reads. Old names still work. */
+const ALIASES: [preferred: string, legacy: string][] = [
+  ['SPECTRUM_SECRET', 'SPECTRUM_PROJECT_SECRET'],
+  ['APPLE_TEAM_ID', 'IMESSAGE_TEAM_ID'],
+  ['PENNY_IMESSAGE_EXT_BUNDLE_ID', 'IMESSAGE_EXTENSION_BUNDLE_ID'],
+];
+
 export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
-  const r = EnvSchema.safeParse(source);
+  const merged: Record<string, string | undefined> = { ...source };
+  for (const [preferred, legacy] of ALIASES) {
+    const v = source[preferred];
+    if (v !== undefined && v.trim() !== '') merged[legacy] = v;
+  }
+  // App Attest app id = TEAMID.bundle.id when not given directly
+  if (!merged.APP_ATTEST_APP_ID && merged.IMESSAGE_TEAM_ID && merged.PENNY_IOS_BUNDLE_ID) {
+    merged.APP_ATTEST_APP_ID = `${merged.IMESSAGE_TEAM_ID}.${merged.PENNY_IOS_BUNDLE_ID}`;
+  }
+  const r = EnvSchema.safeParse(merged);
   if (!r.success) {
     const lines = r.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
     throw new EnvError(`invalid environment:\n  ${lines.join('\n  ')}`);

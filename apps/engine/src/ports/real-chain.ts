@@ -51,8 +51,8 @@ export class RealChain implements ChainPort {
     return { receiverId: r.receiverId, actions: r.actions as NearAction[] };
   }
 
-  prepareSigning(signerId: string, publicKeyEd25519B64Url: string) {
-    return this.adapter.prepareSigning(signerId, publicKeyEd25519B64Url);
+  prepareSigning(signerId: string, publicKeyEd25519B64Url: string, windowSec?: number) {
+    return this.adapter.prepareSigning(signerId, publicKeyEd25519B64Url, windowSec);
   }
 
   /** Guard contract client for a user, owner-signed when a signer is supplied. */
