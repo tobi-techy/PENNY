@@ -67,6 +67,17 @@ export interface QuoteInvestParams {
   dry?: boolean;
 }
 
+/**
+ * Blocks to allow for an approval that lives `windowSec`. NEAR makes a block about
+ * every 0.6-1.2 s, so 2 blocks a second plus a minute of slack never ends early;
+ * capped under the verifier's max-blocks-ahead bound (1500).
+ */
+export function signingWindowBlocks(windowSec: number | undefined, fallback?: bigint): bigint {
+  if (!windowSec || windowSec <= 0) return fallback ?? 200n;
+  const blocks = BigInt(Math.ceil(windowSec * 2) + 60);
+  return blocks > 1400n ? 1400n : blocks;
+}
+
 export interface ChainAdapterOptions {
   rpc?: NearRpc;
   mode?: ChainMode;
@@ -251,6 +262,7 @@ export class ChainAdapter {
   async prepareSigning(
     signerId: string,
     publicKey: string,
+    windowSec?: number,
   ): Promise<{ nonce: string; maxBlockHeight: string }> {
     const pk = normalizeEd25519PublicKey(publicKey);
     const [key, block] = await Promise.all([
@@ -261,7 +273,7 @@ export class ChainAdapter {
     if (key.permission !== 'FullAccess') throw new Error('device key is not full access');
     return {
       nonce: (key.nonce + 1n).toString(),
-      maxBlockHeight: (block.height + (this.o.signingWindowBlocks ?? 200n)).toString(),
+      maxBlockHeight: (block.height + signingWindowBlocks(windowSec, this.o.signingWindowBlocks)).toString(),
     };
   }
 

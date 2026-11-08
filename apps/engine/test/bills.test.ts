@@ -13,7 +13,42 @@ import { describeNow, localDate, localTimeOn, tzOffsetMinutes } from '../src/bil
 import { FakeMarket } from '../src/brain/tools.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
 import type { BillRow } from '../src/repo/bills.ts';
-import { enrolledUser, makeEngine, scriptedModel, type TestEngine } from './helpers.ts';
+import {
+  enrolledUser,
+  idemKey,
+  makeEngine,
+  scriptedModel,
+  signBody,
+  type TestEngine,
+  tokenFromUrl,
+} from './helpers.ts';
+
+/** Approve the newest card the way the app does: POST /sign with the device signature. */
+async function approveLatest(
+  t: TestEngine,
+  u: Awaited<ReturnType<typeof enrolledUser>>,
+  approvalId: string,
+): Promise<{ status: string }> {
+  const urls = [
+    ...t.messaging.cards.map((c) => c.card.url),
+    ...t.messaging.texts.map((x) => x.text),
+  ];
+  const token =
+    urls
+      .map((x) => tokenFromUrl(x))
+      .filter(Boolean)
+      .at(-1) ?? '';
+  const res = await t.engine.app.request(`/v1/approvals/${approvalId}/sign`, {
+    method: 'POST',
+    headers: {
+      authorization: `Card ${token}`,
+      'idempotency-key': idemKey(),
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(await signBody(t, token, u)),
+  });
+  return (await res.json()) as { status: string };
+}
 
 const WED = new Date('2026-11-04T10:00:00Z'); // a Wednesday
 
@@ -197,7 +232,7 @@ describe('bills + reminders (engine)', () => {
       knownBiller: true,
       payableInApp: false,
     });
-    const rem = await t.engine.repos.reminders.pending(u.userId);
+    const rem = await t.engine.repos.reminders.scheduled(u.userId);
     expect(rem).toHaveLength(1);
     expect(rem[0]?.dueAt.toISOString()).toBe('2026-11-13T08:00:00.000Z');
     expect(rem[0]?.source).toBe('bill');
@@ -223,7 +258,7 @@ describe('bills + reminders (engine)', () => {
     if (!bill) throw new Error('no bill');
     expect((await t.engine.services.bills.close(u.userId, bill.billId, 'paid')).ok).toBe(true);
     expect((await t.engine.services.bills.close(u.userId, bill.billId, 'paid')).ok).toBe(false);
-    expect(await t.engine.repos.reminders.pending(u.userId)).toHaveLength(0);
+    expect(await t.engine.repos.reminders.scheduled(u.userId)).toHaveLength(0);
     t.clock.now = new Date('2026-11-13T09:00:00Z');
     expect(await t.engine.services.bills.sendDue()).toBe(0);
   });
@@ -269,11 +304,11 @@ describe('bills + reminders (engine)', () => {
     expect(await t.engine.services.bills.open(lurker.userId)).toHaveLength(0);
   });
 
-  test('remind_me via the crew: future only, texted when due', async () => {
+  test('set_reminder via the crew: one reminders table, texted once when due', async () => {
     t.setModels(
       scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'reminder' } }]),
       scriptedModel([
-        { tool: 'remind_me', input: { text: 'call mum', at: '2026-11-08T18:00:00+01:00' } },
+        { tool: 'set_reminder', input: { text: 'call mum', dueAt: '2026-11-08T18:00:00+01:00' } },
         { text: "got it, i'll remind you at 6." },
       ]),
     );
@@ -282,37 +317,27 @@ describe('bills + reminders (engine)', () => {
       u.space,
       'remind me to call mum at 6pm',
     );
-    expect(r.toolCalls).toContain('remind_me');
+    expect(r.toolCalls).toContain('set_reminder');
     const list = await t.engine.services.bills.reminders(u.userId);
     expect(list).toHaveLength(1);
-    expect(list[0]?.atIso).toBe('2026-11-08T17:00:00.000Z');
-
-    const past = await t.engine.services.bills.remind(
-      u.userId,
-      'x',
-      new Date('2026-11-08T11:00:00Z'),
-    );
-    expect(past.ok).toBe(false);
+    expect(list[0]).toMatchObject({ atIso: '2026-11-08T17:00:00.000Z', source: 'user' });
 
     t.clock.now = new Date('2026-11-08T17:00:05Z');
     expect(await t.engine.services.bills.sendDue()).toBe(1);
-    expect(t.messaging.texts.at(-1)?.text).toBe('⏰ reminder: call mum');
+    expect(await t.engine.services.bills.sendDue()).toBe(0);
+    expect(t.messaging.texts.at(-1)?.text).toBe('reminder: call mum');
   });
 
-  test('cancel_reminder only cancels your own pending reminder', async () => {
-    const r = await t.engine.services.bills.remind(
-      u.userId,
-      'gym',
-      new Date('2026-11-09T07:00:00Z'),
-    );
-    if (!r.ok) throw new Error(r.error);
+  test('cancel_reminder only cancels your own scheduled reminder', async () => {
+    const rem = await t.engine.repos.reminders.create({
+      userId: u.userId,
+      text: 'gym',
+      dueAt: new Date('2026-11-09T07:00:00Z'),
+      space: u.space,
+    });
     const other = await enrolledUser(t, '+15550188');
-    expect(
-      (await t.engine.services.bills.cancelReminder(other.userId, r.reminder.reminderId)).ok,
-    ).toBe(false);
-    expect((await t.engine.services.bills.cancelReminder(u.userId, r.reminder.reminderId)).ok).toBe(
-      true,
-    );
+    expect((await t.engine.services.bills.cancelReminder(other.userId, rem.id)).ok).toBe(false);
+    expect((await t.engine.services.bills.cancelReminder(u.userId, rem.id)).ok).toBe(true);
     expect(await t.engine.services.bills.reminders(u.userId)).toHaveLength(0);
   });
 
@@ -411,13 +436,10 @@ describe('paying a bill in USDC (demo biller)', () => {
     expect(again).toEqual({ ok: false, reason: 'there is already a card out for this bill' });
 
     // sign + relay (dry run settles) -> bill paid, reminder gone
-    const token = new URL(t.messaging.cards.at(-1)?.card.url ?? '').hash.replace('#t=', '');
-    const out = await t.engine.services.approvals.submit(row.id, token, {
-      signedDelegateAction: 'AAAAAAAA',
-    });
+    const out = await approveLatest(t, u, row.id);
     expect(out.status).toBe('settled');
     expect((await t.engine.services.bills.open(u.userId)).map((b) => b.payee)).toEqual(['DStv']);
-    const pending = await t.engine.repos.reminders.pending(u.userId);
+    const pending = await t.engine.repos.reminders.scheduled(u.userId);
     expect(pending.every((p) => p.billId !== bill.billId)).toBe(true);
   });
 
@@ -496,10 +518,7 @@ describe('testnet: bills are paid in real testnet NEAR', () => {
     if (!row) throw new Error('no approval');
     t.chain.nextRelay = { ok: true, txHash: 'TESTNET_TX_1', dryRun: false };
     t.chain.statuses.set('TESTNET_TX_1', 'settled');
-    const token = new URL(t.messaging.cards.at(-1)?.card.url ?? '').hash.replace('#t=', '');
-    const out = await t.engine.services.approvals.submit(row.id, token, {
-      signedDelegateAction: 'AAAAAAAA',
-    });
+    const out = await approveLatest(t, u, row.id);
     expect(out.status).toBe('settled');
     expect(await t.engine.services.bills.open(u.userId)).toHaveLength(0);
     expect(t.messaging.texts.at(-1)?.text).toBe(

@@ -104,6 +104,12 @@ public final class DeviceKeyStore: MessageSigner, @unchecked Sendable {
 
     /// Face ID → read the seed with that authenticated context → sign → drop the seed.
     public func sign(_ message: Data, reason: String) async throws -> Data {
+        try await signMany([message], reason: reason)[0]
+    }
+
+    /// One Face ID for several messages (approval message + signed action). Reading the key
+    /// behind `.biometryCurrentSet` is what triggers Face ID; the seed is dropped right after.
+    public func signMany(_ messages: [Data], reason: String) async throws -> [Data] {
         let context = LAContext()
         context.localizedReason = reason
         context.localizedCancelTitle = "Not now"
@@ -122,7 +128,7 @@ public final class DeviceKeyStore: MessageSigner, @unchecked Sendable {
 
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
         guard key.publicKey.rawRepresentation == (try publicKey()).raw else { throw PennyError.keyInvalidated }
-        return try key.signature(for: message)
+        return try messages.map { try key.signature(for: $0) }
     }
 
     private func readPrivateSeed(context: LAContext) throws -> Data {

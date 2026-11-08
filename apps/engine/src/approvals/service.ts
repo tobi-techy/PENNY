@@ -1,6 +1,11 @@
 import {
   type Approval,
+  type ApprovalByTokenResponse,
   type ApprovalStatusResponse,
+  approvalActionOf,
+  approvalHash,
+  approvalSignMessage,
+  type CardState,
   type CreateBotPlan,
   compareDecimal,
   Decimal,
@@ -9,14 +14,18 @@ import {
   type IntentPlan,
   type MoneyPlan,
   type NearAction,
+  type PasskeyApproveBody,
   planAmount,
   planApprovalMessage,
   planHash,
   planRecipient,
+  type SignBody,
   toMicros,
   type WritePlan,
 } from '@penny/shared';
+import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import type { MoodService } from '../brain/mood.ts';
+import type { CardSender } from '../cards/sender.ts';
 import { writeTargetProblem } from '../connectors/composio.ts';
 import {
   evaluate,
@@ -25,7 +34,7 @@ import {
   type GuardResult,
   QUOTE_MIN_REMAINING_MS,
 } from '../guard/policy.ts';
-import { verifyEd25519 } from '../lib/crypto.ts';
+import { randomToken, sha256Hex, verifyEd25519 } from '../lib/crypto.ts';
 import { newId } from '../lib/ids.ts';
 import type { Logger } from '../lib/logger.ts';
 import {
@@ -35,18 +44,28 @@ import {
   type SwapState,
 } from '../market/invest.ts';
 import type { ChainPort } from '../ports/chain.ts';
-import type { ApprovalCard, CardHandle, MessagingPort, SpaceRef } from '../ports/messaging.ts';
+import type { MessagingPort, SpaceRef } from '../ports/messaging.ts';
 import type { ApprovalRow, ApprovalsRepo } from '../repo/approvals.ts';
 import type { BotRow, BotsRepo } from '../repo/bots.ts';
+import type { CardsRepo, PasskeysRepo } from '../repo/cards.ts';
 import type { GuardDecisionsRepo } from '../repo/infra.ts';
 import { DAY_MS, type LedgerRepo } from '../repo/ledger.ts';
 import type { UsersRepo } from '../repo/users.ts';
-import { checkCardToken, issueCardToken } from './card-token.ts';
+import { checkCardToken, issueCardToken, READ_GRACE_MS } from './card-token.ts';
 import { isTerminal, stepsFor } from './state.ts';
 import { writeFacts } from './write-facts.ts';
 
-export const QUOTE_TTL_CAP_MS = 120_000;
+/** Approvals tied to a price (invest quotes) live 90 seconds at most. */
+export const QUOTE_TTL_CAP_MS = 90_000;
+/** Plain sends, bills and errands: 10 minutes. */
+export const SEND_TTL_MS = 10 * 60_000;
 export const BOT_APPROVAL_TTL_MS = 10 * 60_000;
+/** A failed check or an expired card is replaced at most this many times in a row. */
+export const MAX_REISSUES = 3;
+/** Not me / Get a new card keep working this long after a card expires. */
+export const AFTER_EXPIRY_BUTTON_MS = 24 * 60 * 60_000;
+/** User copy when the user froze Penny. */
+export const FROZEN_TEXT = 'Penny is frozen. Text unfreeze to start again.';
 export const REQUOTE_AFTER_EXPIRY_MS = 10 * 60_000;
 const TEN_MIN = 10 * 60_000;
 
@@ -55,7 +74,7 @@ export type Clock = () => Date;
 export class ApprovalError extends Error {
   override name = 'ApprovalError';
   constructor(
-    readonly status: 400 | 401 | 403 | 404 | 409 | 410 | 422 | 502,
+    readonly status: 400 | 401 | 403 | 404 | 409 | 410 | 422 | 423 | 502,
     readonly code: string,
     message: string,
   ) {
@@ -81,9 +100,15 @@ export type ApprovalDeps = {
   guardDecisions: GuardDecisionsRepo;
   chain: ChainPort;
   messaging: MessagingPort;
+  /** Every card goes through here (live vs link picker, edit in place). */
+  cards: CardSender;
+  cardsRepo: CardsRepo;
+  passkeys: PasskeysRepo;
   mood: MoodService;
   log: Logger;
   publicBaseUrl: string;
+  /** Explorer for receipts, e.g. https://testnet.nearblocks.io */
+  explorerBaseUrl?: string;
   now: Clock;
   /** Hard per-tx ceiling (mainnet launch cap) clamped over user policy. */
   mainnetMaxPerTxUsd?: string;
@@ -111,6 +136,8 @@ export type ApprovalDeps = {
     billId: string,
     receipt: { txHash: string | null; dryRun: boolean },
   ) => Promise<void>;
+  /** A new-bot card was replaced by a fresh one: the bot follows the new approval. */
+  onBotReissued?: (fromApprovalId: string, toApprovalId: string) => Promise<void>;
 };
 
 export function toApprovalDto(r: ApprovalRow): Approval {
@@ -180,6 +207,26 @@ export function roundUpCents(v: string): string {
   return `${cents / 100n}.${(cents % 100n).toString().padStart(2, '0')}`;
 }
 
+/** Card title: the outcome in plain words ("Send 0.1 NEAR"). */
+function cardTitleFor(plan: IntentPlan): string {
+  switch (plan.kind) {
+    case 'send':
+      return `Send ${plan.amount} ${plan.asset}`;
+    case 'invest':
+      return `Buy $${plan.amountUsd} of ${plan.portfolioId}`.slice(0, 80);
+    case 'pay_bill':
+      return `Pay ${plan.payee}`.slice(0, 80);
+    case 'errand':
+      return 'Pay for an errand';
+    case 'split':
+      return 'Split';
+    case 'create_bot':
+      return `New bot · ${plan.name}`.slice(0, 80);
+    case 'write':
+      return plan.title.slice(0, 80);
+  }
+}
+
 function titleFor(plan: IntentPlan): string {
   switch (plan.kind) {
     case 'invest':
@@ -202,9 +249,36 @@ function titleFor(plan: IntentPlan): string {
 export const NEEDS_SETUP_REASON =
   "Approvals aren't set up yet. Penny just texted them a setup link: tell them to tap it, then ask again.";
 
-export class ApprovalService {
-  private cards = new Map<string, { handle: CardHandle; space: SpaceRef; card: ApprovalCard }>();
+/** Card type and crew agent for an approval kind (docs/DESIGN.md section 4). */
+function cardTypeFor(kind: ApprovalRow['kind']): string {
+  switch (kind) {
+    case 'create_bot':
+      return 'new_bot';
+    default:
+      return kind;
+  }
+}
 
+function agentFor(kind: ApprovalRow['kind'], bot: BotRow | null): string {
+  if (bot && !bot.builtIn) return bot.slug;
+  if (kind === 'invest') return 'invest';
+  if (kind === 'pay_bill') return 'finance';
+  if (kind === 'write') return bot?.slug ?? 'mail';
+  return 'penny';
+}
+
+/** The big number on a money card, in the asset the user named. */
+function amountFor(plan: IntentPlan, amountDisplay: string): string {
+  if (plan.kind === 'send' && plan.asset === 'NEAR') return `${plan.amount} NEAR`;
+  return amountDisplay;
+}
+
+const APPROVE_BUTTONS = [
+  { id: 'approve', label: 'Approve with Face ID', action: 'approve' as const },
+  { id: 'decline', label: 'Not now', action: 'decline' as const },
+];
+
+export class ApprovalService {
   constructor(private readonly d: ApprovalDeps) {}
 
   /** No device yet: send the setup link (throttled by onboarding) and say so. */
@@ -217,9 +291,162 @@ export class ApprovalService {
     return { decision: 'needs_more_info', reasons: [NEEDS_SETUP_REASON] };
   }
 
-  private cardUrl(id: string, token: string) {
-    // token in the fragment so it never hits server/proxy logs on open
-    return `${this.d.publicBaseUrl.replace(/\/$/, '')}/a/${id}#t=${token}`;
+  private nearUsdFromRow(row: ApprovalRow): bigint | undefined {
+    // micro-USD per NEAR from what Guard sized at creation (used for re-issues)
+    const plan = row.plan as MoneyPlan;
+    if (plan.kind !== 'send' || plan.asset !== 'NEAR') return undefined;
+    const microNear = toMicros(plan.amount);
+    return microNear > 0n ? (row.amountMicros * 1_000_000n) / microNear : undefined;
+  }
+
+  /** Guard said no: the Blocked card, never an approval card. */
+  async sendBlockedCard(
+    userId: string,
+    space: SpaceRef,
+    reasons: string[],
+    title = 'Not today',
+  ): Promise<void> {
+    await this.d.cards.send({
+      userId,
+      space,
+      agent: 'guard',
+      kind: 'info',
+      type: 'guard_block',
+      title,
+      lines: [{ value: (reasons[0] ?? "That's outside your limits.").slice(0, 120) }],
+      buttons: [{ id: 'notme', label: 'Not me', action: 'freeze' }],
+      state: 'blocked',
+    });
+  }
+
+  private async frozen(userId: string): Promise<boolean> {
+    const u = await this.d.users.byId(userId);
+    return Boolean(u?.frozenAt);
+  }
+
+  /** 32 random bytes (single use) and the approval hash, stored with the approval. */
+  private challengeFields(id: string, plan: IntentPlan, expiresAt: Date, ph: string) {
+    return {
+      challenge: randomToken(32),
+      approvalHash: approvalHash({
+        id,
+        action: approvalActionOf(plan),
+        expiresAt: expiresAt.toISOString(),
+        planHash: ph,
+      }),
+    };
+  }
+
+  /** Recompute the hash from the stored row: the action must still match what was approved. */
+  private hashStillMatches(row: ApprovalRow): boolean {
+    if (!row.approvalHash) return false;
+    const plan = row.plan as IntentPlan;
+    if (planHash(plan, row.actions as NearAction[]) !== row.planHash) return false;
+    return (
+      approvalHash({
+        id: row.id,
+        action: approvalActionOf(plan),
+        expiresAt: row.expiresAt.toISOString(),
+        planHash: row.planHash,
+      }) === row.approvalHash
+    );
+  }
+
+  private async sendApprovalCard(
+    approvalId: string,
+    space: SpaceRef,
+    tok: { token: string; hash: string },
+    c: {
+      userId: string;
+      agent: string;
+      type: string;
+      title: string;
+      amount?: string;
+      lines: { label: string; value: string }[];
+      expiresAt: Date;
+      subcaption: string;
+    },
+  ): Promise<string> {
+    try {
+      const sent = await this.d.cards.send({
+        userId: c.userId,
+        space,
+        agent: c.agent,
+        kind: 'approval',
+        type: c.type,
+        title: c.title,
+        ...(c.amount ? { amount: c.amount } : {}),
+        lines: c.lines.map((l) => ({ label: l.label.slice(0, 40), value: l.value.slice(0, 120) })),
+        buttons: APPROVE_BUTTONS,
+        state: 'ready',
+        approvalId,
+        expiresAt: c.expiresAt,
+        tokenExpiresAt: c.expiresAt,
+        token: tok,
+        subcaption: c.subcaption,
+      });
+      await this.d.approvals.setCardId(approvalId, sent.card.id);
+      if (sent.ref) await this.d.approvals.setCardHandle(approvalId, sent.ref, space);
+      return sent.url;
+    } catch (e) {
+      this.d.log.error({ err: (e as Error).message, approvalId }, 'card send failed');
+      return this.d.cards.url(tok.token);
+    }
+  }
+
+  /** Move the approval's card to a new state (live: edit in place; link: a fresh card). */
+  private async updateCard(
+    approvalId: string,
+    state: CardState,
+    subcaption?: string,
+    extra: { receiptUrl?: string } = {},
+  ): Promise<void> {
+    try {
+      const card = await this.d.cardsRepo.byApprovalId(approvalId);
+      if (!card) return;
+      await this.d.cards.update(
+        card.id,
+        {
+          state,
+          ...(extra.receiptUrl ? { receiptUrl: extra.receiptUrl } : {}),
+          ...(state === 'sent' || state === 'blocked' || state === 'expired' || state === 'failed'
+            ? {
+                buttons:
+                  state === 'blocked'
+                    ? [{ id: 'notme', label: 'Not me', action: 'freeze' }]
+                    : state === 'expired'
+                      ? [{ id: 'renew', label: 'Get a new card', action: 'renew' }]
+                      : extra.receiptUrl
+                        ? [
+                            {
+                              id: 'receipt',
+                              label: 'View receipt',
+                              action: 'open',
+                              value: extra.receiptUrl,
+                            },
+                          ]
+                        : [],
+              }
+            : state === 'approving' || state === 'declined' || state === 'done'
+              ? { buttons: [] }
+              : {}),
+        },
+        subcaption ? { subcaption } : {},
+      );
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).message, approvalId }, 'card update failed');
+    }
+  }
+
+  /** The explorer link for a settled move (never for a dry run). */
+  private receiptOpts(txHash: string | null, dryRun: boolean): { receiptUrl?: string } {
+    if (!txHash || dryRun || !this.d.explorerBaseUrl) return {};
+    return { receiptUrl: `${this.d.explorerBaseUrl.replace(/\/$/, '')}/txns/${txHash}` };
+  }
+
+  private async spaceOf(approvalId: string): Promise<SpaceRef | null> {
+    const card = await this.d.cardsRepo.byApprovalId(approvalId);
+    return card?.space ?? null;
   }
 
   async guardContext(
@@ -285,8 +512,10 @@ export class ApprovalService {
     /** Replace the default facts (the daily limit is always appended). */
     facts?: { label: string; value: string }[];
     subcaption?: string;
+    reissuedFrom?: string;
   }): Promise<CreateResult> {
     const { userId, plan, bot } = input;
+    if (await this.frozen(userId)) return { decision: 'block', reasons: [FROZEN_TEXT] };
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
@@ -304,7 +533,10 @@ export class ApprovalService {
         decision: g.decision,
         reasons: g.reasons,
       });
-      if (g.decision === 'block') await this.d.mood.on(userId, 'guard_blocked', 'guard');
+      if (g.decision === 'block') {
+        await this.d.mood.on(userId, 'guard_blocked', 'guard');
+        await this.sendBlockedCard(userId, input.space, g.reasons);
+      }
       return { decision: g.decision, reasons: g.reasons };
     }
 
@@ -323,13 +555,20 @@ export class ApprovalService {
           reasons,
         });
         await this.d.mood.on(userId, 'guard_blocked', 'guard');
+        await this.sendBlockedCard(userId, input.space, reasons);
         return { decision: 'block', reasons };
       }
     }
-    const signing = await this.d.chain.prepareSigning(user.accountId, device.publicKey);
     const now = this.d.now();
-    const cap = now.getTime() + QUOTE_TTL_CAP_MS;
+    // 90 s for anything priced by a quote, 10 min for plain sends, bills and errands
+    const ttl = input.quote || plan.kind === 'invest' ? QUOTE_TTL_CAP_MS : SEND_TTL_MS;
+    const cap = now.getTime() + ttl;
     const expiresAt = new Date(Math.min(cap, input.quote ? input.quote.expiresAt.getTime() : cap));
+    const signing = await this.d.chain.prepareSigning(
+      user.accountId,
+      device.publicKey,
+      Math.ceil((expiresAt.getTime() - now.getTime()) / 1000),
+    );
     const { token, hash } = issueCardToken();
     const id = newId('apr');
     const policy = await this.effectivePolicy(userId);
@@ -343,6 +582,7 @@ export class ApprovalService {
     const recipient = planRecipient(plan);
     if (recipient && !input.facts) facts.unshift({ label: 'To', value: recipient.slice(0, 80) });
 
+    const ph = planHash(plan, built.actions);
     await this.d.approvals.create({
       id,
       userId,
@@ -360,8 +600,10 @@ export class ApprovalService {
       maxBlockHeight: signing.maxBlockHeight,
       expiresAt,
       status: 'pending',
-      planHash: planHash(plan, built.actions),
+      planHash: ph,
       cardTokenHash: hash,
+      ...this.challengeFields(id, plan, expiresAt, ph),
+      reissuedFrom: input.reissuedFrom ?? null,
     });
     await this.d.ledger.reserve({
       userId,
@@ -379,14 +621,21 @@ export class ApprovalService {
       reasons: g.reasons,
     });
     await this.d.mood.on(userId, 'approval_created');
-    const url = this.cardUrl(id, token);
-    await this.sendCard(id, input.space, {
-      approvalId: id,
-      url,
-      caption: titleFor(plan),
-      subcaption: input.subcaption ?? `${amountDisplay} · tap to approve`,
-      live: true,
-    });
+    const url = await this.sendApprovalCard(
+      id,
+      input.space,
+      { token, hash },
+      {
+        userId,
+        agent: agentFor(plan.kind, bot),
+        type: cardTypeFor(plan.kind),
+        title: cardTitleFor(plan),
+        amount: amountFor(plan, amountDisplay),
+        lines: facts.slice(0, 4),
+        expiresAt,
+        subcaption: input.subcaption ?? (recipient ? `to ${recipient}` : 'tap to approve'),
+      },
+    );
     return {
       decision: 'allow_with_approval',
       approvalId: id,
@@ -441,8 +690,10 @@ export class ApprovalService {
     amountUsd: string;
     space: SpaceRef;
     note?: string;
+    reissuedFrom?: string;
   }): Promise<CreateResult> {
     const { userId, bot, asset, amountUsd } = input;
+    if (await this.frozen(userId)) return { decision: 'block', reasons: [FROZEN_TEXT] };
     if (!this.d.invest)
       return { decision: 'needs_more_info', reasons: ["Investing isn't switched on yet."] };
     if (!isInvestAsset(asset))
@@ -473,7 +724,10 @@ export class ApprovalService {
         decision: g0.decision,
         reasons: g0.reasons,
       });
-      if (g0.decision === 'block') await this.d.mood.on(userId, 'guard_blocked', 'guard');
+      if (g0.decision === 'block') {
+        await this.d.mood.on(userId, 'guard_blocked', 'guard');
+        await this.sendBlockedCard(userId, input.space, g0.reasons);
+      }
       return { decision: g0.decision, reasons: g0.reasons };
     }
     let q: InvestQuote;
@@ -494,6 +748,7 @@ export class ApprovalService {
       quote: { id: q.quoteId, expiresAt: q.expiresAt },
       facts: investFacts(q, this.d.now()),
       subcaption: `${input.note ? `${input.note} ` : ''}You'll get about ${q.amountOutDisplay} · tap to approve`,
+      ...(input.reissuedFrom ? { reissuedFrom: input.reissuedFrom } : {}),
     });
   }
 
@@ -504,7 +759,7 @@ export class ApprovalService {
   private async requote(row: ApprovalRow, why: 'expired' | 'price_moved'): Promise<string | null> {
     const plan = row.plan as MoneyPlan;
     if (plan.kind !== 'invest') return null;
-    const space = this.cards.get(row.id)?.space;
+    const space = await this.spaceOf(row.id);
     if (this.requoted.has(row.id)) return null;
     this.requoted.add(row.id);
     if (row.status === 'pending') {
@@ -522,7 +777,7 @@ export class ApprovalService {
       }
     }
     if (!space) {
-      await this.updateCard(row.id, 'Price expired. Ask Penny again. Nothing moved.');
+      await this.updateCard(row.id, 'expired', 'Price expired. Ask Penny again. Nothing moved.');
       return null;
     }
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
@@ -533,12 +788,17 @@ export class ApprovalService {
       amountUsd: plan.amountUsd,
       space,
       note: 'New price.',
+      reissuedFrom: row.id,
     });
     if (r.decision === 'allow_with_approval') {
-      await this.updateCard(row.id, 'Price changed, check the new amount. Nothing moved.');
+      await this.updateCard(
+        row.id,
+        'expired',
+        'Price changed, check the new amount. Nothing moved.',
+      );
       return r.approvalId;
     }
-    await this.updateCard(row.id, 'Price changed. Ask Penny again. Nothing moved.');
+    await this.updateCard(row.id, 'expired', 'Price changed. Ask Penny again. Nothing moved.');
     return null;
   }
 
@@ -572,7 +832,9 @@ export class ApprovalService {
     plan: CreateBotPlan;
     space: SpaceRef;
     riskLabel: string;
+    reissuedFrom?: string;
   }): Promise<{ approvalId: string; cardToken: string; url: string } | null> {
+    if (await this.frozen(input.userId)) return null;
     const user = await this.d.users.byId(input.userId);
     const device = user ? await this.d.users.activeDevice(input.userId) : null;
     if (!user?.accountId || !device) {
@@ -591,6 +853,9 @@ export class ApprovalService {
     if (p.canMoveMoney && p.perTxCap && p.dailyCap) {
       facts.push({ label: 'Spending cap', value: `$${p.perTxCap} each · $${p.dailyCap}/day` });
     }
+    const expiresAt = new Date(now.getTime() + BOT_APPROVAL_TTL_MS);
+    const ph = planHash(input.plan, actions);
+    const amountDisplay = p.canMoveMoney && p.dailyCap ? `up to $${p.dailyCap}/day` : 'no money';
     await this.d.approvals.create({
       id,
       userId: input.userId,
@@ -598,7 +863,7 @@ export class ApprovalService {
       kind: 'create_bot',
       plan: input.plan,
       title: titleFor(input.plan),
-      amountDisplay: p.canMoveMoney && p.dailyCap ? `up to $${p.dailyCap}/day` : 'no money',
+      amountDisplay,
       amountMicros: 0n,
       facts,
       signerId: user.accountId,
@@ -606,19 +871,27 @@ export class ApprovalService {
       actions,
       nonce: '0',
       maxBlockHeight: '0',
-      expiresAt: new Date(now.getTime() + BOT_APPROVAL_TTL_MS),
+      expiresAt,
       status: 'pending',
-      planHash: planHash(input.plan, actions),
+      planHash: ph,
       cardTokenHash: hash,
+      ...this.challengeFields(id, input.plan, expiresAt, ph),
+      reissuedFrom: input.reissuedFrom ?? null,
     });
-    const url = this.cardUrl(id, token);
-    await this.sendCard(id, input.space, {
-      approvalId: id,
-      url,
-      caption: titleFor(input.plan),
-      subcaption: 'needs your Face ID',
-      live: true,
-    });
+    const url = await this.sendApprovalCard(
+      id,
+      input.space,
+      { token, hash },
+      {
+        userId: input.userId,
+        agent: 'penny',
+        type: 'new_bot',
+        title: cardTitleFor(input.plan),
+        lines: facts,
+        expiresAt,
+        subcaption: 'needs your Face ID',
+      },
+    );
     return { approvalId: id, cardToken: token, url };
   }
 
@@ -631,8 +904,12 @@ export class ApprovalService {
     bot: BotRow | null;
     plan: WritePlan;
     space: SpaceRef;
+    reissuedFrom?: string;
+    /** Turn this existing info card (e.g. an email draft) into the approval card. */
+    fromCard?: { id: string; tokenHash: string };
   }): Promise<CreateResult> {
     const { userId, plan, bot } = input;
+    if (await this.frozen(userId)) return { decision: 'block', reasons: [FROZEN_TEXT] };
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
@@ -650,12 +927,18 @@ export class ApprovalService {
         decision: 'block',
         reasons: [problem],
       });
+      await this.sendBlockedCard(userId, input.space, [problem]);
       return { decision: 'block', reasons: [problem] };
     }
     const now = this.d.now();
-    const { token, hash } = issueCardToken();
+    const issued = issueCardToken();
+    // An info card that becomes an approval card keeps its URL (same token hash).
+    const hash = input.fromCard ? input.fromCard.tokenHash : issued.hash;
+    const token = input.fromCard ? '' : issued.token;
     const id = newId('apr');
     const actions: NearAction[] = [];
+    const expiresAt = new Date(now.getTime() + BOT_APPROVAL_TTL_MS);
+    const ph = planHash(plan, actions);
     await this.d.approvals.create({
       id,
       userId,
@@ -671,10 +954,13 @@ export class ApprovalService {
       actions,
       nonce: '0',
       maxBlockHeight: '0',
-      expiresAt: new Date(now.getTime() + BOT_APPROVAL_TTL_MS),
+      expiresAt,
       status: 'pending',
-      planHash: planHash(plan, actions),
+      planHash: ph,
       cardTokenHash: hash,
+      ...this.challengeFields(id, plan, expiresAt, ph),
+      reissuedFrom: input.reissuedFrom ?? null,
+      ...(input.fromCard ? { cardId: input.fromCard.id } : {}),
     });
     await this.d.guardDecisions.record({
       userId,
@@ -684,14 +970,34 @@ export class ApprovalService {
       reasons: ['write action requires Face ID approval'],
     });
     await this.d.mood.on(userId, 'approval_created');
-    const url = this.cardUrl(id, token);
-    await this.sendCard(id, input.space, {
-      approvalId: id,
-      url,
-      caption: titleFor(plan),
-      subcaption: 'needs your Face ID',
-      live: true,
-    });
+    let url: string;
+    if (input.fromCard) {
+      // the same card turns into an approval card, edited in place
+      await this.d.cards.update(input.fromCard.id, {
+        kind: 'approval',
+        approvalId: id,
+        state: 'ready',
+        buttons: APPROVE_BUTTONS,
+        expiresAt,
+        tokenExpiresAt: expiresAt,
+      });
+      url = '';
+    } else {
+      url = await this.sendApprovalCard(
+        id,
+        input.space,
+        { token, hash },
+        {
+          userId,
+          agent: agentFor('write', bot),
+          type: 'write',
+          title: cardTitleFor(plan),
+          lines: writeFacts(plan).slice(0, 4),
+          expiresAt,
+          subcaption: 'needs your Face ID',
+        },
+      );
+    }
     return {
       decision: 'allow_with_approval',
       approvalId: id,
@@ -699,27 +1005,6 @@ export class ApprovalService {
       url,
       reasons: ['write action requires Face ID approval'],
     };
-  }
-
-  private async sendCard(id: string, space: SpaceRef, card: ApprovalCard) {
-    try {
-      const handle = await this.d.messaging.sendCard(space, card);
-      this.cards.set(id, { handle, space, card });
-    } catch (e) {
-      this.d.log.error({ err: (e as Error).message, approvalId: id }, 'card send failed');
-    }
-  }
-
-  private async updateCard(id: string, subcaption: string, trailingCaption?: string) {
-    const c = this.cards.get(id);
-    if (!c) return;
-    const next = { ...c.card, subcaption, ...(trailingCaption ? { trailingCaption } : {}) };
-    try {
-      await this.d.messaging.editCard(c.handle, next);
-      c.card = next;
-    } catch (e) {
-      this.d.log.warn({ err: (e as Error).message, approvalId: id }, 'card edit failed');
-    }
   }
 
   // ---------- card-token authenticated operations ----------
@@ -767,13 +1052,364 @@ export class ApprovalService {
     };
   }
 
+  // ---------- card token: one URL for the extension and the link page ----------
+
+  /**
+   * GET /v1/approvals/by-token/:token. The card (any type) plus, for approval cards,
+   * the action, approval hash, single-use challenge and expiry. The challenge is only
+   * handed out while the approval is pending, unexpired and the challenge unused.
+   */
+  async getByToken(token: string, graceMs = READ_GRACE_MS): Promise<ApprovalByTokenResponse> {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+      throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    const card = await this.d.cardsRepo.byTokenHash(sha256Hex(token));
+    const now = this.d.now();
+    if (!card || now.getTime() > card.tokenExpiresAt.getTime() + graceMs) {
+      throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    }
+    let row = card.approvalId ? await this.d.approvals.get(card.approvalId) : null;
+    if (row && row.status === 'pending' && now.getTime() > row.expiresAt.getTime()) {
+      await this.expire(row);
+      row = await this.d.approvals.get(row.id);
+    }
+    const fresh = (await this.d.cards.get(card.id)) ?? null;
+    if (!fresh) throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    if (!row) return { card: fresh };
+    const usable =
+      row.status === 'pending' && !row.challengeUsedAt && now.getTime() <= row.expiresAt.getTime();
+    const device = await this.d.users.activeDevice(row.userId);
+    const passkeys =
+      device?.platform === 'web_passkey'
+        ? (await this.d.passkeys.activeForUser(row.userId)).map((p) => p.credentialId)
+        : undefined;
+    return {
+      card: fresh,
+      approval: {
+        id: row.id,
+        action: approvalActionOf(row.plan as IntentPlan),
+        approvalHash: row.approvalHash ?? '',
+        ...(usable && row.challenge ? { challenge: row.challenge } : {}),
+        expiresAt: row.expiresAt.toISOString(),
+        status: row.status,
+        ...(passkeys ? { passkeys } : {}),
+        detail: toApprovalDto(row),
+      },
+    };
+  }
+
+  /**
+   * Common pre-checks for both approve paths. Order matters: the challenge is
+   * burned first, so any attempt (good or bad) uses it up.
+   */
+  private async precheck(id: string, token: string | null): Promise<ApprovalRow> {
+    const row = await this.load(id, token, 'mutate', 'submit');
+    if (await this.frozen(row.userId)) {
+      throw new ApprovalError(423, 'frozen', FROZEN_TEXT);
+    }
+    if (row.status !== 'pending')
+      throw new ApprovalError(409, 'not_pending', `approval is ${row.status}`);
+    if (!row.challenge || !row.approvalHash) {
+      throw new ApprovalError(409, 'no_challenge', 'this card is too old. ask penny again.');
+    }
+    if (!(await this.d.approvals.burnChallenge(row.id, this.d.now()))) {
+      // already used: a replay or a second tap. Never reuse an old signature.
+      throw new ApprovalError(409, 'challenge_used', 'this card was already used.');
+    }
+    return row;
+  }
+
+  /**
+   * A check failed right before sending: the approval is expired (never retried
+   * with the same signature) and Penny sends a fresh card.
+   */
+  private async failAndReissue(row: ApprovalRow, reason: string): Promise<string | null> {
+    try {
+      await this.d.approvals.transition(
+        row.id,
+        row.kind,
+        'pending',
+        'expired',
+        `check failed: ${reason}`,
+      );
+      await this.d.ledger.setStatusForApproval(row.id, 'released');
+    } catch {
+      return null; // someone else moved it
+    }
+    this.d.log.warn({ approvalId: row.id, reason }, 'approval check failed; re-issuing');
+    const next = await this.reissue(row);
+    if (row.kind === 'create_bot' && !next) await this.d.onBotDeclined?.(row.id);
+    await this.updateCard(
+      row.id,
+      'expired',
+      next ? "that didn't check out. here's a new card." : 'expired. ask penny again.',
+    );
+    return next;
+  }
+
+  /** How many times this approval has already been replaced. */
+  private async reissueDepth(row: ApprovalRow): Promise<number> {
+    let depth = 0;
+    let from = row.reissuedFrom;
+    while (from && depth <= MAX_REISSUES) {
+      depth += 1;
+      from = (await this.d.approvals.get(from))?.reissuedFrom ?? null;
+    }
+    return depth;
+  }
+
+  /**
+   * A fresh approval for the same thing: Guard runs again, a new challenge, a new
+   * card. Returns the new approval id, or null when it can't (Guard said no, too
+   * many re-issues, already re-issued, or frozen).
+   */
+  async reissue(row: ApprovalRow): Promise<string | null> {
+    if (await this.d.approvals.byReissuedFrom(row.id)) return null;
+    if ((await this.reissueDepth(row)) >= MAX_REISSUES) return null;
+    if (await this.frozen(row.userId)) return null;
+    const space = await this.spaceOf(row.id);
+    if (!space) return null;
+    const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
+    const plan = row.plan as IntentPlan;
+    if (plan.kind === 'invest') {
+      this.requoted.add(row.id);
+      const r = await this.createInvestApproval({
+        userId: row.userId,
+        bot,
+        asset: plan.portfolioId,
+        amountUsd: plan.amountUsd,
+        space,
+        reissuedFrom: row.id,
+      });
+      return r.decision === 'allow_with_approval' ? r.approvalId : null;
+    }
+    if (plan.kind === 'write') {
+      const r = await this.createWriteApproval({
+        userId: row.userId,
+        bot,
+        plan,
+        space,
+        reissuedFrom: row.id,
+      });
+      return r.decision === 'allow_with_approval' ? r.approvalId : null;
+    }
+    if (plan.kind === 'create_bot') {
+      const riskLabel = row.facts.find((f) => f.label === 'Can')?.value ?? 'Can act for you';
+      const r = await this.createBotApproval({
+        userId: row.userId,
+        plan,
+        space,
+        riskLabel,
+        reissuedFrom: row.id,
+      });
+      if (r) await this.d.onBotReissued?.(row.id, r.approvalId);
+      return r?.approvalId ?? null;
+    }
+    if (plan.kind === 'split') return null;
+    const price = this.nearUsdFromRow(row);
+    const r = await this.createMoneyApproval({
+      userId: row.userId,
+      bot,
+      plan,
+      space,
+      ...(price !== undefined ? { nearUsdPriceMicros: price } : {}),
+      reissuedFrom: row.id,
+    });
+    return r.decision === 'allow_with_approval' ? r.approvalId : null;
+  }
+
+  /** "Get a new card" on an expired card. Card token auth (read grace applies). */
+  async renewByToken(token: string): Promise<{ approvalId: string | null }> {
+    // "Get a new card" shows on an expired card, so it must keep working after expiry
+    const view = await this.getByToken(token, AFTER_EXPIRY_BUTTON_MS);
+    const id = view.card.approvalId;
+    if (!id) throw new ApprovalError(409, 'not_approval', 'nothing to renew');
+    const row = await this.d.approvals.get(id);
+    if (!row) throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    if (row.status === 'pending' && this.d.now().getTime() > row.expiresAt.getTime())
+      await this.expire(row);
+    const now = await this.d.approvals.get(id);
+    if (!now || now.status !== 'expired') {
+      // failed rows may have moved money (a relay that never reported back): never re-send
+      throw new ApprovalError(409, 'not_expired', 'this card cannot be renewed');
+    }
+    const existing = await this.d.approvals.byReissuedFrom(id);
+    if (existing) return { approvalId: existing.id };
+    return { approvalId: await this.reissue(now) };
+  }
+
+  /**
+   * iOS app path. POST /v1/approvals/:id/sign: the enrolled device signed
+   * approvalSignMessage(approvalHash, challenge) behind Face ID, plus the signed
+   * action. Checks, in order: card token, not frozen, pending, challenge unused
+   * (burned now), device enrolled to this user and not revoked, not expired, the
+   * action still matches the hash, the signature matches the enrolled key. Then
+   * the existing relay path (Guard again, byte-for-byte action match, block-height
+   * deadline). Any failed check expires the approval and sends a new card.
+   */
+  async signWithDevice(
+    id: string,
+    token: string | null,
+    body: SignBody,
+  ): Promise<{ status: string }> {
+    const row = await this.precheck(id, token);
+    const device = await this.d.users.deviceById(body.deviceId);
+    const fail = async (code: string, msg: string, status: 403 | 410 | 422 = 422) => {
+      await this.failAndReissue(row, code);
+      return new ApprovalError(status, code, msg);
+    };
+    if (!device || device.userId !== row.userId || device.revokedAt) {
+      throw await fail('unknown_device', 'this phone is not linked to Penny', 403);
+    }
+    if (this.d.now().getTime() > row.expiresAt.getTime()) {
+      throw await fail('expired', 'this approval has expired', 410);
+    }
+    if (!this.hashStillMatches(row))
+      throw await fail('changed', 'this action changed. check the new card.');
+    const msg = new TextEncoder().encode(
+      approvalSignMessage(row.approvalHash as string, row.challenge as string),
+    );
+    if (!verifyEd25519(device.publicKey, msg, Buffer.from(body.signature, 'base64url'))) {
+      throw await fail('bad_signature', 'signature does not match this phone');
+    }
+    return this.finish(row, body);
+  }
+
+  /**
+   * No-install path. POST /v1/approvals/:id/passkey: the WebAuthn assertion is
+   * verified here, on the server: challenge matches and is unused (burned now),
+   * origin and rpId match PUBLIC_BASE_URL, user verified (UV), signature against
+   * the stored COSE key, sign count never goes backwards, not expired. Only then
+   * the browser key's signed action is checked and relayed.
+   */
+  async approveWithPasskey(
+    id: string,
+    token: string | null,
+    body: PasskeyApproveBody,
+  ): Promise<{ status: string }> {
+    const row = await this.precheck(id, token);
+    const fail = async (code: string, msg: string, status: 403 | 410 | 422 = 422) => {
+      await this.failAndReissue(row, code);
+      return new ApprovalError(status, code, msg);
+    };
+    const pk = await this.d.passkeys.byCredentialId(body.assertion.id);
+    if (!pk || pk.userId !== row.userId || pk.revokedAt) {
+      throw await fail('unknown_passkey', 'this passkey is not linked to Penny', 403);
+    }
+    const base = new URL(this.d.publicBaseUrl);
+    let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: body.assertion as never,
+        expectedChallenge: row.challenge as string,
+        expectedOrigin: base.origin,
+        expectedRPID: base.hostname,
+        credential: {
+          id: pk.credentialId,
+          publicKey: new Uint8Array(Buffer.from(pk.publicKey, 'base64url')),
+          counter: pk.signCount,
+        },
+        requireUserVerification: true,
+      });
+    } catch (e) {
+      this.d.log.warn(
+        { approvalId: row.id, err: (e as Error).message.slice(0, 120) },
+        'passkey rejected',
+      );
+      throw await fail('bad_passkey', "the passkey check didn't pass");
+    }
+    if (!verification.verified || !verification.authenticationInfo.userVerified) {
+      throw await fail('bad_passkey', "the passkey check didn't pass");
+    }
+    const next = verification.authenticationInfo.newCounter;
+    if (!(await this.d.passkeys.advanceCount(pk.id, pk.signCount, Math.max(next, pk.signCount)))) {
+      throw await fail('bad_passkey', "the passkey check didn't pass");
+    }
+    if (this.d.now().getTime() > row.expiresAt.getTime()) {
+      throw await fail('expired', 'this approval has expired', 410);
+    }
+    if (!this.hashStillMatches(row))
+      throw await fail('changed', 'this action changed. check the new card.');
+    // the browser key that signs the action must be the device this passkey belongs to
+    const device = await this.d.users.deviceById(pk.deviceId);
+    if (!device || device.revokedAt || device.userId !== row.userId) {
+      throw await fail('unknown_device', 'this browser is not linked to Penny', 403);
+    }
+    return this.finish(row, body);
+  }
+
+  /** After the approve checks: the signed action itself (byte-for-byte), Guard again, relay. */
+  private async finish(
+    row: ApprovalRow,
+    body: { signedDelegateAction?: string | undefined; planSignature?: string | undefined },
+  ): Promise<{ status: string }> {
+    const sub: { signedDelegateAction: string } | { planSignature: string } | null =
+      body.signedDelegateAction
+        ? { signedDelegateAction: body.signedDelegateAction }
+        : body.planSignature
+          ? { planSignature: body.planSignature }
+          : null;
+    if (!sub) {
+      await this.failAndReissue(row, 'missing_action');
+      throw new ApprovalError(400, 'wrong_body', 'the signed action is missing');
+    }
+    await this.updateCard(row.id, 'approving', 'approving…');
+    try {
+      return await this.submitChecked(row, sub);
+    } catch (e) {
+      // The challenge is already burned: an approval still pending after any error can
+      // never be approved again, so expire it and send a fresh card (no stuck "approving").
+      const now = await this.d.approvals.get(row.id).catch(() => null);
+      if (now?.status === 'pending') {
+        await this.failAndReissue(now, e instanceof ApprovalError ? e.code : 'error');
+      }
+      throw e;
+    }
+  }
+
+  // ---------- freeze ----------
+
+  /**
+   * Freeze: revoke every device key and passkey for this user and expire every
+   * open approval. The next approval fails with FROZEN_TEXT until "unfreeze".
+   * On-chain key removal needs the user's own key (Penny never holds it), so the
+   * chain side is left to the device; every Penny path refuses frozen keys.
+   */
+  async freeze(userId: string): Promise<{ devices: number; approvals: number }> {
+    const now = this.d.now();
+    const revoked = await this.d.users.freeze(userId, now);
+    await this.d.passkeys.revokeForUser(userId, now);
+    const open = await this.d.approvals.pendingForUser(userId);
+    let n = 0;
+    for (const row of open) {
+      try {
+        await this.d.approvals.transition(row.id, row.kind, 'pending', 'expired', 'frozen by user');
+        await this.d.ledger.setStatusForApproval(row.id, 'released');
+        if (row.kind === 'create_bot') await this.d.onBotDeclined?.(row.id);
+        await this.updateCard(row.id, 'expired', 'frozen. nothing moved.');
+        n += 1;
+      } catch {
+        /* already moved */
+      }
+    }
+    await this.d.mood.on(userId, 'approval_expired');
+    this.d.log.info({ userId, devices: revoked.length, approvals: n }, 'user froze penny');
+    return { devices: revoked.length, approvals: n };
+  }
+
+  async unfreeze(userId: string): Promise<{ devices: number }> {
+    const ids = await this.d.users.unfreeze(userId);
+    await this.d.passkeys.restoreForDevices(ids);
+    this.d.log.info({ userId, devices: ids.length }, 'user unfroze penny');
+    return { devices: ids.length };
+  }
+
   private async expire(row: ApprovalRow) {
     try {
       await this.d.approvals.transition(row.id, row.kind, 'pending', 'expired', 'ttl elapsed');
       await this.d.ledger.setStatusForApproval(row.id, 'released');
       if (row.kind === 'create_bot') await this.d.onBotDeclined?.(row.id);
       await this.d.mood.on(row.userId, 'approval_expired');
-      await this.updateCard(row.id, 'expired. ask penny for a fresh one.');
+      await this.updateCard(row.id, 'expired', 'expired. tap for a new card.');
     } catch {
       /* already moved */
     }
@@ -793,10 +1429,16 @@ export class ApprovalService {
     await this.d.ledger.setStatusForApproval(id, 'released');
     if (row.kind === 'create_bot') await this.d.onBotDeclined?.(id);
     await this.d.mood.on(row.userId, 'approval_declined');
-    await this.updateCard(id, 'you said no. nothing moved.');
+    await this.updateCard(id, 'declined', 'you said no. nothing moved.');
     return { status: 'cancelled' };
   }
 
+  /**
+   * @internal Signed-action relay without the approve-time checks (challenge,
+   * approval hash, device or passkey). No HTTP route calls this any more: the
+   * app uses signWithDevice and the link page approveWithPasskey. Kept for
+   * service-level tests of the relay path.
+   */
   async submit(
     id: string,
     token: string | null,
@@ -811,6 +1453,13 @@ export class ApprovalService {
       await this.expire(row);
       throw new ApprovalError(410, 'expired', 'this approval has expired');
     }
+    return this.submitChecked(row, body);
+  }
+
+  private submitChecked(
+    row: ApprovalRow,
+    body: { signedDelegateAction: string } | { planSignature: string },
+  ): Promise<{ status: string }> {
     return row.kind === 'create_bot' || row.kind === 'write'
       ? this.submitPlanSigned(row, body)
       : this.submitMoney(row, body);
@@ -840,10 +1489,29 @@ export class ApprovalService {
       { deviceId: device.id },
     );
     if (row.kind === 'create_bot') {
+      // Activate the bot BEFORE marking the approval settled. The other order left a
+      // settled approval with no bot behind it whenever activation threw, and nothing
+      // retried it. If activation fails, the approval fails honestly instead.
+      try {
+        await this.d.onBotApproved?.(row.id);
+      } catch (e) {
+        this.d.log.error({ approvalId: row.id, err: (e as Error).name }, 'bot activation failed');
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'signed',
+          'failed',
+          'bot activation failed',
+          {},
+          { error: (e as Error).name },
+        );
+        await this.d.mood.on(row.userId, 'approval_failed');
+        await this.updateCard(row.id, 'failed', 'that did not go through. nothing was changed.');
+        return { status: 'failed' };
+      }
       await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
-      await this.d.onBotApproved?.(row.id);
       await this.d.mood.on(row.userId, 'bot_created');
-      await this.updateCard(row.id, 'live');
+      await this.updateCard(row.id, 'done', 'live');
       return { status: 'settled' };
     }
     // write: execute in the outside app now, exactly once, after Face ID.
@@ -864,12 +1532,12 @@ export class ApprovalService {
         },
       );
       await this.d.mood.on(row.userId, 'approval_failed');
-      await this.updateCard(row.id, 'that did not go through. nothing was changed.');
+      await this.updateCard(row.id, 'failed', 'that did not go through. nothing was changed.');
       return { status: 'failed' };
     }
     await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'write executed');
     await this.d.mood.on(row.userId, 'approval_settled');
-    await this.updateCard(row.id, 'done ✓');
+    await this.updateCard(row.id, 'sent', 'done ✓');
     return { status: 'settled' };
   }
 
@@ -923,7 +1591,7 @@ export class ApprovalService {
       );
       await this.d.ledger.setStatusForApproval(row.id, 'released');
       await this.d.mood.on(row.userId, 'guard_blocked', 'guard');
-      await this.updateCard(row.id, 'blocked by Guard');
+      await this.updateCard(row.id, 'blocked', g.reasons[0] ?? 'Guard said no.');
       throw new ApprovalError(409, 'guard_blocked', g.reasons.join(' '));
     }
     // 1b) invest: the quote must still be live and the price inside slippage, else re-card
@@ -946,8 +1614,16 @@ export class ApprovalService {
       'signed',
       'delegate action verified',
     );
-    await this.updateCard(row.id, 'sending…');
-    const relay = await this.d.chain.relay(dto, body.signedDelegateAction);
+    await this.updateCard(row.id, 'approving', 'sending…');
+    let relay: Awaited<ReturnType<ChainPort['relay']>>;
+    try {
+      relay = await this.d.chain.relay(dto, body.signedDelegateAction);
+    } catch (e) {
+      // A throw here (RPC error, malformed deposit, crash mid-call) used to leave the
+      // row `signed` with its ledger reservation held and nothing to sweep it.
+      this.d.log.error({ approvalId: row.id, err: (e as Error).name }, 'relay threw');
+      relay = { ok: false, reason: `RELAY_THREW: ${(e as Error).name}` };
+    }
     if (!relay.ok) {
       await this.d.approvals.transition(
         row.id,
@@ -958,7 +1634,7 @@ export class ApprovalService {
       );
       await this.d.ledger.setStatusForApproval(row.id, 'released');
       await this.d.mood.on(row.userId, 'approval_failed');
-      await this.updateCard(row.id, 'failed, nothing was sent');
+      await this.updateCard(row.id, 'failed', "didn't go through. nothing was sent.");
       throw new ApprovalError(502, 'relay_failed', 'could not send to NEAR');
     }
     await this.d.approvals.transition(
@@ -988,7 +1664,7 @@ export class ApprovalService {
           { approvalId: row.id, ...this.investLinks(dep, relay.txHash) },
           'invest sent',
         );
-        await this.updateCard(row.id, SWAP_LINE.pending);
+        await this.updateCard(row.id, 'approving', SWAP_LINE.pending);
       }
     }
     try {
@@ -1057,9 +1733,18 @@ export class ApprovalService {
       const dry = events.some((e) => e.reason === 'relayed (dry run)');
       const dep = investDepositAddress(row.actions as NearAction[]);
       if (!dry) {
-        // a live swap only settles on the swap's own status, never on the deposit alone
-        if (!this.d.invest || !dep) return 'relayed';
-        return this.refreshSwap(row, dep);
+        // A live swap only settles on the swap's own status, never on the deposit
+        // alone. If the swap cannot be followed (invest off, no deposit address),
+        // the deposit still landed: settle it rather than pinning the row at
+        // `relayed` forever, which would hold the reservation open indefinitely.
+        if (!this.d.invest || !dep) {
+          this.d.log.warn(
+            { approvalId: id, investWired: Boolean(this.d.invest), hasDeposit: Boolean(dep) },
+            'invest settled on deposit; swap status unavailable',
+          );
+        } else {
+          return this.refreshSwap(row, dep);
+        }
       }
     }
     if (s === 'settled') {
@@ -1078,13 +1763,14 @@ export class ApprovalService {
         }
       }
       await this.d.mood.on(row.userId, 'approval_settled');
-      await this.updateCard(id, 'done ✓');
+      const dry = (await this.d.approvals.events(id)).some((e) => e.reason === 'relayed (dry run)');
+      await this.updateCard(id, 'sent', 'sent ✓', this.receiptOpts(row.txHash, dry));
       return 'settled';
     }
     await this.d.approvals.transition(id, row.kind, 'relayed', 'failed', 'chain reported failure');
     await this.d.ledger.setStatusForApproval(id, 'released');
     await this.d.mood.on(row.userId, 'approval_failed');
-    await this.updateCard(id, 'failed');
+    await this.updateCard(id, 'failed', "didn't go through. nothing moved.");
     return 'failed';
   }
 
@@ -1103,7 +1789,7 @@ export class ApprovalService {
     if (view.state === 'pending' || view.state === 'processing') {
       if (this.swapStates.get(row.id) !== view.state) {
         this.swapStates.set(row.id, view.state);
-        await this.updateCard(row.id, line);
+        await this.updateCard(row.id, 'approving', line);
       }
       return 'relayed';
     }
@@ -1112,7 +1798,7 @@ export class ApprovalService {
       await this.d.approvals.transition(row.id, row.kind, 'relayed', 'settled', 'swap success');
       await this.d.ledger.setStatusForApproval(row.id, 'settled');
       await this.d.mood.on(row.userId, 'approval_settled');
-      await this.updateCard(row.id, line);
+      await this.updateCard(row.id, 'sent', line, this.receiptOpts(row.txHash, false));
       return 'settled';
     }
     await this.d.approvals.transition(
@@ -1126,7 +1812,7 @@ export class ApprovalService {
     );
     await this.d.ledger.setStatusForApproval(row.id, 'released');
     await this.d.mood.on(row.userId, 'approval_failed');
-    await this.updateCard(row.id, line);
+    await this.updateCard(row.id, 'failed', line);
     return 'failed';
   }
 
@@ -1135,5 +1821,44 @@ export class ApprovalService {
     const due = await this.d.approvals.pendingExpiredBefore(this.d.now());
     for (const r of due) if (!isTerminal(r.status)) await this.expire(r);
     return due.length;
+  }
+
+  /**
+   * Reconcile approvals stuck in `signed`. A row lands there after the device
+   * signature verified and the CAS succeeded, so the money may or may not have
+   * moved; nothing else sweeps this state. We release the reservation and fail the
+   * row so the user's daily limit is not held hostage by a dead relay call. The
+   * delegate action carries its own maxBlockHeight, so a late relay cannot double-spend.
+   */
+  async reconcileStuckSigned(olderThanMs = 15 * 60_000): Promise<number> {
+    const cutoff = new Date(this.d.now().getTime() - olderThanMs);
+    const rows = await this.d.approvals.signedOlderThan(cutoff);
+    let fixed = 0;
+    for (const row of rows) {
+      try {
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'signed',
+          'failed',
+          'relay never reported back; reservation released',
+        );
+        await this.d.ledger.setStatusForApproval(row.id, 'released');
+        await this.d.mood.on(row.userId, 'approval_failed');
+        // The relay may have landed before it stopped reporting: don't claim nothing moved.
+        await this.updateCard(
+          row.id,
+          'failed',
+          "couldn't confirm this one. check your balance before trying again.",
+        );
+        fixed += 1;
+      } catch (e) {
+        this.d.log.warn(
+          { approvalId: row.id, err: (e as Error).name },
+          'stuck-signed reconcile failed',
+        );
+      }
+    }
+    return fixed;
   }
 }

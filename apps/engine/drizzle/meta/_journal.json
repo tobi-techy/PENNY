@@ -33,15 +33,22 @@
     {
       "idx": 4,
       "version": "7",
-      "when": 1794168217741,
-      "tag": "0004_bills_reminders",
+      "when": 1794075025084,
+      "tag": "0004_approval_card_handle",
       "breakpoints": true
     },
     {
       "idx": 5,
       "version": "7",
-      "when": 1794169088366,
-      "tag": "0005_connect_watches",
+      "when": 1794168854777,
+      "tag": "0005_live_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794173044606,
+      "tag": "0006_bills_reminders_onboarding",
       "breakpoints": true
     }
   ]

@@ -22,7 +22,8 @@ final class CardKindTests: XCTestCase {
     func testWriteAndBotOwnColoursFromTheDesignSystem() {
         XCTAssertEqual(CardKind(.write).palette, .indigo)
         XCTAssertEqual(CardKind.bot.palette, .amber)
-        for other in CardKind.allCases where other != .write && other != .bot {
+        // an email draft is a write in waiting: same colour, same meaning (DESIGN.md: one colour, one meaning)
+        for other in CardKind.allCases where ![.write, .bot, .emailDraft].contains(other) {
             XCTAssertNotEqual(CardKind(.write).palette, other.palette)
             XCTAssertNotEqual(CardKind.bot.palette, other.palette)
         }

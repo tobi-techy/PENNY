@@ -34,11 +34,16 @@ const BaseEnv = z.object({
   DATABASE_URL: optionalStr,
 
   SPECTRUM_PROJECT_ID: optionalStr,
+  /** Filled from SPECTRUM_SECRET (preferred name) when set. */
   SPECTRUM_PROJECT_SECRET: optionalStr,
   SPECTRUM_WEBHOOK_SECRET: optionalStr,
   IMESSAGE_APP_NAME: z.string().default('Penny'),
+  /** Filled from PENNY_IMESSAGE_EXT_BUNDLE_ID (preferred name) when set. */
   IMESSAGE_EXTENSION_BUNDLE_ID: z.string().default('money.penny.host.messages'),
+  /** Filled from APPLE_TEAM_ID (preferred name) when set. */
   IMESSAGE_TEAM_ID: optionalStr,
+  /** The host app's bundle id; with APPLE_TEAM_ID it gives the App Attest app id. */
+  PENNY_IOS_BUNDLE_ID: optionalStr,
 
   NEARAI_BASE_URL: z.url().default('https://cloud-api.near.ai/v1'),
   NEARAI_API_KEY: optionalStr,
@@ -90,6 +95,9 @@ const BaseEnv = z.object({
   LANGFUSE_SECRET_KEY: optionalStr,
   LANGFUSE_BASE_URL: z.url().default('https://cloud.langfuse.com'),
 
+  /** Turns on the testnet proof routes for `bun run prove`. Refused on mainnet. */
+  PENNY_PROVE_SECRET: optionalStr,
+
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_PER_USER_PER_MIN: z.coerce.number().int().positive().default(30),
   MAX_BODY_BYTES: z.coerce.number().int().positive().max(1_048_576).default(65_536),
@@ -108,6 +116,29 @@ const MAINNET_REQUIRED = [
 ] as const;
 
 export const EnvSchema = BaseEnv.superRefine((env, ctx) => {
+  if (env.PENNY_PROVE_SECRET && (env.PENNY_ENV === 'mainnet' || env.NEAR_NETWORK !== 'testnet')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PENNY_PROVE_SECRET'],
+      message: 'the proof routes are testnet only',
+    });
+  }
+  if (env.PENNY_PROVE_SECRET && env.PENNY_PROVE_SECRET.length < 32) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PENNY_PROVE_SECRET'],
+      message: 'use at least 32 characters',
+    });
+  }
+  // Card links and passkeys (origin + rpId) are built from PUBLIC_BASE_URL, never from a
+  // request's Host header, so a live engine must say where it lives.
+  if (env.SPECTRUM_PROJECT_ID && !env.PUBLIC_BASE_URL.startsWith('https://')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PUBLIC_BASE_URL'],
+      message: 'set PUBLIC_BASE_URL to the public https URL when Spectrum is configured',
+    });
+  }
   if (env.PENNY_ENV !== 'mainnet') return;
   for (const key of MAINNET_REQUIRED) {
     if (!env[key]) {
@@ -137,8 +168,24 @@ export class EnvError extends Error {
 }
 
 /** Parse env or throw. Error lists only key names, never values. */
+/** Preferred env names (live cards) -> the names the engine reads. Old names still work. */
+const ALIASES: [preferred: string, legacy: string][] = [
+  ['SPECTRUM_SECRET', 'SPECTRUM_PROJECT_SECRET'],
+  ['APPLE_TEAM_ID', 'IMESSAGE_TEAM_ID'],
+  ['PENNY_IMESSAGE_EXT_BUNDLE_ID', 'IMESSAGE_EXTENSION_BUNDLE_ID'],
+];
+
 export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
-  const r = EnvSchema.safeParse(source);
+  const merged: Record<string, string | undefined> = { ...source };
+  for (const [preferred, legacy] of ALIASES) {
+    const v = source[preferred];
+    if (v !== undefined && v.trim() !== '') merged[legacy] = v;
+  }
+  // App Attest app id = TEAMID.bundle.id when not given directly
+  if (!merged.APP_ATTEST_APP_ID && merged.IMESSAGE_TEAM_ID && merged.PENNY_IOS_BUNDLE_ID) {
+    merged.APP_ATTEST_APP_ID = `${merged.IMESSAGE_TEAM_ID}.${merged.PENNY_IOS_BUNDLE_ID}`;
+  }
+  const r = EnvSchema.safeParse(merged);
   if (!r.success) {
     const lines = r.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
     throw new EnvError(`invalid environment:\n  ${lines.join('\n  ')}`);

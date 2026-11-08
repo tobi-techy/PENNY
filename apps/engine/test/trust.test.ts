@@ -108,5 +108,6 @@ describe('device-signed trust endpoints', () => {
     const r = await t2.engine.services.approvals.refreshRelayed();
     expect(r.checked).toBe(0);
     await t2.db.close();
-  });
+    // a fresh engine boots pglite and runs every migration: well past the 5 s default
+  }, 60_000);
 });

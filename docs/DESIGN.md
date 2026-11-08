@@ -24,7 +24,7 @@ Penny is **iMessage-first**. There is no feed, no dashboard, no tab bar to learn
 | **iMessage thread** with Penny's number | Everything. Asks, replies, cards, receipts. |
 | **Penny iMessage extension** (SwiftUI) | Draws the live cards in the thread and does Face ID signing. |
 | **Penny host app** (small) | Enrollment (pair your phone), limits, connected tools, revoke device. Nothing else. |
-| **Web fallback card** | For judges or friends without the extension: a Photon app card that opens our approval page in Photon's launcher. Same look, passkey instead of on-device key. |
+| **Picture link card** | For anyone without the app: a link whose preview is the card (rendered on our server), opening our page. Same look, passkey (checked on our server) instead of the on-device key. Penny sends a fresh card when it changes. |
 
 ## 3. Conversation design
 
@@ -113,7 +113,7 @@ Penny `#FF6B2C` · Invest `#6CCBFF` · Mail `#FFE45C` · Guard `#F6A8F0` · Fina
 | Approving | "Approving…" with spinner | Face ID sheet over Messages |
 | Approved | "Approved" | steps tick: quote ✓, Guard ✓, swap ✓, deposit ✓ |
 | Done | "View order" | calmer art, settled amount, time |
-| Expired | "Get a new quote" | timer at 0:00, art desaturated |
+| Expired | "Get a new card" | timer at 0:00, art desaturated |
 | Declined | none | "You said no. Nothing moved." |
 | Blocked | "Not me" / "Allow once" | red art, Guard's reason in one line |
 

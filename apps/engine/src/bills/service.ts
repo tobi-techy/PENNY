@@ -3,8 +3,9 @@ import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { MessagingPort } from '../ports/messaging.ts';
 import type { ApprovalsRepo } from '../repo/approvals.ts';
-import type { BillRow, BillsRepo, ReminderRow, RemindersRepo } from '../repo/bills.ts';
+import type { BillRow, BillsRepo } from '../repo/bills.ts';
 import type { MessagesRepo } from '../repo/bots.ts';
+import type { ReminderRow, RemindersRepo } from '../repo/cards.ts';
 import type { UsersRepo } from '../repo/users.ts';
 import { BILLERS, type Biller, billerById } from './billers.ts';
 import { formatDay, formatMoney, parseBills } from './parse.ts';
@@ -77,7 +78,6 @@ export function reminderView(r: ReminderRow, tz: string) {
   };
 }
 
-const MAX_PENDING_REMINDERS = 50;
 const REMINDER_HOUR = 9; // local time, day before a bill is due
 const FRESH_NO_DUE_MS = 3 * 86_400_000;
 
@@ -173,13 +173,15 @@ export class BillsService {
     if (!b.dueOn) return;
     const at = localTimeOn(this.d.timeZone, addDays(b.dueOn, -1), REMINDER_HOUR);
     if (at.getTime() <= this.d.now().getTime()) return;
+    const target = await this.d.users.primarySpace(b.userId);
+    if (!target) return; // never texted Penny: nowhere to remind them
     const amount = b.amount ? ` (${formatMoney(b.amount, b.currency)})` : '';
-    await this.d.reminders.add({
+    await this.d.reminders.createForBill({
       userId: b.userId,
+      billId: b.id,
       text: `heads up: your ${b.payeeName} bill${amount} is due tomorrow.`,
       dueAt: at,
-      source: 'bill',
-      billId: b.id,
+      space: target.space,
     });
   }
 
@@ -303,7 +305,7 @@ export class BillsService {
   ): Promise<void> {
     const b = await this.d.bills.close(userId, billId, 'paid');
     if (!b) return;
-    await this.d.reminders.cancelForBill(b.id);
+    await this.d.reminders.undoForBill(b.id);
     const target = await this.d.users.primarySpace(userId);
     if (!target) return;
     const link =
@@ -322,60 +324,45 @@ export class BillsService {
   async close(userId: string, billId: string, to: 'paid' | 'dismissed') {
     const b = await this.d.bills.close(userId, billId, to);
     if (!b) return { ok: false as const, error: 'no open bill with that id' };
-    await this.d.reminders.cancelForBill(b.id);
+    await this.d.reminders.undoForBill(b.id);
     return { ok: true as const, bill: billView(b, this.today(), this.billers) };
   }
 
-  async remind(userId: string, text: string, at: Date) {
-    const now = this.d.now();
-    if (Number.isNaN(at.getTime())) return { ok: false as const, error: 'bad time' };
-    if (at.getTime() < now.getTime() + 30_000)
-      return { ok: false as const, error: 'that time has already passed' };
-    if (at.getTime() > now.getTime() + 366 * 86_400_000)
-      return { ok: false as const, error: 'reminders can be at most a year ahead' };
-    if ((await this.d.reminders.countPending(userId)) >= MAX_PENDING_REMINDERS)
-      return { ok: false as const, error: 'too many reminders pending; cancel some first' };
-    const r = await this.d.reminders.add({ userId, text, dueAt: at, source: 'user' });
-    if (!r) return { ok: false as const, error: 'could not save reminder' };
-    return { ok: true as const, reminder: reminderView(r, this.d.timeZone) };
-  }
-
   async reminders(userId: string) {
-    return (await this.d.reminders.pending(userId)).map((r) => reminderView(r, this.d.timeZone));
+    return (await this.d.reminders.scheduled(userId)).map((r) => reminderView(r, this.d.timeZone));
   }
 
   async cancelReminder(userId: string, id: string) {
-    return (await this.d.reminders.cancel(userId, id))
+    return (await this.d.reminders.undoForUser(userId, id))
       ? { ok: true as const }
       : { ok: false as const, error: 'no pending reminder with that id' };
   }
 
-  /** Scheduler: text every due reminder once. */
-  async sendDue(): Promise<number> {
-    const now = this.d.now();
+  /**
+   * Scheduler: text every due reminder exactly once (user-set and bill due dates).
+   * A bill reminder is dropped if the bill was paid or dismissed meanwhile.
+   */
+  async sendDue(at: Date = this.d.now()): Promise<number> {
     let sent = 0;
-    for (const r of await this.d.reminders.due(now)) {
+    for (const r of await this.d.reminders.due(at)) {
       if (r.billId) {
         const bill = await this.d.bills.get(r.userId, r.billId);
         if (bill && bill.status !== 'open') {
-          await this.d.reminders.cancelForBill(bill.id);
+          await this.d.reminders.undoForBill(bill.id);
           continue;
         }
       }
-      if (!(await this.d.reminders.claim(r.id, now))) continue;
+      if (!(await this.d.reminders.markSent(r.id))) continue;
+      const text = r.source === 'bill' ? r.text : `reminder: ${r.text}`;
       try {
+        await this.d.messaging.sendText(r.space, text);
         const target = await this.d.users.primarySpace(r.userId);
-        if (!target) {
-          await this.d.reminders.markFailed(r.id);
-          continue;
-        }
-        const text = r.source === 'bill' ? r.text : `⏰ reminder: ${r.text}`;
-        await this.d.messaging.sendText(target.space, text);
-        await this.d.messages.add({
-          conversationId: target.conversationId,
-          direction: 'outbound',
-          text,
-        });
+        if (target)
+          await this.d.messages.add({
+            conversationId: target.conversationId,
+            direction: 'outbound',
+            text,
+          });
         sent += 1;
       } catch (e) {
         await this.d.reminders.markFailed(r.id);

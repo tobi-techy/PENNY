@@ -39,7 +39,17 @@ function event(msgId: string, text: string, from = '+15550100') {
   });
 }
 
-function post(body: string, opts: { ts?: number; sig?: string; webhookId?: string } = {}) {
+function post(
+  body: string,
+  opts: {
+    ts?: number;
+    sig?: string;
+    webhookId?: string;
+    /** Headers the proxy adds in front of the engine. */
+    host?: string;
+    proto?: string;
+  } = {},
+) {
   const ts = String(opts.ts ?? Math.floor(Date.now() / 1000));
   return t.engine.app.request('/v1/photon/webhook', {
     method: 'POST',
@@ -49,6 +59,8 @@ function post(body: string, opts: { ts?: number; sig?: string; webhookId?: strin
       'x-spectrum-webhook-id': opts.webhookId ?? '60d6d04f-f9fa-4a7b-9c97-37c9c90ce91c',
       'x-spectrum-timestamp': ts,
       'x-spectrum-signature': opts.sig ?? signSpectrum(WEBHOOK_SECRET, ts, body),
+      ...(opts.host ? { host: opts.host } : {}),
+      ...(opts.proto ? { 'x-forwarded-proto': opts.proto } : {}),
     },
     body,
   });
@@ -56,6 +68,7 @@ function post(body: string, opts: { ts?: number; sig?: string; webhookId?: strin
 
 describe('POST /v1/photon/webhook', () => {
   test('valid delivery -> 200 fast, then a welcome and a first step; no setup link up front', async () => {
+    const before = t.messaging.cards.length;
     const res = await post(event('spc-msg-1', 'hi penny'));
     expect(res.status).toBe(200);
     await tick();
@@ -63,6 +76,34 @@ describe('POST /v1/photon/webhook', () => {
     expect(texts.at(-2)).toContain("i'm penny");
     expect(texts.at(-1)).toContain('connect my gmail');
     expect(texts.join('\n')).not.toContain('/setup#code=');
+    expect(t.messaging.cards.length).toBe(before);
+  });
+
+  test('the setup link is a picture link card drawn from /setup Open Graph tags', async () => {
+    const page = await t.engine.app.request('/setup');
+    const html = await page.text();
+    expect(html).toContain('og:image" content="https://penny.test/setup/card.png"');
+    expect(html).toContain('og:title" content="Set up Penny"');
+    const png = await t.engine.app.request('/setup/card.png');
+    expect(png.headers.get('content-type')).toBe('image/png');
+  });
+
+  test('links use PUBLIC_BASE_URL, never the Host the webhook arrived on', async () => {
+    // Passkeys bind to PUBLIC_BASE_URL, and a crafted Host must never become a card link.
+    for (const host of ['penny.live', 'evil', 'user@evil.test', '169.254.169.254', 'a..b']) {
+      const from = `+1555020${host.length}${host[0]}`;
+      await post(event(`spc-msg-host-${host}`, 'hi penny', from), { host, proto: 'https' });
+      await tick();
+      const user = await t.engine.repos.users.findOrCreateByHandle(from);
+      await t.engine.services.onboarding.sendSetupLink(
+        user.id,
+        { spaceId: `any;-;${from}`, userHandle: from },
+        { force: true },
+      );
+      const url = t.messaging.texts.at(-1)?.text ?? '';
+      expect(url).not.toContain(host);
+      expect(url).toMatch(/^https:\/\/penny\.test\/setup#code=/);
+    }
   });
 
   test('no install needed: an unenrolled user who keeps texting reaches the crew', async () => {
@@ -126,6 +167,34 @@ describe('POST /v1/photon/webhook', () => {
     expect((await post(event('spc-msg-4', 'how am i doing', '+15550123'))).status).toBe(200);
     await tick();
     expect(t.messaging.texts.at(-1)?.text).toBe('hey tobi, all good 💸');
+  });
+
+  test('markdown never reaches the thread', async () => {
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'chat' } }]),
+      scriptedModel([
+        {
+          text: '**done** — I moved `it`\n\n- one\n- two\n\n[receipt](https://penny.test/a/apr_1)',
+        },
+      ]),
+    );
+    const handle = '+15550124';
+    const user = await t.engine.repos.users.findOrCreateByHandle(handle);
+    const keys = deviceKeys();
+    const { code } = await t.engine.services.enroll.issue(user.id, handle);
+    await t.engine.services.enroll.enroll({
+      enrollCode: code,
+      publicKeyEd25519: keys.publicKeyB64Url,
+    });
+    expect((await post(event('spc-msg-md', 'did it work', handle))).status).toBe(200);
+    await tick();
+    const out = t.messaging.texts.at(-1)?.text ?? '';
+    expect(out).toContain('done — I moved it');
+    expect(out).toContain('one\ntwo');
+    expect(out).toContain('receipt (https://penny.test/a/apr_1)');
+    expect(out).not.toContain('**');
+    expect(out).not.toContain('`');
+    expect(out).not.toMatch(/^- /m);
   });
 });
 

@@ -2,31 +2,39 @@ import Foundation
 import PennyCore
 import SwiftUI
 
-/// Drives one approval card: load → ask → Face ID → sign → submit → poll → done.
+/// Drives one live card in the thread: load by card token → Ready → Face ID → sign → Approving
+/// → Sent (with a receipt link) or Blocked. Info cards (reminder set, draft ready) show their
+/// buttons; Undo / Edit need no Face ID, Send turns the card into an approval card first.
 @MainActor
 public final class ApprovalCardModel: ObservableObject {
-    @Published public private(set) var approval: Approval?
+    @Published public private(set) var card: PennyCard?
+    @Published public private(set) var ticket: ApprovalTicket?
     @Published public private(set) var phase: CardPhase = .loading
     @Published public private(set) var now = Date()
     /// The decoded actions the device is about to sign (shown in details, not server prose).
     @Published public private(set) var signingPreview: [ActionSummary] = []
+    /// Set after "Get a new card": the new one arrives in the thread.
+    @Published public private(set) var note: String?
 
-    public let link: CardLink
+    public let token: CardToken
     private let client: EngineClient
     private let signer: MessageSigner
     private let expectedAccountId: String?
+    private let deviceId: String?
     private var clock: Timer?
     private var pollTask: Task<Void, Never>?
 
-    /// Called when Face ID can't run in the current presentation (transcript bubble). The host
-    /// should switch to the expanded presentation and let the user tap again.
+    /// Face ID can't run in the transcript bubble; the host switches to the expanded presentation.
     public var onNeedsExpandedPresentation: (() -> Void)?
+    /// Open a URL (receipt link) from the extension.
+    public var onOpenURL: ((URL) -> Void)?
 
-    public init(link: CardLink, client: EngineClient, signer: MessageSigner, expectedAccountId: String?) {
-        self.link = link
+    public init(token: CardToken, client: EngineClient, signer: MessageSigner, expectedAccountId: String?, deviceId: String?) {
+        self.token = token
         self.client = client
         self.signer = signer
         self.expectedAccountId = expectedAccountId
+        self.deviceId = deviceId
     }
 
     // No deinit: callers invoke stop() when the card leaves the screen (timer and poller hold self weakly).
@@ -34,15 +42,20 @@ public final class ApprovalCardModel: ObservableObject {
     // MARK: Derived
 
     public var content: CardContent? {
-        guard let approval else { return nil }
-        return CardContent(approval: approval, trailing: countdownText)
+        guard let card else { return nil }
+        return CardContent(card: card, trailing: countdownText)
     }
 
-    /// "1:55" until the quote expires.
+    /// "1:30 left" until the approval expires.
     public var countdownText: String {
-        guard let approval else { return "" }
-        let remaining = max(0, Int(approval.expiresAt.timeIntervalSince(now).rounded(.down)))
-        return String(format: "%d:%02d", remaining / 60, remaining % 60)
+        guard let card, card.isApproval, card.state == .ready, let exp = card.expiresAt else { return "" }
+        let remaining = max(0, Int(exp.timeIntervalSince(now).rounded(.down)))
+        return String(format: "%d:%02d left", remaining / 60, remaining % 60)
+    }
+
+    var link: CardLink? {
+        guard let ticket else { return nil }
+        return CardLink(approvalId: ticket.id, cardToken: token.value)
     }
 
     // MARK: Lifecycle
@@ -68,18 +81,17 @@ public final class ApprovalCardModel: ObservableObject {
 
     private func tick() {
         now = Date()
-        if phase == .ask, let approval, approval.expiresAt <= now {
-            phase = .expired
-        }
+        if phase == .ask, let exp = card?.expiresAt, exp <= now { phase = .expired }
     }
 
     public func load() async {
         do {
-            let fetched = try await client.approval(link)
-            approval = fetched
-            signingPreview = ActionSummary.describe(fetched)
-            apply(status: fetched.status, steps: [])
-            if fetched.status == .signed || fetched.status == .relayed { startPolling() }
+            let fetched = try await client.card(token)
+            card = fetched.card
+            ticket = fetched.ticket
+            signingPreview = fetched.ticket.map { ActionSummary.describe($0.detail) } ?? []
+            phase = CardPhase.from(card: fetched.card, now: Date())
+            if fetched.card.state == .approving { startPolling() }
         } catch let error as PennyError {
             phase = .unavailable(message: error.errorDescription ?? "Couldn't load this card.")
         } catch {
@@ -91,46 +103,62 @@ public final class ApprovalCardModel: ObservableObject {
 
     public func handle(_ action: CardActionID) {
         switch action {
-        case .approve, .allowOnce:
+        case .approve:
             Task { await approve() }
-        case .decline, .notMe:
+        case .decline:
             Task { await decline() }
+        case .renew:
+            Task { await renew() }
+        case .notMe:
+            Task { await press(buttonId: card?.buttons.first(where: { $0.action == "freeze" })?.id ?? "notme") }
+        case let .button(id):
+            if let b = card?.buttons.first(where: { $0.id == id }), b.action == "open", let v = b.value, let url = URL(string: v) {
+                onOpenURL?(url)
+            } else {
+                Task { await press(buttonId: id) }
+            }
+        case .openReceipt:
+            if let url = card?.receiptURL { onOpenURL?(url) }
         default:
             break
         }
     }
 
+    /// Face ID → sign approvalHash + challenge and the action → POST /sign. If Face ID fails or
+    /// is cancelled the card stays Ready and nothing is sent.
     public func approve() async {
-        guard let approval else { return }
+        guard let ticket, let link, let card, card.isApproval else { return }
         switch phase {
         case .ask, .failed: break
         default: return
         }
+        guard let deviceId else {
+            phase = .unavailable(message: PennyError.noDeviceKey.errorDescription ?? "Link this iPhone first.")
+            return
+        }
         phase = .approving
         do {
-            let status: ApprovalStatus
-            if approval.kind.isPlanSigned {
-                let signature = try await ApprovalSigning.signPlan(approval, with: signer, expectedAccountId: expectedAccountId)
-                status = try await client.submitPlan(link, signature: signature, idempotencyKey: "submit-\(approval.id)")
-            } else {
-                let signed = try await ApprovalSigning.sign(approval, with: signer, expectedAccountId: expectedAccountId)
-                status = try await client.submit(link, signed: signed, idempotencyKey: "submit-\(approval.id)")
-            }
-            apply(status: status, steps: [StatusStep(label: "Signed on this iPhone", state: .done)])
-            startPolling()
+            let signatures = try await ApprovalSigning.signForApproval(ticket, with: signer, expectedAccountId: expectedAccountId)
+            _ = try await client.sign(link, deviceId: deviceId, signatures: signatures, idempotencyKey: "sign-\(ticket.id)")
+            await load()
+            if self.card?.state == .approving { startPolling() }
         } catch let error as PennyError {
             switch error {
             case .userCancelled:
-                phase = .ask
+                phase = .ask // stay on Ready; nothing was sent
             case .notInteractive:
                 phase = .ask
                 onNeedsExpandedPresentation?()
             case .expired:
                 phase = .expired
-            case .notPending:
+            case .frozen:
+                phase = .unavailable(message: error.errorDescription ?? "Penny is frozen. Text unfreeze to start again.")
+            case .notPending, .http(status: 409), .http(status: 422):
+                // the engine expired this card and sent a fresh one, or it was already handled
                 await load()
+                if phase == .expired { note = "That didn't check out. Penny sent you a new card." }
             default:
-                phase = .failed(message: error.errorDescription ?? "Something went wrong.", steps: [])
+                phase = .failed(message: error.errorDescription ?? "Something went wrong. Nothing was sent.", steps: [])
             }
         } catch {
             phase = .failed(message: "Something went wrong. Nothing was sent.", steps: [])
@@ -138,52 +166,58 @@ public final class ApprovalCardModel: ObservableObject {
     }
 
     public func decline() async {
-        guard approval != nil, phase == .ask else { return }
+        guard let link, phase == .ask else { return }
         do {
-            let status = try await client.decline(link, reason: nil, idempotencyKey: "decline-\(link.approvalId)")
-            apply(status: status, steps: [])
+            _ = try await client.decline(link, reason: nil, idempotencyKey: "decline-\(link.approvalId)")
+            await load()
         } catch let error as PennyError {
-            phase = .failed(message: error.errorDescription ?? "Couldn't decline.", steps: [])
+            phase = .failed(message: error.errorDescription ?? "Couldn't say no just now.", steps: [])
         } catch {
-            phase = .failed(message: "Couldn't decline.", steps: [])
+            phase = .failed(message: "Couldn't say no just now.", steps: [])
+        }
+    }
+
+    /// "Get a new card": the engine checks Guard again and sends a fresh card to the thread.
+    public func renew() async {
+        do {
+            try await client.renew(token)
+            note = "A new card is on its way."
+        } catch let error as PennyError {
+            note = error.errorDescription
+        } catch {
+            note = "Couldn't get a new card. Ask Penny again."
+        }
+    }
+
+    /// Info card buttons (Undo, Edit, Send, Not me). No Face ID; Send only turns the card
+    /// into an approval card, the Face ID happens on that card.
+    public func press(buttonId: String) async {
+        do {
+            try await client.press(token, buttonId: buttonId)
+            await load()
+        } catch let error as PennyError {
+            note = error.errorDescription
+        } catch {
+            note = "That didn't work. Try again."
         }
     }
 
     // MARK: Status
 
     private func startPolling() {
+        guard let link else { return }
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             var delay: UInt64 = 1_200_000_000
             for _ in 0..<120 { // ~3-4 minutes max
                 try? await Task.sleep(nanoseconds: delay)
                 guard !Task.isCancelled, let self else { return }
-                do {
-                    let response = try await self.client.status(self.link)
-                    self.apply(status: response.status, steps: response.steps)
-                    if response.status.isTerminal { return }
-                } catch {
-                    // Transient: keep polling with backoff.
+                if let response = try? await self.client.status(link), response.status.isTerminal {
+                    await self.load()
+                    return
                 }
                 delay = min(delay + 300_000_000, 3_000_000_000)
             }
-        }
-    }
-
-    private func apply(status: ApprovalStatus, steps: [StatusStep]) {
-        switch status {
-        case .pending:
-            phase = (approval?.expiresAt ?? .distantPast) > Date() ? .ask : .expired
-        case .signed, .relayed:
-            phase = .approved(steps: steps.isEmpty ? [StatusStep(label: "Sent to NEAR", state: .active)] : steps)
-        case .settled:
-            phase = .done(steps: steps, at: Date())
-        case .failed:
-            phase = .failed(message: "It didn't go through. Nothing left your wallet.", steps: steps)
-        case .expired:
-            phase = .expired
-        case .cancelled:
-            phase = .declined
         }
     }
 }
@@ -197,18 +231,17 @@ public struct ActionSummary: Identifiable, Hashable, Sendable {
     public static func describe(_ approval: Approval) -> [ActionSummary] {
         approval.actions.enumerated().map { index, action in
             switch action {
-            case let .functionCall(methodName, args, gas, deposit):
-                var lines = ["Contract: \(approval.receiverId)", "From: \(approval.signerId)"]
+            case let .functionCall(methodName, args, _, deposit):
+                var lines = ["App: \(approval.receiverId)", "From: \(approval.signerId)"]
                 for key in args.keys.sorted() {
                     let value = args[key].map { $0.stringValue ?? CanonicalJSON.string($0) } ?? ""
                     lines.append("\(key): \(value.count > 80 ? String(value.prefix(77)) + "…" : value)")
                 }
-                lines.append("Attached: \(deposit) yoctoNEAR")
-                if let g = UInt64(gas) { lines.append("Gas: \(g / 1_000_000_000_000) Tgas") }
-                return ActionSummary(id: index, title: "Call \(methodName)", lines: lines)
+                if deposit != "0" { lines.append("Also sends: \(NearAmount.display(yocto: deposit)) NEAR") }
+                return ActionSummary(id: index, title: "Run \(methodName)", lines: lines)
             case let .transfer(deposit):
-                return ActionSummary(id: index, title: "Transfer NEAR", lines: [
-                    "To: \(approval.receiverId)", "From: \(approval.signerId)", "Amount: \(deposit) yoctoNEAR",
+                return ActionSummary(id: index, title: "Send NEAR", lines: [
+                    "To: \(approval.receiverId)", "From: \(approval.signerId)", "Amount: \(NearAmount.display(yocto: deposit)) NEAR",
                 ])
             }
         }

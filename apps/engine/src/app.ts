@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
-import { type Context, Hono } from 'hono';
+import { Hono } from 'hono';
 import { ApprovalService, type Clock } from './approvals/service.ts';
 import { resolveBillers } from './bills/billers.ts';
 import { BillsService } from './bills/service.ts';
@@ -15,9 +15,12 @@ import { MoodService } from './brain/mood.ts';
 import { ReflectionService } from './brain/reflection.ts';
 import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
+import { CardActions } from './cards/actions.ts';
+import { CardSender } from './cards/sender.ts';
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
+import { buildProveRoutes } from './http/prove.ts';
 import { buildRoutes } from './http/routes.ts';
 import {
   type AppVars,
@@ -27,6 +30,7 @@ import {
   RateLimiter,
   rateLimit,
   securityMiddleware,
+  webPageCsp,
 } from './http/security.ts';
 import { handleInbound } from './inbound.ts';
 import type { Logger } from './lib/logger.ts';
@@ -35,8 +39,9 @@ import { OnboardingService } from './onboarding.ts';
 import type { ChainPort } from './ports/chain.ts';
 import type { MessagingPort } from './ports/messaging.ts';
 import { ApprovalsRepo } from './repo/approvals.ts';
-import { BillsRepo, RemindersRepo } from './repo/bills.ts';
+import { BillsRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
+import { CardsRepo, PasskeysRepo, RemindersRepo } from './repo/cards.ts';
 import { ConnectWatchesRepo } from './repo/connect-watches.ts';
 import {
   AttestChallengesRepo,
@@ -77,6 +82,14 @@ export type EngineDeps = {
   chainNetwork?: 'mainnet' | 'testnet';
   /** NEAR account of the demo biller (PENNY_DEMO_BILLER_ACCOUNT); unset = no demo biller. */
   demoBillerAccount?: string;
+  /** PNG of a card (live card image + og:image). Absent: no image on live cards. */
+  renderCardImage?: (card: import('@penny/shared').Card) => Promise<Uint8Array>;
+  /** Explorer base for receipts, e.g. https://testnet.nearblocks.io */
+  explorerBaseUrl?: string;
+  /** Testnet proof routes (scripts/prove.ts). Only set from env on testnet. */
+  proveSecret?: string;
+  /** Test hook: no real waits between live-card edit retries. */
+  sleep?: (ms: number) => Promise<void>;
 };
 
 const APP_LABELS: Record<string, string> = { gmail: 'Gmail', github: 'GitHub' };
@@ -91,7 +104,7 @@ export function createEngine(d: EngineDeps) {
   const now = d.now ?? (() => new Date());
   const repos = {
     users: new UsersRepo(d.db),
-    approvals: new ApprovalsRepo(d.db),
+    approvals: new ApprovalsRepo(d.db, now),
     ledger: new LedgerRepo(d.db),
     bots: new BotsRepo(d.db),
     moods: new MoodsRepo(d.db),
@@ -101,10 +114,22 @@ export function createEngine(d: EngineDeps) {
     idempotency: new IdempotencyRepo(d.db),
     guardDecisions: new GuardDecisionsRepo(d.db),
     bills: new BillsRepo(d.db),
-    reminders: new RemindersRepo(d.db),
     connectWatches: new ConnectWatchesRepo(d.db),
+    cards: new CardsRepo(d.db),
+    passkeys: new PasskeysRepo(d.db),
+    reminders: new RemindersRepo(d.db),
   };
   const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
+  const cardSender = new CardSender({
+    cards: repos.cards,
+    users: repos.users,
+    messaging: d.messaging,
+    publicBaseUrl: d.publicBaseUrl,
+    log: d.log,
+    now,
+    ...(d.renderCardImage ? { renderImage: d.renderCardImage } : {}),
+    ...(d.sleep ? { sleep: d.sleep } : {}),
+  });
   const mood = new MoodService(repos.moods);
   const memory = new MemoryService(d.db, d.embedder);
 
@@ -128,9 +153,13 @@ export function createEngine(d: EngineDeps) {
     guardDecisions: repos.guardDecisions,
     chain: d.chain,
     messaging: d.messaging,
+    cards: cardSender,
+    cardsRepo: repos.cards,
+    passkeys: repos.passkeys,
     mood,
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
+    ...(d.explorerBaseUrl ? { explorerBaseUrl: d.explorerBaseUrl } : {}),
     ...(d.mainnetMaxPerTxUsd ? { mainnetMaxPerTxUsd: d.mainnetMaxPerTxUsd } : {}),
     ...(d.mainnetMaxDailyUsd ? { mainnetMaxDailyUsd: d.mainnetMaxDailyUsd } : {}),
     ...(d.relayerMaxDepositYocto !== undefined
@@ -156,6 +185,7 @@ export function createEngine(d: EngineDeps) {
       await onboarding.sendSetupLink(userId, space);
     },
     onBotDeclined: (id) => botService.onApprovalDeclined(id),
+    onBotReissued: (from, to) => botService.onApprovalReissued(from, to),
   });
   const enroll: EnrollService = new EnrollService(
     repos.users,
@@ -165,6 +195,8 @@ export function createEngine(d: EngineDeps) {
       ...(d.attestAppId ? { appId: d.attestAppId } : {}),
       require: d.attestRequire ?? false,
       challenges: repos.attestChallenges,
+      passkeys: repos.passkeys,
+      publicBaseUrl: d.publicBaseUrl,
     },
     (userId): Promise<void> => onboarding.onEnrolled(userId),
   );
@@ -178,10 +210,7 @@ export function createEngine(d: EngineDeps) {
     approvals: repos.approvals,
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
     settleIn: d.chainNetwork === 'testnet' ? 'NEAR' : 'USDC',
-    explorerTxUrl:
-      d.chainNetwork === 'testnet'
-        ? 'https://testnet.nearblocks.io/txns/'
-        : 'https://nearblocks.io/txns/',
+    explorerTxUrl: `${d.explorerBaseUrl ?? (d.chainNetwork === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io')}/txns/`,
     log: d.log,
     timeZone,
     now,
@@ -214,6 +243,7 @@ export function createEngine(d: EngineDeps) {
       draft: (u, p, s) => botService.draft(u, p, s),
       confirm: (u, s) => botService.confirm(u, s),
     },
+    everyday: { cards: cardSender, reminders: repos.reminders, now },
     tracer: d.tracer ?? noopTracer,
     log: d.log,
     ...(d.privacy ? { privacy: d.privacy } : {}),
@@ -221,6 +251,15 @@ export function createEngine(d: EngineDeps) {
     onboarding,
     timeZone,
     now,
+  });
+  const cardActions = new CardActions({
+    cards: repos.cards,
+    sender: cardSender,
+    approvals,
+    reminders: repos.reminders,
+    bots: repos.bots,
+    now,
+    log: d.log,
   });
 
   const ipLimiter = new RateLimiter(d.limits.perIpPerMin, 60_000);
@@ -237,13 +276,88 @@ export function createEngine(d: EngineDeps) {
   // No-install web pages (apps/web build): /setup creates a browser key,
   // /a/:id is the approval page. Served only when the build exists.
   const webDist = join(process.cwd(), 'apps/web/dist');
-  const spa = async (c: Context) => {
+  // The SPA needs its own bundle and stylesheet; the strict API CSP would block both.
+  app.use('/setup', webPageCsp());
+  app.use('/a/:id', webPageCsp());
+  const renderPng =
+    d.renderCardImage ??
+    (async (card: import('@penny/shared').Card) => {
+      const { renderCardPng } = await import('./cards/render.ts');
+      return renderCardPng(card, now());
+    });
+  // /setup is a picture link card too (sent before the user has any app).
+  const base = d.publicBaseUrl.replace(/\/$/, '');
+  app.get('/setup', async (c) => {
+    const { linkPageHtml, SETUP_CARD } = await import('./cards/page.ts');
     const index = join(webDist, 'index.html');
-    if (!existsSync(index)) return c.json({ error: 'web_not_built' }, 503);
-    return c.html(await readFile(index, 'utf8'));
+    const shell = existsSync(index) ? await readFile(index, 'utf8') : null;
+    c.header('cache-control', 'no-store');
+    return c.html(
+      linkPageHtml({
+        shell,
+        card: SETUP_CARD,
+        imageUrl: `${base}/setup/card.png`,
+        pageUrl: `${base}/setup`,
+        now: now(),
+      }),
+    );
+  });
+  app.get('/setup/card.png', async () => {
+    const { SETUP_CARD } = await import('./cards/page.ts');
+    return new Response(await renderPng(SETUP_CARD), {
+      headers: {
+        'content-type': 'image/png',
+        'cache-control': 'public, max-age=3600',
+        'x-content-type-options': 'nosniff',
+      },
+    });
+  });
+
+  // Link card (no install): the page plus Open Graph tags, so iMessage shows the
+  // card picture. The same token works for the iMessage extension (live card).
+  const cardView = async (raw: string) => {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(raw)) return null;
+    try {
+      return await approvals.getByToken(raw);
+    } catch {
+      return null;
+    }
   };
-  app.get('/setup', spa);
-  app.get('/a/:id', spa);
+  app.get('/a/:token/card.png', async (c) => {
+    const view = await cardView(c.req.param('token'));
+    if (!view) return c.json({ error: 'not_found' }, 404);
+    const png = await renderPng(view.card);
+    return new Response(png, {
+      headers: {
+        'content-type': 'image/png',
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff',
+      },
+    });
+  });
+  app.get('/a/:token', async (c) => {
+    const raw = c.req.param('token');
+    const view = await cardView(raw);
+    const { linkPageHtml } = await import('./cards/page.ts');
+    const index = join(webDist, 'index.html');
+    const shell = existsSync(index) ? await readFile(index, 'utf8') : null;
+    c.header('cache-control', 'no-store');
+    c.header('referrer-policy', 'no-referrer');
+    c.header('x-robots-tag', 'noindex');
+    return c.html(
+      linkPageHtml({
+        shell,
+        card: view?.card ?? null,
+        imageUrl: view
+          ? `${d.publicBaseUrl.replace(/\/$/, '')}/a/${raw}/card.png?v=${view.card.state}`
+          : null,
+        pageUrl: `${d.publicBaseUrl.replace(/\/$/, '')}/a/${raw}`,
+        now: now(),
+      }),
+      view ? 200 : 404,
+    );
+  });
   app.get('/assets/:file', async (c) => {
     const name = c.req.param('file').replace(/[^A-Za-z0-9._-]/g, '');
     const file = join(webDist, 'assets', name);
@@ -261,6 +375,17 @@ export function createEngine(d: EngineDeps) {
     const label = APP_LABELS[c.req.query('app') ?? ''] ?? 'Your app';
     return c.html(CONNECTED_HTML.replaceAll('{{app}}', label));
   });
+  if (d.proveSecret) {
+    app.route(
+      '/',
+      buildProveRoutes({
+        secret: d.proveSecret,
+        users: repos.users,
+        approvals,
+        market: d.market,
+      }),
+    );
+  }
 
   app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
@@ -272,12 +397,15 @@ export function createEngine(d: EngineDeps) {
     messaging: d.messaging,
     userLimiter,
     log: d.log,
+    publicBaseUrl: d.publicBaseUrl,
+    approvals,
   };
   app.route(
     '/',
     buildRoutes({
       approvals,
       approvalsRepo: repos.approvals,
+      cardActions,
       users: repos.users,
       enroll,
       ...(d.attestAppId ? { attestAppId: d.attestAppId } : {}),
@@ -296,14 +424,13 @@ export function createEngine(d: EngineDeps) {
   const scheduler = new Scheduler(
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
+      fireReminders: (at: Date) => bills.sendDue(at),
       refreshRelayed: () => approvals.refreshRelayed(),
+      reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
       pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
       weeklyReflection: async (now) => {
         await reflection.reflectWeekly(now);
-      },
-      sendReminders: async () => {
-        await bills.sendDue();
       },
       ...(d.connectors
         ? {
@@ -328,6 +455,8 @@ export function createEngine(d: EngineDeps) {
       bills,
       onboarding,
       bots: botService,
+      cards: cardSender,
+      cardActions,
       crew,
       enroll,
       mood,

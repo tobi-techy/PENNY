@@ -2,9 +2,11 @@ import Foundation
 import PennyCore
 import SwiftUI
 
-/// The ten cards in design/card/family.html. Same anatomy; colour + crew mark say who's asking.
+/// The ten cards in design/card/family.html plus the everyday ones (reminder, draft, plan,
+/// found it, done). Same anatomy; colour + crew mark say who's asking. Anything unknown is `plain`.
 public enum CardKind: String, CaseIterable, Sendable {
     case invest, send, bill, split, errand, guardBlock, pick, weekly, write, bot
+    case reminder, emailDraft, plan, found, done, plain
 
     public var palette: CardPalette {
         switch self {
@@ -15,16 +17,21 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .errand: return .pink
         case .guardBlock: return .red
         case .weekly: return .mint
-        case .write: return .indigo
+        case .write, .emailDraft: return .indigo
         case .bot: return .amber
+        case .reminder: return .mint
+        case .plan: return .purple
+        case .found: return .orange
+        case .done: return .green
+        case .plain: return .muted
         }
     }
 
     public var crew: Crew {
         switch self {
         case .invest, .pick: return .invest
-        case .send, .split, .errand, .write, .bot: return .penny
-        case .bill: return .mail
+        case .send, .split, .errand, .write, .bot, .reminder, .plan, .done, .plain: return .penny
+        case .bill, .emailDraft, .found: return .mail
         case .guardBlock: return .guardian
         case .weekly: return .finance
         }
@@ -42,6 +49,34 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .weekly: return "● YOUR WEEK"
         case .write: return "✎ WRITE"
         case .bot: return "✳ NEW BOT"
+        case .reminder: return "◷ REMINDER"
+        case .emailDraft: return "✉ DRAFT"
+        case .plan: return "☰ PLAN"
+        case .found: return "◉ FOUND IT"
+        case .done: return "✓ DONE"
+        case .plain: return "● PENNY"
+        }
+    }
+
+    /// The engine's card type (packages/shared KNOWN_CARD_TYPES). Unknown types are plain cards.
+    public init(cardType: String) {
+        switch cardType {
+        case "invest": self = .invest
+        case "pick": self = .pick
+        case "send": self = .send
+        case "pay_bill": self = .bill
+        case "request": self = .split
+        case "errand": self = .errand
+        case "guard_block": self = .guardBlock
+        case "checkin": self = .weekly
+        case "write": self = .write
+        case "new_bot": self = .bot
+        case "reminder": self = .reminder
+        case "email_draft": self = .emailDraft
+        case "plan": self = .plan
+        case "found": self = .found
+        case "done": self = .done
+        default: self = .plain
         }
     }
 
@@ -72,6 +107,12 @@ public enum CardRow: Hashable, Sendable {
 public enum CardActionID: Hashable, Sendable {
     case approve, decline, notMe, allowOnce, nudge, details, seeWeek
     case pickOption(Int)
+    /// "Get a new card" on an expired approval card.
+    case renew
+    /// An info card button (Undo, Edit, Send, Open, Pick) by its id.
+    case button(String)
+    /// "View receipt" once a move settled.
+    case openReceipt
 }
 
 public struct CardButton: Hashable, Sendable {
@@ -126,14 +167,40 @@ public enum CardPhase: Equatable, Sendable {
     case declined
     case failed(message: String, steps: [StatusStep])
     case unavailable(message: String)
+    /// Guard said no: red card, one plain reason, "Not me".
+    case blocked(message: String)
+    /// An info card (reminder set, draft ready, found it): rows and its buttons.
+    case info
+    /// An info card that is finished (e.g. undone).
+    case closed(message: String)
 
     var mood: ArtMood {
         switch self {
         case .loading, .approving, .approved: return .working
-        case .ask: return .ask
+        case .ask, .info: return .ask
         case .done: return .calm
-        case .expired, .declined, .unavailable: return .quiet
-        case .failed: return .alarm
+        case .expired, .declined, .unavailable, .closed: return .quiet
+        case .failed, .blocked: return .alarm
+        }
+    }
+
+    /// The card state (from the engine's card JSON) as a phase. Pure: tested in PennyUITests.
+    public static func from(card: PennyCard, now: Date) -> CardPhase {
+        switch card.state {
+        case .ready:
+            if !card.isApproval { return .info }
+            if let exp = card.expiresAt, exp <= now { return .expired }
+            return .ask
+        case .approving: return .approved(steps: [StatusStep(label: "Approved with Face ID", state: .done),
+                                                  StatusStep(label: "Sending", state: .active)])
+        case .sent: return .done(steps: [StatusStep(label: "Approved with Face ID", state: .done),
+                                         StatusStep(label: "Sent", state: .done)], at: now)
+        case .done: return card.isApproval ? .done(steps: [], at: now) : .info
+        case .blocked: return .blocked(message: card.lines.first?.value ?? "Guard said no.")
+        case .expired: return .expired
+        case .declined: return .declined
+        case .failed: return .failed(message: CardState.failed.closingLine ?? "", steps: [])
+        case .undone: return .closed(message: CardState.undone.closingLine ?? "Undone.")
         }
     }
 }
@@ -142,6 +209,11 @@ public enum CardPhase: Equatable, Sendable {
 
 extension CardContent {
     /// Builds the card for an engine Approval. `trailing` is usually the quote countdown ("1:55").
+    ///
+    /// Row budget: money cards lead with the three facts people check before paying
+    /// (what you pay, what you get, the fee). Write cards are different: the Face ID
+    /// signature seals every argument, so the card has to show them all, otherwise the
+    /// user approves a payload they never saw. The engine caps write facts at 8.
     public init(approval: Approval, trailing: String) {
         let kind = CardKind(approval.kind)
         let verb: String
@@ -152,17 +224,66 @@ extension CardContent {
         case .errand: verb = "Hire with Face ID"; foot = "View details ›"
         default: verb = "Approve with Face ID"; foot = "View details ›"
         }
+        let shown: [Fact] = approval.kind == .write
+            ? Array(approval.facts.prefix(Self.writeRowLimit))
+            : Array(approval.facts.prefix(3))
         self.init(
             kind: kind,
             trailing: trailing,
             meta: approval.title,
             headline: approval.amountDisplay,
-            rows: approval.facts.prefix(3).map(CardRow.init(fact:)),
+            rows: shown.map(CardRow.init(fact:)),
             buttons: [CardButton(verb, style: .faceID, action: .approve)],
             foot: foot
         )
     }
+
+    /// Matches the engine's write-facts cap (MAX_ARG_FACTS + App/Action/More).
+    public static let writeRowLimit = 8
+
+    /// Builds any card from the engine's card JSON. Same design for every type; unknown
+    /// types render as a plain card with title and lines.
+    public init(card: PennyCard, trailing: String) {
+        let kind = CardKind(cardType: card.type)
+        var buttons: [CardButton] = []
+        if card.isApproval {
+            if card.state == .ready {
+                buttons = [CardButton(CardState.ready.pillTitle ?? "Approve with Face ID", style: .faceID, action: .approve),
+                           CardButton(CardState.ready.secondaryTitle ?? "Not now", style: .outline, action: .decline)]
+            }
+        } else if card.state == .done || card.state == .ready || card.state == .blocked {
+            buttons = card.buttons.map { b in
+                CardButton(b.label, style: .outline, action: b.action == "freeze" ? .notMe : .button(b.id))
+            }
+        }
+        let rows = card.lines.map { line -> CardRow in
+            CardRow(fact: Fact(label: line.label ?? "", value: line.value))
+        }
+        self.init(
+            kind: kind,
+            trailing: trailing,
+            meta: card.amount != nil ? card.title : Crew(agent: card.agent).name,
+            headline: card.amount ?? card.title,
+            headlineIsText: card.amount == nil,
+            rows: Array(rows.prefix(card.isApproval && card.type == "write" ? Self.writeRowLimit : 4)),
+            buttons: buttons,
+            foot: card.receiptURL != nil ? "View receipt ›" : nil,
+            crew: Crew(agent: card.agent)
+        )
+    }
 }
+
+extension Crew {
+    /// Card agent -> crew mark. Custom bots wear Penny's mark (their own colour lands with bot art).
+    public init(agent: String) {
+        switch agent {
+        case "invest": self = .invest
+        case "mail": self = .mail
+        case "guard": self = .guardian
+        case "finance": self = .finance
+        default: self = .penny
+        }
+    }
 
 extension CardRow {
     /// "X of Y" values get a meter (fraction = X / Y), everything else is a plain fact.

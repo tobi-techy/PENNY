@@ -44,6 +44,12 @@ export type ToolContext = {
   mood: MoodService;
   market: MarketPort;
   botOps: BotOps;
+  /** Info-card jobs (reminders, drafts). Absent in some tests. */
+  everyday?: {
+    cards: import('../cards/sender.ts').CardSender;
+    reminders: import('../repo/cards.ts').RemindersRepo;
+    now: () => Date;
+  };
 };
 
 export type ToolDef<I = unknown> = {

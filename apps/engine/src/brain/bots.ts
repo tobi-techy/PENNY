@@ -33,10 +33,11 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'find_bills',
       'list_bills',
       'close_bill',
-      'remind_me',
+      'set_reminder',
       'list_reminders',
       'cancel_reminder',
       'send_setup_link',
+      'draft_email',
     ],
   },
   {
@@ -62,11 +63,12 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'propose_pay_bill',
       'connect_app',
       'propose_write',
+      'draft_email',
       'remember',
       'recall',
       'list_bills',
       'close_bill',
-      'remind_me',
+      'set_reminder',
       'list_reminders',
       'cancel_reminder',
       'send_setup_link',
@@ -87,7 +89,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'recall',
       'list_bills',
       'close_bill',
-      'remind_me',
+      'set_reminder',
       'list_reminders',
       'send_setup_link',
     ],
@@ -100,9 +102,9 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'check_guard',
       'connect_app',
       'propose_write',
+      'set_reminder',
       'remember',
       'recall',
-      'remind_me',
       'list_reminders',
       'cancel_reminder',
       'send_setup_link',
@@ -251,6 +253,10 @@ export class BotService {
   async onApprovalSettled(approvalId: string): Promise<void> {
     const bot = await this.d.bots.byApproval(approvalId);
     if (bot) await this.d.bots.setStatus(bot.id, 'pending_approval', 'active');
+  }
+
+  async onApprovalReissued(fromId: string, toId: string): Promise<void> {
+    await this.d.bots.moveApproval(fromId, toId);
   }
 
   async onApprovalDeclined(approvalId: string): Promise<void> {
