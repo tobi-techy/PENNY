@@ -78,6 +78,8 @@ export type SchedulerJobDeps = {
   sendReminders?: () => Promise<void>;
   /** Check connected inboxes for new bills and tell the user. */
   scanBills?: () => Promise<void>;
+  /** Notice apps the user just connected (after a connect link) and follow up. */
+  checkConnections?: () => Promise<void>;
 };
 
 /** Default Phase 1 jobs. Weekly reflection is weekly; the rest are hygiene. */
@@ -109,6 +111,9 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
   }
   if (d.sendReminders) {
     jobs.push({ name: 'send_reminders', everyMs: 60_000, run: d.sendReminders });
+  }
+  if (d.checkConnections) {
+    jobs.push({ name: 'check_connections', everyMs: 10_000, run: d.checkConnections });
   }
   if (d.scanBills) {
     jobs.push({ name: 'scan_bills', everyMs: 6 * HOUR, run: d.scanBills });

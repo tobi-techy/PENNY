@@ -362,6 +362,29 @@ export const reminders = pgTable(
   ],
 );
 
+/**
+ * A connect link Penny sent (gmail, github). The scheduler polls until the app is
+ * connected or the watch expires, then tells the user and kicks off the first job.
+ */
+export const connectWatches = pgTable(
+  'connect_watches',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    toolkit: text('toolkit').notNull(),
+    status: text('status', { enum: ['waiting', 'connected', 'expired'] })
+      .notNull()
+      .default('waiting'),
+    expiresAt: ts('expires_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.toolkit] }),
+    index('connect_watches_status_idx').on(t.status, t.expiresAt),
+  ],
+);
+
 export const schema = {
   users,
   devices,
@@ -382,4 +405,5 @@ export const schema = {
   webhookEvents,
   bills,
   reminders,
+  connectWatches,
 };

@@ -5,6 +5,7 @@ import type { ApprovalService } from '../approvals/service.ts';
 import type { BillsService } from '../bills/service.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { ToolInfo } from '../guard/bot-policy.ts';
+import type { OnboardingService } from '../onboarding.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
 import type { BotRow } from '../repo/bots.ts';
 import type { MemoryService } from './memory.ts';
@@ -36,6 +37,7 @@ export type ToolContext = {
   approvals: ApprovalService;
   connectors?: ConnectorPort;
   bills?: BillsService;
+  onboarding?: OnboardingService;
   memory: MemoryService;
   mood: MoodService;
   market: MarketPort;

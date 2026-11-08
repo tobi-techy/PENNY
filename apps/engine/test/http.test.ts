@@ -55,13 +55,14 @@ function post(body: string, opts: { ts?: number; sig?: string; webhookId?: strin
 }
 
 describe('POST /v1/photon/webhook', () => {
-  test('valid delivery -> 200 fast, then welcome text and a separate setup link', async () => {
+  test('valid delivery -> 200 fast, then a welcome and a first step; no setup link up front', async () => {
     const res = await post(event('spc-msg-1', 'hi penny'));
     expect(res.status).toBe(200);
     await tick();
     const texts = t.messaging.texts.map((x) => x.text);
-    expect(texts.at(-2)).toContain('just talk to me here');
-    expect(texts.at(-1)).toMatch(/^https:\/\/penny\.test\/setup#code=[A-Z2-9]{8}$/);
+    expect(texts.at(-2)).toContain("i'm penny");
+    expect(texts.at(-1)).toContain('connect my gmail');
+    expect(texts.join('\n')).not.toContain('/setup#code=');
   });
 
   test('no install needed: an unenrolled user who keeps texting reaches the crew', async () => {

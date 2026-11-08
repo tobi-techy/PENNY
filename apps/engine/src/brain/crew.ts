@@ -5,6 +5,7 @@ import type { BillsService } from '../bills/service.ts';
 import { DEFAULT_TIME_ZONE, describeNow } from '../bills/time.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
+import type { OnboardingService } from '../onboarding.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
 import type { BotRow, BotsRepo, MessagesRepo } from '../repo/bots.ts';
 import type { UsersRepo } from '../repo/users.ts';
@@ -52,6 +53,7 @@ export type CrewDeps = {
   /** NEAR AI TEE attestation gate (NEARAI_ATTESTATION); absent or mode off = no change. */
   privacy?: PrivacyGate;
   bills?: BillsService;
+  onboarding?: OnboardingService;
   /** User-facing time zone for "now" and reminders (default Africa/Lagos). */
   timeZone?: string;
   now?: () => Date;
@@ -186,6 +188,7 @@ export class Crew {
       approvals: this.d.approvals,
       ...(this.d.connectors ? { connectors: this.d.connectors } : {}),
       ...(this.d.bills ? { bills: this.d.bills } : {}),
+      ...(this.d.onboarding ? { onboarding: this.d.onboarding } : {}),
       memory: this.d.memory,
       mood: this.d.mood,
       market: this.d.market,
@@ -198,7 +201,7 @@ export class Crew {
         const extra = await this.d.connectors.toolsFor(userId, bot.slug);
         Object.assign(tools, extra);
         connectorNote =
-          '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app, share its link, then retry when the user says done. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';
+          '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app and share its tellUser text; Penny texts them when it is live. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';
       } catch {
         this.d.log.warn({ bot: bot.slug }, 'connector tools unavailable, continuing without them');
       }
@@ -218,7 +221,7 @@ export class Crew {
       const run = () =>
         generateText({
           model: this.d.chat,
-          system: `${bot.soulMd}\n\nNow: ${describeNow(this.d.timeZone ?? DEFAULT_TIME_ZONE, (this.d.now ?? (() => new Date()))())}. Assume this time zone unless the user says otherwise.\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}${opts.enrolled === false ? '\nThis user has not set up approvals yet (no app needed; Penny already sent them a setup link). Chat, read and life tasks work normally. If something needs approval, say Penny sent a setup link to tap first, then ask them to try again.' : ''}\n${HOUSE_RULES}`,
+          system: `${bot.soulMd}\n\nNow: ${describeNow(this.d.timeZone ?? DEFAULT_TIME_ZONE, (this.d.now ?? (() => new Date()))())}. Assume this time zone unless the user says otherwise.\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}${opts.enrolled === false ? '\nThis user has not turned on approvals yet (no app needed). Chat, reading, reminders and bills work normally, so just help. When something needs approval, try it anyway: Penny texts them the setup link automatically; tell them in one line to tap it and ask again. Never paste a setup link yourself.' : ''}\n${HOUSE_RULES}`,
           messages: buildHistoryMessages(history, userText),
           tools,
           stopWhen: stepCountIs(5),

@@ -36,6 +36,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'remind_me',
       'list_reminders',
       'cancel_reminder',
+      'send_setup_link',
     ],
   },
   {
@@ -49,6 +50,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'propose_invest',
       'remember',
       'recall',
+      'send_setup_link',
     ],
   },
   { slug: 'guard', name: 'Guard', toolIds: ['check_guard', 'recall'] },
@@ -67,6 +69,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'remind_me',
       'list_reminders',
       'cancel_reminder',
+      'send_setup_link',
     ],
   },
   {
@@ -86,6 +89,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'close_bill',
       'remind_me',
       'list_reminders',
+      'send_setup_link',
     ],
   },
   {
@@ -101,6 +105,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'remind_me',
       'list_reminders',
       'cancel_reminder',
+      'send_setup_link',
     ],
   },
 ];
@@ -209,7 +214,7 @@ export class BotService {
       return {
         ok: false,
         reasons: [
-          'Set up approvals first (tap the setup link Penny sent you), then I can make this bot.',
+          "Approvals aren't set up yet. Penny just texted them a setup link: once they've tapped it, I can make this bot.",
         ],
       };
     await this.d.bots.insert({ ...base, status: 'pending_approval', approvalId: card.approvalId });

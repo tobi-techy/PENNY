@@ -36,6 +36,13 @@
       "when": 1794168217741,
       "tag": "0004_bills_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794169088366,
+      "tag": "0005_connect_watches",
+      "breakpoints": true
     }
   ]
 }

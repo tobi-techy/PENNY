@@ -103,6 +103,8 @@ export type ApprovalDeps = {
   /** called when a create_bot approval settles */
   onBotApproved?: (approvalId: string) => Promise<void>;
   onBotDeclined?: (approvalId: string) => Promise<void>;
+  /** a user without approvals set up tried something that needs one (texts the setup link) */
+  onNeedsSetup?: (userId: string, space: SpaceRef) => Promise<void>;
   /** called when a pay_bill approval settles on chain (marks the bill paid) */
   onBillPaid?: (userId: string, billId: string) => Promise<void>;
 };
@@ -193,10 +195,23 @@ function titleFor(plan: IntentPlan): string {
   }
 }
 
+export const NEEDS_SETUP_REASON =
+  "Approvals aren't set up yet. Penny just texted them a setup link: tell them to tap it, then ask again.";
+
 export class ApprovalService {
   private cards = new Map<string, { handle: CardHandle; space: SpaceRef; card: ApprovalCard }>();
 
   constructor(private readonly d: ApprovalDeps) {}
+
+  /** No device yet: send the setup link (throttled by onboarding) and say so. */
+  private async needsSetup(userId: string, space: SpaceRef): Promise<CreateResult> {
+    try {
+      await this.d.onNeedsSetup?.(userId, space);
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).name }, 'setup link send failed');
+    }
+    return { decision: 'needs_more_info', reasons: [NEEDS_SETUP_REASON] };
+  }
 
   private cardUrl(id: string, token: string) {
     // token in the fragment so it never hits server/proxy logs on open
@@ -271,10 +286,7 @@ export class ApprovalService {
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
-      return {
-        decision: 'needs_more_info',
-        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
-      };
+      return this.needsSetup(userId, input.space);
     }
     const extra: Partial<GuardContext> = {};
     if (input.quote) extra.quote = input.quote;
@@ -436,10 +448,7 @@ export class ApprovalService {
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
-      return {
-        decision: 'needs_more_info',
-        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
-      };
+      return this.needsSetup(userId, input.space);
     }
     const provisional: MoneyPlan = {
       kind: 'invest',
@@ -562,7 +571,10 @@ export class ApprovalService {
   }): Promise<{ approvalId: string; cardToken: string; url: string } | null> {
     const user = await this.d.users.byId(input.userId);
     const device = user ? await this.d.users.activeDevice(input.userId) : null;
-    if (!user?.accountId || !device) return null;
+    if (!user?.accountId || !device) {
+      await this.needsSetup(input.userId, input.space);
+      return null;
+    }
     const now = this.d.now();
     const { token, hash } = issueCardToken();
     const id = newId('apr');
@@ -620,10 +632,7 @@ export class ApprovalService {
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
-      return {
-        decision: 'needs_more_info',
-        reasons: ['Set up approvals first: tap the setup link Penny sent you, then ask again.'],
-      };
+      return this.needsSetup(userId, input.space);
     }
     if (!this.d.executeWrite) {
       return { decision: 'needs_more_info', reasons: ['That app is not connected yet.'] };

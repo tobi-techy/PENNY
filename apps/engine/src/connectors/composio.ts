@@ -28,8 +28,13 @@ export interface ConnectorPort {
   readonly name: string;
   /** AI SDK tools for this user + bot, already gated. */
   toolsFor(userId: string, botSlug: string): Promise<ToolSet>;
-  /** Connected already, or a Connect Link for the user to authorize. */
-  connect(userId: string, toolkit: string): Promise<ConnectResult>;
+  /**
+   * Connected already, or a Connect Link for the user to authorize. `callbackUrl`
+   * is where the browser lands after authorizing.
+   */
+  connect(userId: string, toolkit: string, opts?: { callbackUrl?: string }): Promise<ConnectResult>;
+  /** Is this app connected and active for the user right now? Never throws. */
+  isConnected(userId: string, toolkit: string): Promise<boolean>;
   /** Execute one read tool directly (deterministic Penny tools). */
   executeRead(
     userId: string,
@@ -257,7 +262,7 @@ const FIREWALL_HOOKS = [
 
 type SessionLike = {
   tools(): Promise<ToolSet>;
-  authorize(toolkit: string): Promise<unknown>;
+  authorize(toolkit: string, options?: { callbackUrl?: string }): Promise<unknown>;
   toolkits(
     opts?: unknown,
   ): Promise<{ items: { slug: string; connection?: { isActive?: boolean } }[] }>;
@@ -310,7 +315,11 @@ export class ComposioConnector implements ConnectorPort {
     return gateComposioTools(await (await session).tools());
   }
 
-  async connect(userId: string, toolkit: string): Promise<ConnectResult> {
+  async connect(
+    userId: string,
+    toolkit: string,
+    opts: { callbackUrl?: string } = {},
+  ): Promise<ConnectResult> {
     try {
       const session = this.sessionFor(userId, 'penny');
       if (!session) return { status: 'unavailable', toolkit, reason: 'connectors off' };
@@ -318,13 +327,27 @@ export class ComposioConnector implements ConnectorPort {
       const state = await s.toolkits();
       const existing = state.items.find((i) => i.slug === toolkit);
       if (existing?.connection?.isActive) return { status: 'connected', toolkit };
-      const req = (await s.authorize(toolkit)) as Record<string, unknown>;
+      const req = (await s.authorize(
+        toolkit,
+        opts.callbackUrl ? { callbackUrl: opts.callbackUrl } : undefined,
+      )) as Record<string, unknown>;
       const redirectUrl = String(req.redirectUrl ?? req.redirect_url ?? req.url ?? '');
       if (!redirectUrl)
         return { status: 'unavailable', toolkit, reason: 'no connect link returned' };
       return { status: 'link', toolkit, redirectUrl };
     } catch (e) {
       return { status: 'unavailable', toolkit, reason: (e as Error).name };
+    }
+  }
+
+  async isConnected(userId: string, toolkit: string): Promise<boolean> {
+    try {
+      const session = this.sessionFor(userId, 'penny');
+      if (!session) return false;
+      const state = await (await session).toolkits();
+      return Boolean(state.items.find((i) => i.slug === toolkit)?.connection?.isActive);
+    } catch {
+      return false;
     }
   }
 
@@ -379,10 +402,21 @@ export class FakeConnector implements ConnectorPort {
     } as ToolSet);
   }
 
-  async connect(_userId: string, toolkit: string): Promise<ConnectResult> {
+  readonly callbackUrls: string[] = [];
+
+  async connect(
+    _userId: string,
+    toolkit: string,
+    opts: { callbackUrl?: string } = {},
+  ): Promise<ConnectResult> {
     if (this.connected.has(toolkit)) return { status: 'connected', toolkit };
     this.connected.add(toolkit);
+    if (opts.callbackUrl) this.callbackUrls.push(opts.callbackUrl);
     return { status: 'link', toolkit, redirectUrl: `https://connect.example/${toolkit}` };
+  }
+
+  async isConnected(_userId: string, toolkit: string): Promise<boolean> {
+    return this.connected.has(toolkit);
   }
 
   async executeRead(

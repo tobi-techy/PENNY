@@ -31,11 +31,13 @@ import {
 import { handleInbound } from './inbound.ts';
 import type { Logger } from './lib/logger.ts';
 import type { InvestPort } from './market/invest.ts';
+import { OnboardingService } from './onboarding.ts';
 import type { ChainPort } from './ports/chain.ts';
 import type { MessagingPort } from './ports/messaging.ts';
 import { ApprovalsRepo } from './repo/approvals.ts';
 import { BillsRepo, RemindersRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
+import { ConnectWatchesRepo } from './repo/connect-watches.ts';
 import {
   AttestChallengesRepo,
   GuardDecisionsRepo,
@@ -75,6 +77,14 @@ export type EngineDeps = {
   demoBillerAccount?: string;
 };
 
+const APP_LABELS: Record<string, string> = { gmail: 'Gmail', github: 'GitHub' };
+
+const CONNECTED_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{app}} connected · Penny</title>
+<style>body{font-family:-apple-system,system-ui,sans-serif;max-width:28rem;margin:18vh auto;padding:0 1.5rem;color:#111;line-height:1.5}h1{font-size:1.5rem;margin:0 0 .5rem}p{color:#555}</style>
+</head><body><h1>{{app}} connected ✓</h1><p>You can close this and go back to Messages. Penny will text you in a moment.</p></body></html>`;
+
 export function createEngine(d: EngineDeps) {
   const now = d.now ?? (() => new Date());
   const repos = {
@@ -90,6 +100,7 @@ export function createEngine(d: EngineDeps) {
     guardDecisions: new GuardDecisionsRepo(d.db),
     bills: new BillsRepo(d.db),
     reminders: new RemindersRepo(d.db),
+    connectWatches: new ConnectWatchesRepo(d.db),
   };
   const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
   const mood = new MoodService(repos.moods);
@@ -139,13 +150,22 @@ export function createEngine(d: EngineDeps) {
       : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
     onBillPaid: (userId, billId) => bills.markPaid(userId, billId),
+    onNeedsSetup: async (userId, space) => {
+      await onboarding.sendSetupLink(userId, space);
+    },
     onBotDeclined: (id) => botService.onApprovalDeclined(id),
   });
-  const enroll = new EnrollService(repos.users, d.chain, now, {
-    ...(d.attestAppId ? { appId: d.attestAppId } : {}),
-    require: d.attestRequire ?? false,
-    challenges: repos.attestChallenges,
-  });
+  const enroll: EnrollService = new EnrollService(
+    repos.users,
+    d.chain,
+    now,
+    {
+      ...(d.attestAppId ? { appId: d.attestAppId } : {}),
+      require: d.attestRequire ?? false,
+      challenges: repos.attestChallenges,
+    },
+    (userId): Promise<void> => onboarding.onEnrolled(userId),
+  );
   const bills = new BillsService({
     bills: repos.bills,
     reminders: repos.reminders,
@@ -157,6 +177,18 @@ export function createEngine(d: EngineDeps) {
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
     log: d.log,
     timeZone,
+    now,
+  });
+  const onboarding: OnboardingService = new OnboardingService({
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    enroll,
+    watches: repos.connectWatches,
+    ...(d.connectors ? { connectors: d.connectors } : {}),
+    bills,
+    publicBaseUrl: d.publicBaseUrl,
+    log: d.log,
     now,
   });
   const crew = new Crew({
@@ -179,6 +211,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     ...(d.privacy ? { privacy: d.privacy } : {}),
     bills,
+    onboarding,
     timeZone,
     now,
   });
@@ -216,17 +249,22 @@ export function createEngine(d: EngineDeps) {
     return new Response(await readFile(file), { headers: { 'content-type': type } });
   });
 
+  // Where the browser lands after connecting an app. Static: Penny confirms in the thread.
+  app.get('/connected', (c) => {
+    const label = APP_LABELS[c.req.query('app') ?? ''] ?? 'Your app';
+    return c.html(CONNECTED_HTML.replaceAll('{{app}}', label));
+  });
+
   app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
   const inboundDeps = {
     users: repos.users,
     messages: repos.messages,
     crew,
-    enroll,
+    onboarding,
     messaging: d.messaging,
     userLimiter,
     log: d.log,
-    publicBaseUrl: d.publicBaseUrl,
   };
   app.route(
     '/',
@@ -265,6 +303,9 @@ export function createEngine(d: EngineDeps) {
             scanBills: async () => {
               await bills.scanAll();
             },
+            checkConnections: async () => {
+              await onboarding.checkConnections();
+            },
           }
         : {}),
     }),
@@ -278,6 +319,7 @@ export function createEngine(d: EngineDeps) {
     services: {
       approvals,
       bills,
+      onboarding,
       bots: botService,
       crew,
       enroll,

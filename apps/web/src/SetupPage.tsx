@@ -92,7 +92,7 @@ export function SetupPage() {
         </button>
         {note && <p className={state === 'error' ? 'err' : ''}>{note}</p>}
         {state === 'done' && (
-          <p className="ok">You're set. Go back to Messages and ask Penny again.</p>
+          <p className="ok">You're set ✓ Penny just texted you. Head back to Messages.</p>
         )}
       </div>
     </main>

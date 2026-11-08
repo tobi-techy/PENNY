@@ -175,23 +175,44 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'connect_app',
     description:
-      'Check whether an outside app (gmail, github) is connected for this user. If not, returns a connect link to share with the user verbatim. After they authorize, retry the original task.',
+      'Connect an outside app (gmail, github) for this user. If already connected, says so. Otherwise returns a link: share tellUser verbatim. Penny watches for the connection and texts the user herself when it is live (for gmail she also checks for bills), so do not ask them to say done.',
     risk: 'read',
     input: z.object({ toolkit: z.enum(['gmail', 'github']) }).strict(),
     execute: async (ctx, i) => {
       if (!ctx.connectors) return { ok: false, error: 'connectors not configured' };
-      const r = await ctx.connectors.connect(ctx.userId, i.toolkit);
+      const r = await ctx.connectors.connect(
+        ctx.userId,
+        i.toolkit,
+        ctx.onboarding ? { callbackUrl: ctx.onboarding.connectedUrl(i.toolkit) } : {},
+      );
       if (r.status === 'connected') return { ok: true, connected: true, toolkit: i.toolkit };
-      if (r.status === 'link')
+      if (r.status === 'link') {
+        await ctx.onboarding?.watchConnect(ctx.userId, i.toolkit);
+        const what =
+          i.toolkit === 'gmail'
+            ? "i only read, and nothing gets sent from it without your ok. i'll text you the moment it's connected."
+            : "i'll text you the moment it's connected.";
         return {
           ok: false,
           connected: false,
           toolkit: i.toolkit,
           connectUrl: r.redirectUrl,
-          tellUser: `tap this to connect your ${i.toolkit}: ${r.redirectUrl} - then say done and I will retry.`,
+          tellUser: `tap to connect your ${i.toolkit}: ${r.redirectUrl}\n${what}`,
         };
+      }
       return { ok: false, connected: false, error: r.reason };
     },
+  });
+  add({
+    id: 'send_setup_link',
+    description:
+      'Text the user a fresh link to turn on approvals (no app to install). Penny already sends it automatically when an action needs approval; use this when they ask for the link again or say it expired.',
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) =>
+      ctx.onboarding
+        ? ctx.onboarding.sendSetupLink(ctx.userId, ctx.space, { force: true })
+        : { sent: false },
   });
   add({
     id: 'propose_write',
