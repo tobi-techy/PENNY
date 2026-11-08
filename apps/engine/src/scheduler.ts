@@ -74,6 +74,10 @@ export type SchedulerJobDeps = {
   pruneWebhookEvents: (olderThan: Date) => Promise<void>;
   pruneIdempotency: (olderThan: Date) => Promise<void>;
   weeklyReflection?: (now: Date) => Promise<void>;
+  /** Text due reminders (user-set and bill due dates). */
+  sendReminders?: () => Promise<void>;
+  /** Check connected inboxes for new bills and tell the user. */
+  scanBills?: () => Promise<void>;
 };
 
 /** Default Phase 1 jobs. Weekly reflection is weekly; the rest are hygiene. */
@@ -102,6 +106,12 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       everyMs: 30_000,
       run: async () => void (await d.refreshRelayed?.()),
     });
+  }
+  if (d.sendReminders) {
+    jobs.push({ name: 'send_reminders', everyMs: 60_000, run: d.sendReminders });
+  }
+  if (d.scanBills) {
+    jobs.push({ name: 'scan_bills', everyMs: 6 * HOUR, run: d.scanBills });
   }
   if (d.weeklyReflection) {
     // Checked hourly; the service itself only reflects users not reflected in 7 days.

@@ -35,7 +35,12 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     d.log.warn({ userId: user.id }, 'user rate limited');
     return;
   }
-  const conversationId = await d.users.conversationFor(user.id, evt.space.id, evt.space.platform);
+  const conversationId = await d.users.conversationFor(
+    user.id,
+    evt.space.id,
+    evt.space.platform,
+    evt.space.phone ?? null,
+  );
 
   if (m.content.type !== 'text' || typeof m.content.text !== 'string') {
     // reactions, attachments etc: ignore quietly in v0.1

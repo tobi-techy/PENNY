@@ -77,9 +77,14 @@ export const conversations = pgTable(
       .references(() => users.id),
     spaceId: text('space_id').notNull(),
     platform: text('platform').notNull(),
+    /** Penny line the user texts (Spectrum space phone), so proactive texts go out on it. */
+    phone: text('phone'),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex('conversations_space_uq').on(t.spaceId)],
+  (t) => [
+    uniqueIndex('conversations_space_uq').on(t.spaceId),
+    index('conversations_user_idx').on(t.userId, t.createdAt),
+  ],
 );
 
 export const messages = pgTable(
@@ -300,6 +305,63 @@ export const attestChallenges = pgTable('attest_challenges', {
   createdAt: createdAt(),
 });
 
+/**
+ * Bills Mail found in the user's inbox. One row per source email (deduped by
+ * source_key). Amount and due date are parsed deterministically from the email,
+ * never by the model. biller_id points at the fixed registry in bills/billers.ts.
+ */
+export const bills = pgTable(
+  'bills',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    sourceKey: text('source_key').notNull(), // gmail message id, or a hash of sender|subject|date
+    billerId: text('biller_id'),
+    payeeName: text('payee_name').notNull(),
+    subject: text('subject').notNull(),
+    amount: text('amount'), // decimal string, e.g. "18400" or "12.50"
+    currency: text('currency', { enum: ['NGN', 'USD'] }),
+    dueOn: text('due_on'), // YYYY-MM-DD
+    receivedAt: ts('received_at'),
+    status: text('status', { enum: ['open', 'paid', 'dismissed'] })
+      .notNull()
+      .default('open'),
+    notifiedAt: ts('notified_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('bills_user_source_uq').on(t.userId, t.sourceKey),
+    index('bills_user_status_idx').on(t.userId, t.status),
+  ],
+);
+
+/** Things Penny texts the user about later: user-asked reminders and bill due dates. */
+export const reminders = pgTable(
+  'reminders',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    text: text('text').notNull(),
+    dueAt: ts('due_at').notNull(),
+    source: text('source', { enum: ['user', 'bill'] }).notNull(),
+    billId: text('bill_id'),
+    status: text('status', { enum: ['pending', 'sent', 'cancelled', 'failed'] })
+      .notNull()
+      .default('pending'),
+    sentAt: ts('sent_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('reminders_due_idx').on(t.status, t.dueAt),
+    index('reminders_user_idx').on(t.userId, t.status),
+    uniqueIndex('reminders_bill_uq').on(t.billId),
+  ],
+);
+
 export const schema = {
   users,
   devices,
@@ -318,4 +380,6 @@ export const schema = {
   soulsChangelog,
   idempotencyKeys,
   webhookEvents,
+  bills,
+  reminders,
 };

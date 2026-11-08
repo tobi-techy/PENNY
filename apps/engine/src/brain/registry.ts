@@ -2,6 +2,7 @@ import type { ToolRisk } from '@penny/shared';
 import { type Tool, tool } from 'ai';
 import type { z } from 'zod';
 import type { ApprovalService } from '../approvals/service.ts';
+import type { BillsService } from '../bills/service.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { ToolInfo } from '../guard/bot-policy.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
@@ -34,6 +35,7 @@ export type ToolContext = {
   space: SpaceRef;
   approvals: ApprovalService;
   connectors?: ConnectorPort;
+  bills?: BillsService;
   memory: MemoryService;
   mood: MoodService;
   market: MarketPort;

@@ -5,13 +5,11 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { writeFacts } from '../src/approvals/write-facts.ts';
 import {
-  billQuery,
   blockedSlugIn,
   blockedWriteResult,
   FakeConnector,
   gateComposioTools,
   isReadSlug,
-  parseBillEmails,
   toolkitsForBot,
   writeTargetProblem,
 } from '../src/connectors/composio.ts';
@@ -92,28 +90,6 @@ describe('fail-closed gate classification', () => {
     ).toBeNull();
     expect(blockedSlugIn('COMPOSIO_SEARCH_TOOLS', { query: 'send email' })).toBeNull();
     expect(blockedSlugIn('GMAIL_SEND_EMAIL', {})).toBe('GMAIL_SEND_EMAIL');
-  });
-  test('billQuery is subject-scoped with exclusions; parseBillEmails extracts amounts', () => {
-    const q = billQuery(new Date('2026-11-05T00:00:00Z'));
-    expect(q).toContain('subject:(');
-    expect(q).toContain('-from:notifications@github.com');
-    expect(q).toContain('newer:2026/08/07');
-    const bills = parseBillEmails({
-      data: {
-        messages: [
-          {
-            subject: 'IKEDC bill due Friday',
-            sender: 'IKEDC',
-            messageTimestamp: '2026-11-04',
-            snippet: 'Total ₦18,400 due',
-          },
-          { subject: '', sender: 'x' },
-          'junk',
-        ],
-      },
-    });
-    expect(bills).toHaveLength(1);
-    expect(bills[0]?.amount).toBe('₦18,400');
   });
 });
 

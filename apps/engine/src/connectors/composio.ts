@@ -230,47 +230,6 @@ export function gateComposioTools(tools: ToolSet): ToolSet {
   return out;
 }
 
-/** Gmail query tuned live: subject-scoped, noise senders excluded, read mail included. */
-export function billQuery(now = new Date()): string {
-  const since = new Date(now.getTime() - 90 * 24 * 60 * 60_000);
-  const ymd = `${since.getUTCFullYear()}/${String(since.getUTCMonth() + 1).padStart(2, '0')}/${String(since.getUTCDate()).padStart(2, '0')}`;
-  return `newer:${ymd} subject:(bill OR invoice OR payment OR receipt OR due OR statement) -from:notifications@github.com -from:newsletter -from:substack`;
-}
-
-export type BillEmail = {
-  subject: string;
-  sender: string;
-  date: string;
-  amount: string | null;
-  snippet: string;
-};
-
-const AMOUNT_RE = /(?:\$|₦|NGN\s?|USD\s?)(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)/;
-
-/** Deterministic bill extraction from a GMAIL_FETCH_EMAILS result (metadata fields only). */
-export function parseBillEmails(raw: unknown): BillEmail[] {
-  const data = (raw as { data?: unknown })?.data ?? raw;
-  const messages = (data as { messages?: unknown })?.messages;
-  if (!Array.isArray(messages)) return [];
-  const out: BillEmail[] = [];
-  for (const m of messages.slice(0, 20)) {
-    if (!m || typeof m !== 'object') continue;
-    const r = m as Record<string, unknown>;
-    const subject = String(r.subject ?? '').slice(0, 120);
-    if (!subject) continue;
-    const snippet = String(r.snippet ?? r.preview ?? '').slice(0, 240);
-    const amount = `${subject} ${snippet}`.match(AMOUNT_RE)?.[0] ?? null;
-    out.push({
-      subject,
-      sender: String(r.sender ?? r.from ?? '').slice(0, 80),
-      date: String(r.messageTimestamp ?? r.date ?? '').slice(0, 32),
-      amount,
-      snippet,
-    });
-  }
-  return out;
-}
-
 const FIREWALL_HOOKS = [
   {
     id: 'no_secrets_out',

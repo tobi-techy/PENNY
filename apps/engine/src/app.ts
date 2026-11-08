@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import { type Context, Hono } from 'hono';
 import { ApprovalService, type Clock } from './approvals/service.ts';
+import { BillsService } from './bills/service.ts';
+import { DEFAULT_TIME_ZONE } from './bills/time.ts';
 import type { PrivacyGate } from './brain/attestation.ts';
 import { BotService } from './brain/bots.ts';
 import { Crew } from './brain/crew.ts';
@@ -31,6 +33,7 @@ import type { InvestPort } from './market/invest.ts';
 import type { ChainPort } from './ports/chain.ts';
 import type { MessagingPort } from './ports/messaging.ts';
 import { ApprovalsRepo } from './repo/approvals.ts';
+import { BillsRepo, RemindersRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import {
   AttestChallengesRepo,
@@ -65,6 +68,8 @@ export type EngineDeps = {
   now?: Clock;
   /** NEAR AI TEE attestation (NEARAI_ATTESTATION warn|enforce); absent = off. */
   privacy?: PrivacyGate;
+  /** User-facing IANA time zone for reminders and "now" (PENNY_TIMEZONE). */
+  timeZone?: string;
 };
 
 export function createEngine(d: EngineDeps) {
@@ -80,7 +85,10 @@ export function createEngine(d: EngineDeps) {
     attestChallenges: new AttestChallengesRepo(d.db),
     idempotency: new IdempotencyRepo(d.db),
     guardDecisions: new GuardDecisionsRepo(d.db),
+    bills: new BillsRepo(d.db),
+    reminders: new RemindersRepo(d.db),
   };
+  const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
   const mood = new MoodService(repos.moods);
   const memory = new MemoryService(d.db, d.embedder);
 
@@ -134,6 +142,17 @@ export function createEngine(d: EngineDeps) {
     require: d.attestRequire ?? false,
     challenges: repos.attestChallenges,
   });
+  const bills = new BillsService({
+    bills: repos.bills,
+    reminders: repos.reminders,
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    ...(d.connectors ? { connectors: d.connectors } : {}),
+    log: d.log,
+    timeZone,
+    now,
+  });
   const crew = new Crew({
     router: d.models.router,
     chat: d.models.chat,
@@ -153,6 +172,9 @@ export function createEngine(d: EngineDeps) {
     tracer: d.tracer ?? noopTracer,
     log: d.log,
     ...(d.privacy ? { privacy: d.privacy } : {}),
+    bills,
+    timeZone,
+    now,
   });
 
   const ipLimiter = new RateLimiter(d.limits.perIpPerMin, 60_000);
@@ -229,6 +251,16 @@ export function createEngine(d: EngineDeps) {
       weeklyReflection: async (now) => {
         await reflection.reflectWeekly(now);
       },
+      sendReminders: async () => {
+        await bills.sendDue();
+      },
+      ...(d.connectors
+        ? {
+            scanBills: async () => {
+              await bills.scanAll();
+            },
+          }
+        : {}),
     }),
     d.log,
     now,
@@ -237,7 +269,17 @@ export function createEngine(d: EngineDeps) {
   return {
     app,
     repos,
-    services: { approvals, bots: botService, crew, enroll, mood, memory, reflection, scheduler },
+    services: {
+      approvals,
+      bills,
+      bots: botService,
+      crew,
+      enroll,
+      mood,
+      memory,
+      reflection,
+      scheduler,
+    },
   };
 }
 

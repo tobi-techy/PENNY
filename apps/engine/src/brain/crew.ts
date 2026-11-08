@@ -1,6 +1,8 @@
 import { generateText, type LanguageModel, stepCountIs, type Tool, tool } from 'ai';
 import { z } from 'zod';
 import type { ApprovalService } from '../approvals/service.ts';
+import type { BillsService } from '../bills/service.ts';
+import { DEFAULT_TIME_ZONE, describeNow } from '../bills/time.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
@@ -49,6 +51,10 @@ export type CrewDeps = {
   log: Logger;
   /** NEAR AI TEE attestation gate (NEARAI_ATTESTATION); absent or mode off = no change. */
   privacy?: PrivacyGate;
+  bills?: BillsService;
+  /** User-facing time zone for "now" and reminders (default Africa/Lagos). */
+  timeZone?: string;
+  now?: () => Date;
 };
 
 /** Present only when NEARAI_ATTESTATION is warn or enforce. */
@@ -61,8 +67,8 @@ export type CrewReply = {
   privacy?: CrewPrivacy;
 };
 
-/** Registry tools that never touch money or mail; everything else is gated. */
-const UNGATED_READ_EXCEPTIONS = new Set(['find_bills']);
+/** Read tools that still touch mail data, so they are gated like money/mail tools. */
+const UNGATED_READ_EXCEPTIONS = new Set(['find_bills', 'list_bills', 'close_bill']);
 
 export type HistoryMessage = { direction: 'inbound' | 'outbound'; text: string };
 
@@ -179,6 +185,7 @@ export class Crew {
       space,
       approvals: this.d.approvals,
       ...(this.d.connectors ? { connectors: this.d.connectors } : {}),
+      ...(this.d.bills ? { bills: this.d.bills } : {}),
       memory: this.d.memory,
       mood: this.d.mood,
       market: this.d.market,
@@ -211,7 +218,7 @@ export class Crew {
       const run = () =>
         generateText({
           model: this.d.chat,
-          system: `${bot.soulMd}\n\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}${opts.enrolled === false ? '\nThis user has not set up approvals yet (no app needed; Penny already sent them a setup link). Chat, read and life tasks work normally. If something needs approval, say Penny sent a setup link to tap first, then ask them to try again.' : ''}\n${HOUSE_RULES}`,
+          system: `${bot.soulMd}\n\nNow: ${describeNow(this.d.timeZone ?? DEFAULT_TIME_ZONE, (this.d.now ?? (() => new Date()))())}. Assume this time zone unless the user says otherwise.\nCurrent mood: ${mood}.${formatMemories(recalled)}${connectorNote}${opts.enrolled === false ? '\nThis user has not set up approvals yet (no app needed; Penny already sent them a setup link). Chat, read and life tasks work normally. If something needs approval, say Penny sent a setup link to tap first, then ask them to try again.' : ''}\n${HOUSE_RULES}`,
           messages: buildHistoryMessages(history, userText),
           tools,
           stopWhen: stepCountIs(5),

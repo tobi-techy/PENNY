@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidTimeZone } from './bills/time.ts';
 
 const flag = z.enum(['0', '1']);
 const optionalStr = z
@@ -17,6 +18,11 @@ const BaseEnv = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   PUBLIC_BASE_URL: z.url().default('http://localhost:8787'),
+  /** IANA zone for "now" in prompts and reminder times (bill reminders at 09:00 local). */
+  PENNY_TIMEZONE: z
+    .string()
+    .default('Africa/Lagos')
+    .refine(isValidTimeZone, 'must be an IANA time zone like Africa/Lagos'),
   DATABASE_URL: optionalStr,
 
   SPECTRUM_PROJECT_ID: optionalStr,

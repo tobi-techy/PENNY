@@ -12,7 +12,6 @@ import {
   WritePlan,
 } from '@penny/shared';
 import { z } from 'zod';
-import { billQuery, parseBillEmails } from '../connectors/composio.ts';
 import { INVEST_ASSETS } from '../market/invest.ts';
 import type { MarketPort, ToolContext, ToolDef } from './registry.ts';
 import { ToolRegistry } from './registry.ts';
@@ -107,28 +106,71 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'find_bills',
     description:
-      'Find bills, invoices and payment notices in connected Gmail (read-only). If it says not connected, call connect_app for gmail and share the link.',
+      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail and share the link.",
     risk: 'read',
     input: empty,
     execute: async (ctx) => {
-      if (!ctx.connectors) return { ok: false, error: 'email not connected yet' };
-      try {
-        const raw = await ctx.connectors.executeRead(
-          ctx.userId,
-          ctx.bot.slug,
-          'GMAIL_FETCH_EMAILS',
-          {
-            query: billQuery(),
-            max_results: 10,
-            verbose: false,
-          },
-        );
-        const bills = parseBillEmails(raw);
-        return { ok: true, count: bills.length, bills };
-      } catch (e) {
-        return { ok: false, error: (e as Error).name, hint: 'try connect_app gmail' };
-      }
+      if (!ctx.bills || !ctx.connectors) return { ok: false, error: 'email not connected yet' };
+      const r = await ctx.bills.scan(ctx.userId, { interactive: true });
+      if (!r.ok) return { ok: false, error: r.error, hint: 'try connect_app gmail' };
+      const open = await ctx.bills.open(ctx.userId);
+      const fresh = new Set(r.newBills.map((b) => b.id));
+      return {
+        ok: true,
+        newCount: r.newBills.length,
+        bills: open.map((b) => ({ ...b, isNew: fresh.has(b.billId) })),
+      };
     },
+  });
+  add({
+    id: 'list_bills',
+    description:
+      'List open bills Penny already knows about (no inbox read). Soonest due first. Use find_bills to check the inbox for new ones.',
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) =>
+      ctx.bills ? { ok: true, bills: await ctx.bills.open(ctx.userId) } : { ok: false },
+  });
+  add({
+    id: 'close_bill',
+    description:
+      'Mark a bill as paid (the user says they paid it elsewhere) or dismissed (not a real bill / not theirs). Cancels its reminder. Only when the user says so.',
+    risk: 'read', // the user's own bill list, no outside effect
+    input: z
+      .object({ billId: z.string().min(1).max(64), status: z.enum(['paid', 'dismissed']) })
+      .strict(),
+    execute: async (ctx, i) =>
+      ctx.bills ? ctx.bills.close(ctx.userId, i.billId, i.status) : { ok: false },
+  });
+  add({
+    id: 'remind_me',
+    description:
+      "Set a reminder: Penny texts the user at that time. `at` is an ISO 8601 date-time with offset (e.g. 2026-11-14T09:00:00+01:00), worked out from the current time in your instructions and the user's words. Ask if the time is unclear. Text is short, in the user's words.",
+    risk: 'read', // texts the user themselves, nobody else
+    input: z
+      .object({
+        text: z.string().min(1).max(280),
+        at: z.iso.datetime({ offset: true }),
+      })
+      .strict(),
+    execute: async (ctx, i) =>
+      ctx.bills ? ctx.bills.remind(ctx.userId, i.text, new Date(i.at)) : { ok: false },
+  });
+  add({
+    id: 'list_reminders',
+    description: "List the user's upcoming reminders (theirs and bill due-date ones).",
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) =>
+      ctx.bills ? { ok: true, reminders: await ctx.bills.reminders(ctx.userId) } : { ok: false },
+  });
+  add({
+    id: 'cancel_reminder',
+    description: 'Cancel an upcoming reminder by reminderId (from list_reminders).',
+    risk: 'read',
+    input: z.object({ reminderId: z.string().min(1).max(64) }).strict(),
+    execute: async (ctx, i) =>
+      ctx.bills ? ctx.bills.cancelReminder(ctx.userId, i.reminderId) : { ok: false },
   });
   add({
     id: 'connect_app',

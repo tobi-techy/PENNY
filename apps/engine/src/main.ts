@@ -164,6 +164,7 @@ const engine = createEngine({
   attestRequire: env.PENNY_ENV === 'mainnet',
   log,
   publicBaseUrl: env.PUBLIC_BASE_URL,
+  timeZone: env.PENNY_TIMEZONE,
   ...(env.PENNY_ENV === 'mainnet'
     ? {
         mainnetMaxPerTxUsd: env.PENNY_MAINNET_MAX_PER_TX_USD,
