@@ -15,6 +15,7 @@ public enum PennyError: Error, Equatable, LocalizedError {
     case biometryUnavailable
     case notInteractive
     case userCancelled
+    case frozen
 
     /// Plain words for the card. Never includes tokens, keys or request bodies.
     public var errorDescription: String? {
@@ -27,7 +28,7 @@ public enum PennyError: Error, Equatable, LocalizedError {
         case .http: return "Penny's server had a problem. Try again in a moment."
         case .keyRevoked: return "This iPhone was removed from Penny. Link it again with a new code."
         case .network: return "No connection. Try again when you're online."
-        case .expired: return "The quote expired. Ask Penny for a fresh one."
+        case .expired: return "This card ran out of time. Tap Get a new card."
         case .notPending: return "This request was already handled."
         case .wrongAccount: return "This card is for a different Penny account."
         case .noDeviceKey: return "This iPhone isn't linked to Penny yet. Open the Penny app to link it."
@@ -36,6 +37,7 @@ public enum PennyError: Error, Equatable, LocalizedError {
         case .biometryUnavailable: return "Face ID is off or locked. Turn it on in Settings to approve."
         case .notInteractive: return "Open the card to approve with Face ID."
         case .userCancelled: return "Cancelled. Nothing was sent."
+        case .frozen: return "Penny is frozen. Text unfreeze to start again."
         }
     }
 }

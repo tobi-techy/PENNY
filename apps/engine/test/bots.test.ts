@@ -4,7 +4,15 @@ import { sql } from 'drizzle-orm';
 import { BUILT_IN_BOTS } from '../src/brain/bots.ts';
 import { createRegistry } from '../src/brain/tools.ts';
 import type { BotRow } from '../src/repo/bots.ts';
-import { enrolledUser, idemKey, makeEngine, scriptedModel, type TestEngine } from './helpers.ts';
+import {
+  enrolledUser,
+  idemKey,
+  makeEngine,
+  scriptedModel,
+  signBody,
+  type TestEngine,
+  tokenFromUrl,
+} from './helpers.ts';
 
 let t: TestEngine;
 let u: Awaited<ReturnType<typeof enrolledUser>>;
@@ -146,7 +154,7 @@ describe('create_bot: write tools -> Guard + Face ID card', () => {
     expect(await activeSlugs()).not.toContain('x-manager');
 
     const card = t.messaging.cards.at(-1)?.card;
-    const token = card?.url.split('#t=')[1] ?? '';
+    const token = tokenFromUrl(card?.url);
     const appr = await t.engine.app.request(`/v1/approvals/${r.approvalId}`, {
       headers: { authorization: `Card ${token}` },
     });
@@ -154,30 +162,43 @@ describe('create_bot: write tools -> Guard + Face ID card', () => {
     expect(a.kind).toBe('create_bot');
     expect(a.actions).toEqual([]);
 
-    const submit = (body: unknown) =>
-      t.engine.app.request(`/v1/approvals/${r.approvalId}/submit`, {
+    const sign = (id: string, tok: string, body: unknown) =>
+      t.engine.app.request(`/v1/approvals/${id}/sign`, {
         method: 'POST',
         headers: {
-          authorization: `Card ${token}`,
+          authorization: `Card ${tok}`,
           'idempotency-key': idemKey(),
           'content-type': 'application/json',
         },
         body: JSON.stringify(body),
       });
-    // delegate-action body is wrong for bot approvals
-    expect((await submit({ signedDelegateAction: 'AAAAAAAA' })).status).toBe(400);
-    // signature from some other key
+    // a signature from some other key: refused, that card is spent, a fresh one arrives
     const { deviceKeys } = await import('./helpers.ts');
-    const rogue = deviceKeys().sign(planApprovalMessage(r.approvalId, a.planHash));
-    expect((await submit({ planSignature: rogue })).status).toBe(422);
+    const rogue = deviceKeys();
+    const bad = await signBody(
+      t,
+      token,
+      { keys: rogue, deviceId: u.deviceId },
+      {
+        planSignature: rogue.sign(planApprovalMessage(r.approvalId, a.planHash)),
+      },
+    );
+    expect((await sign(r.approvalId, token, bad)).status).toBe(422);
     expect(await activeSlugs()).not.toContain('x-manager');
-    // the enrolled device signs
-    const good = u.keys.sign(planApprovalMessage(r.approvalId, a.planHash));
-    const ok = await submit({ planSignature: good });
+    const next = await t.engine.repos.approvals.byReissuedFrom(r.approvalId);
+    if (!next) throw new Error('expected a fresh card');
+    const token2 = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
+    // the old signature is never reused, even with the enrolled key
+    expect((await sign(r.approvalId, token, bad)).status).toBe(409);
+    // the enrolled device signs the new card
+    const good = await signBody(t, token2, u, {
+      planSignature: u.keys.sign(planApprovalMessage(next.id, next.planHash)),
+    });
+    const ok = await sign(next.id, token2, good);
     expect(ok.status).toBe(200);
     expect(await ok.json()).toEqual({ status: 'settled' });
     expect(await activeSlugs()).toContain('x-manager');
-    const events = await t.engine.repos.approvals.events(r.approvalId);
+    const events = await t.engine.repos.approvals.events(next.id);
     expect(events.map((e) => e.toStatus)).toEqual(['pending', 'signed', 'settled']);
   });
 
@@ -188,7 +209,7 @@ describe('create_bot: write tools -> Guard + Face ID card', () => {
       u.space,
     );
     if (!r.ok || r.status !== 'pending_approval') throw new Error('expected approval');
-    const token = t.messaging.cards.at(-1)?.card.url.split('#t=')[1] ?? '';
+    const token = tokenFromUrl(t.messaging.cards.at(-1)?.card.url);
     const res = await t.engine.app.request(`/v1/approvals/${r.approvalId}/decline`, {
       method: 'POST',
       headers: {

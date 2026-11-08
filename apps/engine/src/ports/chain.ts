@@ -40,10 +40,15 @@ export interface ChainPort {
     plan: MoneyPlan,
     signerId: string,
   ): Promise<Omit<BuiltActions, 'nonce' | 'maxBlockHeight'>>;
-  /** Next nonce + max block height for the user's device key. */
+  /**
+   * Next nonce + max block height for the user's device key. The block window
+   * covers `windowSec` (the approval's lifetime) so the deadline on chain is
+   * never earlier than the card's countdown.
+   */
   prepareSigning(
     signerId: string,
     publicKeyEd25519B64Url: string,
+    windowSec?: number,
   ): Promise<{ nonce: string; maxBlockHeight: string }>;
 }
 
@@ -132,7 +137,7 @@ export class FakeChain implements ChainPort {
     };
   }
 
-  async prepareSigning(_signerId: string, _pk: string) {
+  async prepareSigning(_signerId: string, _pk: string, _windowSec?: number) {
     return { nonce: '1001', maxBlockHeight: '200000000' };
   }
 }

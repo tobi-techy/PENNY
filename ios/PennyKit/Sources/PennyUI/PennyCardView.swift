@@ -37,7 +37,7 @@ public struct PennyCardView: View {
                     .padding(.top, 2)
                 phaseBody
                 if let foot = footText {
-                    Button { onAction(.details) } label: {
+                    Button { onAction(isDone ? .openReceipt : .details) } label: {
                         Text(foot)
                             .font(.geist(11))
                             .foregroundStyle(PennyColor.meta)
@@ -55,6 +55,11 @@ public struct PennyCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(PennyColor.border, lineWidth: 1))
         .animation(.easeOut(duration: 0.18), value: phase)
+    }
+
+    private var isDone: Bool {
+        if case .done = phase { return true }
+        return false
     }
 
     // MARK: Tag row
@@ -76,6 +81,8 @@ public struct PennyCardView: View {
         case .expired: return "○ EXPIRED"
         case .declined: return "× DECLINED"
         case .failed: return "! FAILED"
+        case .blocked: return "■ BLOCKED"
+        case .closed: return "○ DONE"
         default: return content.tag
         }
     }
@@ -83,8 +90,8 @@ public struct PennyCardView: View {
     private var tagPalette: CardPalette {
         switch phase {
         case .done: return .mint
-        case .expired, .declined: return .muted
-        case .failed: return .red
+        case .expired, .declined, .closed: return .muted
+        case .failed, .blocked: return .red
         default: return content.kind.palette
         }
     }
@@ -94,7 +101,8 @@ public struct PennyCardView: View {
             return at.formatted(date: .omitted, time: .shortened)
         }
         switch phase {
-        case .expired, .declined, .failed: return ""
+        case .expired: return "0:00"
+        case .declined, .failed, .blocked, .closed: return ""
         default: return content.trailing
         }
     }
@@ -103,16 +111,16 @@ public struct PennyCardView: View {
         switch phase {
         case .approved: return CardPalette.mint.art
         case .done: return CardPalette.green.art
-        case .expired, .declined, .unavailable: return CardPalette.muted.art
-        case .failed: return CardPalette.red.art
+        case .expired, .declined, .unavailable, .closed: return CardPalette.muted.art
+        case .failed, .blocked: return CardPalette.red.art
         default: return content.kind.palette.art
         }
     }
 
     private var footText: String? {
         switch phase {
-        case .done: return "View receipt ›"
-        case .loading, .unavailable: return nil
+        case .done: return content.foot // "View receipt ›" only when there is a receipt
+        case .loading, .unavailable, .closed: return nil
         default: return content.foot
         }
     }
@@ -133,18 +141,41 @@ public struct PennyCardView: View {
             buttons(enabled: true)
         case .approving:
             rows
-            Pill(title: "Approving with Face ID", faceID: true, fill: PennyColor.pillDim, text: PennyColor.text)
+            Pill(title: CardState.approving.pillTitle ?? "Approving…", faceID: true, fill: PennyColor.pillDim, text: PennyColor.text)
                 .padding(.top, 12)
         case let .approved(steps):
             Pill(title: "✓ Approved", faceID: false, fill: PennyColor.okBackground, text: PennyColor.okText)
                 .padding(.top, 12)
             StepsList(steps: steps).padding(.top, 12)
         case let .done(steps, _):
-            StepsList(steps: steps).padding(.top, 12)
+            Pill(title: "✓ \(CardState.sent.pillTitle ?? "Sent")", faceID: false, fill: PennyColor.okBackground, text: PennyColor.okText)
+                .padding(.top, 12)
+            if !steps.isEmpty { StepsList(steps: steps).padding(.top, 12) }
         case .expired:
             rows.opacity(0.5)
-            Pill(title: "Quote expired · ask Penny again", faceID: false, fill: PennyColor.pillDim, text: PennyColor.meta)
+            Button { onAction(.renew) } label: {
+                Pill(title: CardState.expired.pillTitle ?? "Get a new card", faceID: false, fill: PennyColor.pillDim, text: PennyColor.text)
+            }
+            .buttonStyle(PressStyle())
+            .padding(.top, 12)
+        case .info:
+            rows
+            buttons(enabled: true)
+        case let .closed(message):
+            rows.opacity(0.5)
+            Text(message).font(.geist(11.5)).foregroundStyle(PennyColor.meta).padding(.top, 12)
+        case let .blocked(message):
+            Text(message)
+                .font(.geist(12))
+                .foregroundStyle(PennyColor.text)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 12)
+            Button { onAction(.notMe) } label: {
+                Pill(title: CardState.blocked.pillTitle ?? "Not me", faceID: false, fill: PennyColor.ink.opacity(0.6),
+                     text: PennyColor.text, stroke: Color.white.opacity(0.3))
+            }
+            .buttonStyle(PressStyle())
+            .padding(.top, 12)
         case .declined:
             rows.opacity(0.5)
             Pill(title: "Declined · nothing moved", faceID: false, fill: PennyColor.pillDim, text: PennyColor.meta)

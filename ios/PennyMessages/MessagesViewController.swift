@@ -4,9 +4,11 @@ import PennyUI
 import SwiftUI
 import UIKit
 
-/// iMessage extension. Penny's engine sends a live-layout message (MSMessageLiveLayout) whose URL
-/// carries the approvalId + cardToken. Messages creates one instance of this controller per live
-/// bubble with `presentationStyle == .transcript`; tapping a bubble opens `.expanded`.
+/// iMessage extension. Penny's engine sends a live card (Photon customizedMiniApp, live: true) whose
+/// URL is https://<engine>/a/<cardToken>. The extension reads the token from the selected message,
+/// fetches the card (GET /v1/approvals/by-token/:token) and, for approval cards, signs behind Face ID.
+/// Messages creates one instance of this controller per live bubble with `presentationStyle ==
+/// .transcript`; tapping a bubble opens `.expanded`.
 final class MessagesViewController: MSMessagesAppViewController {
     private var host: UIHostingController<AnyView>?
     private var model: ApprovalCardModel?
@@ -46,7 +48,7 @@ final class MessagesViewController: MSMessagesAppViewController {
     override func didReceive(_ message: MSMessage, conversation: MSConversation) {
         super.didReceive(message, conversation: conversation)
         // The engine edits the card in place; refresh if it's ours.
-        if let url = message.url, let link = CardLink(url: url), link == model?.link {
+        if let url = message.url, let token = CardToken(url: url), token == model?.token {
             Task { await model?.load() }
         }
     }
@@ -55,11 +57,12 @@ final class MessagesViewController: MSMessagesAppViewController {
 
     private func render(conversation: MSConversation?) {
         let style = presentationStyle
-        let link = conversation?.selectedMessage?.url.flatMap(CardLink.init(url:))
+        let url = conversation?.selectedMessage?.url
+        let token = url.flatMap(CardToken.init(url:))
 
         let root: AnyView
-        if let link, style == .transcript || style == .expanded {
-            let model = makeModel(for: link)
+        if let token, style == .transcript || style == .expanded {
+            let model = makeModel(for: token)
             let presentation: CardPresentation = style == .transcript ? .transcript : .expanded
             root = AnyView(
                 ApprovalCardScreen(model: model, presentation: presentation) { [weak self] in
@@ -67,14 +70,18 @@ final class MessagesViewController: MSMessagesAppViewController {
                 }
                 .environment(\.colorScheme, .dark)
             )
+        } else if url.flatMap(CardLink.init(url:)) != nil {
+            // An old card link (before live cards). Its approval has long expired.
+            root = AnyView(DrawerView(message: "This card is too old. Ask Penny again for a fresh one.")
+                .environment(\.colorScheme, .dark))
         } else {
             root = AnyView(DrawerView().environment(\.colorScheme, .dark))
         }
         install(root)
     }
 
-    private func makeModel(for link: CardLink) -> ApprovalCardModel {
-        if let model, model.link == link {
+    private func makeModel(for token: CardToken) -> ApprovalCardModel {
+        if let model, model.token == token {
             model.start()
             return model
         }
@@ -82,13 +89,19 @@ final class MessagesViewController: MSMessagesAppViewController {
         let config = SharedConfig.shared
         let baseURL = config.engineURL ?? URL(string: "https://localhost")!
         let newModel = ApprovalCardModel(
-            link: link,
+            token: token,
             client: EngineClient(baseURL: baseURL),
             signer: DeviceKeyStore.shared,
-            expectedAccountId: config.accountId
+            expectedAccountId: config.accountId,
+            deviceId: config.deviceId
         )
         newModel.onNeedsExpandedPresentation = { [weak self] in
             self?.requestPresentationStyle(.expanded)
+        }
+        newModel.onOpenURL = { [weak self] url in
+            // receipts only (https explorer links built by the engine)
+            guard url.scheme == "https" else { return }
+            self?.extensionContext?.open(url, completionHandler: nil)
         }
         model = newModel
         newModel.start()
@@ -126,15 +139,17 @@ final class MessagesViewController: MSMessagesAppViewController {
 
 /// Shown when Penny is opened from the app drawer rather than from a card.
 private struct DrawerView: View {
+    var message: String?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 CrewChip(.penny, size: 30)
                 Text("Penny").font(.geist(15, medium: true)).foregroundStyle(PennyColor.text)
             }
-            Text(SharedConfig.shared.isEnrolled
+            Text(message ?? (SharedConfig.shared.isEnrolled
                  ? "Text Penny what you need. Cards to approve show up right in this thread."
-                 : "Open the Penny app to link this iPhone, then text Penny.")
+                 : "Open the Penny app to link this iPhone, then text Penny."))
                 .font(.geist(13))
                 .foregroundStyle(PennyColor.meta)
                 .fixedSize(horizontal: false, vertical: true)

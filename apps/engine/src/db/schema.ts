@@ -32,6 +32,8 @@ export const users = pgTable(
     accountId: text('account_id'),
     /** The account this user enrolled was only simulated (DRY_RUN=1). Replayed on enroll retries. */
     enrolledDryRun: boolean('enrolled_dry_run').notNull().default(false),
+    /** Set by "freeze": every approval fails until the user texts "unfreeze". */
+    frozenAt: ts('frozen_at'),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('users_handle_uq').on(t.handle), uniqueIndex('users_slug_uq').on(t.slug)],
@@ -45,6 +47,12 @@ export const devices = pgTable(
       .notNull()
       .references(() => users.id),
     publicKey: text('public_key').notNull(), // base64url raw ed25519
+    /** ios_app (key in the iPhone Keychain, has the iMessage extension) or web_passkey. */
+    platform: text('platform', { enum: ['ios_app', 'web_passkey'] })
+      .notNull()
+      .default('ios_app'),
+    /** The iMessage extension is installed: live cards can be sent. */
+    hasExtension: boolean('has_extension').notNull().default(true),
     appAttest: text('app_attest'),
     /** Verified App Attest credential (set only after full verification). */
     appAttestKeyId: text('app_attest_key_id'),
@@ -53,6 +61,8 @@ export const devices = pgTable(
     appAttestVerified: boolean('app_attest_verified').notNull().default(false),
     enrolledAt: ts('enrolled_at').notNull().defaultNow(),
     revokedAt: ts('revoked_at'),
+    /** Why it was revoked: 'user' (device screen) or 'freeze' (unfreeze restores these). */
+    revokedReason: text('revoked_reason'),
   },
   (t) => [index('devices_user_idx').on(t.userId), uniqueIndex('devices_pk_uq').on(t.publicKey)],
 );
@@ -155,11 +165,121 @@ export const approvals = pgTable(
     }).notNull(),
     planHash: text('plan_hash').notNull(),
     cardTokenHash: text('card_token_hash').notNull(),
+    /**
+     * Live-card handle, so a card can still be edited after a restart. The in-process
+     * map alone meant every redeploy froze in-flight cards at their last state.
+     */
+    cardRef: text('card_ref'),
+    /** Space the card was sent to, needed to re-send or re-edit it. */
+    cardSpace: jsonb('card_space').$type<{
+      spaceId: string;
+      userHandle: string;
+      phone?: string;
+      baseUrl?: string;
+    }>(),
+    /** sha256 over the canonical action + id + expiresAt + planHash (@penny/shared approvalHash). */
+    approvalHash: text('approval_hash'),
+    /** 32 random bytes, base64url. Burned on the first sign or passkey attempt. */
+    challenge: text('challenge'),
+    challengeUsedAt: ts('challenge_used_at'),
+    /** The approval this one replaced (expired, failed check, or "get a new card"). */
+    reissuedFrom: text('reissued_from'),
+    cardId: text('card_id'),
     txHash: text('tx_hash'),
     createdAt: createdAt(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
-  (t) => [index('approvals_user_idx').on(t.userId, t.createdAt)],
+  (t) => [
+    index('approvals_user_idx').on(t.userId, t.createdAt),
+    index('approvals_card_token_idx').on(t.cardTokenHash),
+  ],
+);
+
+/** Web passkeys (no-install path). Verified on the server for every approval. */
+export const passkeys = pgTable(
+  'passkeys',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    deviceId: text('device_id')
+      .notNull()
+      .references(() => devices.id),
+    credentialId: text('credential_id').notNull(), // base64url
+    publicKey: text('public_key').notNull(), // base64url COSE key
+    signCount: bigint('sign_count', { mode: 'number' }).notNull().default(0),
+    transports: text('transports').array().notNull().default(sql`'{}'::text[]`),
+    platform: text('platform').notNull().default('web_passkey'),
+    createdAt: createdAt(),
+    revokedAt: ts('revoked_at'),
+  },
+  (t) => [
+    uniqueIndex('passkeys_credential_uq').on(t.credentialId),
+    index('passkeys_user_idx').on(t.userId),
+  ],
+);
+
+/** Every card Penny sends (docs/DESIGN.md section 4): info or approval, live or link. */
+export const cards = pgTable(
+  'cards',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    agent: text('agent').notNull(),
+    kind: text('kind', { enum: ['info', 'approval'] }).notNull(),
+    type: text('type').notNull(),
+    title: text('title').notNull(),
+    amount: text('amount'),
+    lines: jsonb('lines').$type<{ label?: string; value: string }[]>().notNull(),
+    buttons: jsonb('buttons')
+      .$type<{ id: string; label: string; action: string; value?: string }[]>()
+      .notNull(),
+    state: text('state').notNull(),
+    approvalId: text('approval_id'),
+    /** sha256 hex of the card token (the token itself is never stored). */
+    tokenHash: text('token_hash').notNull(),
+    tokenExpiresAt: ts('token_expires_at').notNull(),
+    /** Server-only data behind the buttons (reminder id, email draft). Never sent to clients. */
+    payload: jsonb('payload').$type<Record<string, unknown>>(),
+    /** live = iMessage extension card, link = picture link card. */
+    channel: text('channel', { enum: ['live', 'link'] }).notNull(),
+    /** Live card message handle, so the card can still be edited after a restart. */
+    messageRef: text('message_ref'),
+    space: jsonb('space').$type<{ spaceId: string; phone?: string; userHandle: string }>(),
+    receiptUrl: text('receipt_url'),
+    expiresAt: ts('expires_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('cards_token_uq').on(t.tokenHash),
+    index('cards_user_idx').on(t.userId, t.createdAt),
+    index('cards_approval_idx').on(t.approvalId),
+  ],
+);
+
+export const reminders = pgTable(
+  'reminders',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    cardId: text('card_id'),
+    text: text('text').notNull(),
+    dueAt: ts('due_at').notNull(),
+    space: jsonb('space')
+      .$type<{ spaceId: string; phone?: string; userHandle: string }>()
+      .notNull(),
+    status: text('status', { enum: ['scheduled', 'sent', 'undone'] })
+      .notNull()
+      .default('scheduled'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('reminders_due_idx').on(t.status, t.dueAt)],
 );
 
 export const approvalEvents = pgTable(
@@ -293,6 +413,8 @@ export const webhookEvents = pgTable('webhook_events', {
 
 export const attestChallenges = pgTable('attest_challenges', {
   id: text('id').primaryKey(),
+  /** app_attest or passkey (web enrollment). A challenge only works for its purpose. */
+  purpose: text('purpose').notNull().default('app_attest'),
   codeHash: text('code_hash').notNull(),
   challenge: text('challenge').notNull(), // base64url raw bytes
   expiresAt: ts('expires_at').notNull(),
@@ -310,6 +432,9 @@ export const schema = {
   bots,
   approvals,
   approvalEvents,
+  passkeys,
+  cards,
+  reminders,
   guardPolicies,
   guardDecisions,
   ledgerEntries,

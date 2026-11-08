@@ -113,7 +113,9 @@ describe('invest approval card', () => {
     expect(r.decision).toBe('block');
     expect(r.reasons.join(' ')).toContain('per-payment limit');
     expect(t2.invest.firmCalls).toBe(firm);
-    expect(t2.messaging.cards.length).toBe(cards);
+    // only the Blocked card, never an approval card
+    expect(t2.messaging.cards.length).toBe(cards + 1);
+    expect(t2.messaging.cards.at(-1)?.card.caption).toBe('Not today');
     await t2.db.close();
   }, 60_000);
 
@@ -226,8 +228,10 @@ describe('live swap status updates the card in place', () => {
     if (!dep) throw new Error('no deposit address');
     return { r, out, dep };
   }
-  const lastEdit = (id: string) =>
-    t.messaging.edits.filter((e) => e.handle.approvalId === id).at(-1);
+  const lastEdit = async (id: string) => {
+    const cardId = (await t.engine.repos.approvals.get(id))?.cardId;
+    return t.messaging.edits.filter((e) => e.handle.cardId === cardId).at(-1);
+  };
 
   test('Sending -> Buying now -> Done, plain words, no links or hashes on the card; 1Click told', async () => {
     const { r, out, dep } = await relayedLive('HASH_OK');
@@ -237,17 +241,17 @@ describe('live swap status updates the card in place', () => {
       depositAddress: dep,
       sender: u.accountId,
     });
-    expect(lastEdit(r.approvalId)?.card.subcaption).toBe('Sending…');
-    expect(lastEdit(r.approvalId)?.card.trailingCaption).toBeUndefined();
+    expect((await lastEdit(r.approvalId))?.card.subcaption).toBe('Sending…');
+    expect((await lastEdit(r.approvalId))?.card.trailingCaption).toBeUndefined();
     t.invest.statuses.set(dep, 'PROCESSING');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toBe('Buying now…');
+    expect((await lastEdit(r.approvalId))?.card.subcaption).toBe('Buying now…');
     const edits = t.messaging.edits.length;
     await t.engine.services.approvals.refreshRelayed(); // unchanged state: no new edit
     expect(t.messaging.edits.length).toBe(edits);
     t.invest.statuses.set(dep, 'SUCCESS');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith('Done');
+    expect((await lastEdit(r.approvalId))?.card.subcaption).toStartWith('Done');
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('settled');
   });
 
@@ -263,7 +267,7 @@ describe('live swap status updates the card in place', () => {
     const { r, dep } = await relayedLive('HASH_REFUND');
     t.invest.statuses.set(dep, 'REFUNDED');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toBe('Refunded to you');
+    expect((await lastEdit(r.approvalId))?.card.subcaption).toBe('Refunded to you');
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('failed');
     const res = (await t.db.db.execute(
       sql`select status from ledger_entries where approval_id = ${r.approvalId}`,
@@ -275,7 +279,7 @@ describe('live swap status updates the card in place', () => {
     const { r, dep } = await relayedLive('HASH_FAIL');
     t.invest.statuses.set(dep, 'FAILED');
     await t.engine.services.approvals.refreshRelayed();
-    expect(lastEdit(r.approvalId)?.card.subcaption).toStartWith("Didn't go through");
+    expect((await lastEdit(r.approvalId))?.card.subcaption).toStartWith("Didn't go through");
     expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('failed');
   });
 
@@ -349,7 +353,8 @@ describe('mainnet launch caps and relayer ceiling', () => {
       nearUsdPriceMicros: 4_000_000n,
     });
     expect(big.decision).toBe('block');
-    expect(t4.messaging.cards.length).toBe(0);
+    expect(t4.messaging.cards.length).toBe(1);
+    expect(t4.messaging.cards[0]?.card.caption).toBe('Not today');
     const small = await svc.createMoneyApproval({
       userId: u4.userId,
       bot: null,

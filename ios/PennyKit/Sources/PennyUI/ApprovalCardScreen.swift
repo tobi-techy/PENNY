@@ -30,7 +30,7 @@ public struct ApprovalCardScreen: View {
                     card
                     if model.phase == .ask {
                         Button { Task { await model.decline() } } label: {
-                            Text("Decline · nothing moves")
+                            Text("Not now · nothing moves")
                                 .font(.geist(12.5, medium: true))
                                 .foregroundStyle(PennyColor.meta)
                                 .frame(maxWidth: .infinity)
@@ -39,8 +39,14 @@ public struct ApprovalCardScreen: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    if let note = model.note {
+                        Text(note)
+                            .font(.geist(12))
+                            .foregroundStyle(PennyColor.meta)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     if !model.signingPreview.isEmpty {
-                        SigningPreview(summaries: model.signingPreview, approval: model.approval)
+                        SigningPreview(summaries: model.signingPreview, approval: model.ticket?.detail)
                     }
                 }
                 .frame(maxWidth: 380)
@@ -62,7 +68,7 @@ public struct ApprovalCardScreen: View {
     }
 
     static let placeholder = CardContent(
-        kind: .send, trailing: "", meta: "Penny", headline: "—", rows: [], buttons: [], foot: nil, crew: .penny, tag: "● PENNY"
+        kind: .plain, trailing: "", meta: "Penny", headline: "—", rows: [], buttons: [], foot: nil, crew: .penny, tag: "● PENNY"
     )
 }
 
@@ -94,7 +100,7 @@ struct SigningPreview: View {
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(PennyColor.border, lineWidth: 1))
             }
             if let approval {
-                Text("Nonce \(approval.nonce) · valid until block \(approval.maxBlockHeight)")
+                Text("Good until \(approval.expiresAt.formatted(date: .omitted, time: .shortened)) · signed on this iPhone only")
                     .font(.geistMono(10))
                     .foregroundStyle(PennyColor.meta.opacity(0.7))
             }

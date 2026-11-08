@@ -12,6 +12,7 @@ import {
   WritePlan,
 } from '@penny/shared';
 import { z } from 'zod';
+import { draftEmail, setReminder } from '../cards/everyday.ts';
 import { billQuery, parseBillEmails } from '../connectors/composio.ts';
 import { INVEST_ASSETS } from '../market/invest.ts';
 import type { MarketPort, ToolContext, ToolDef } from './registry.ts';
@@ -198,6 +199,53 @@ export function builtinTools(): ToolDef<never>[] {
     risk: 'read',
     input: z.object({ mood: z.enum(['wink']) }).strict(),
     execute: async (ctx) => ({ mood: await ctx.mood.on(ctx.userId, 'playful', ctx.bot.slug) }),
+  });
+
+  // ---- everyday info cards (no Face ID: nothing leaves Penny) ----
+  add({
+    id: 'set_reminder',
+    description:
+      "Set a reminder. dueAt is an ISO-8601 date-time with the user's UTC offset (e.g. 2026-11-09T07:00:00+01:00). Sends a card with Undo.",
+    risk: 'read', // stays inside Penny; the reminder is a text from Penny later
+    input: z
+      .object({ text: z.string().min(1).max(200), dueAt: z.iso.datetime({ offset: true }) })
+      .strict(),
+    execute: async (ctx, i) => {
+      if (!ctx.everyday) return { ok: false, error: 'reminders are not set up' };
+      const r = await setReminder(ctx.everyday, {
+        userId: ctx.userId,
+        space: ctx.space,
+        agent: ctx.bot.builtIn ? 'penny' : ctx.bot.slug,
+        text: i.text,
+        dueAt: i.dueAt,
+      });
+      return r.ok ? { ok: true, cardSent: true, title: r.card.title } : r;
+    },
+  });
+  add({
+    id: 'draft_email',
+    description:
+      'Draft an email for the user. Sends a draft card with Send and Edit. Nothing is sent until the user taps Send and approves with Face ID. Never call propose_write for the same email.',
+    risk: 'read', // a draft only; sending is send_email behind Face ID
+    input: z
+      .object({
+        toName: z.string().min(1).max(60),
+        toEmail: z.email().max(200),
+        subject: z.string().max(200),
+        body: z.string().max(5000),
+      })
+      .strict(),
+    execute: async (ctx, i) => {
+      if (!ctx.everyday) return { ok: false, error: 'drafts are not set up' };
+      const r = await draftEmail(ctx.everyday, {
+        userId: ctx.userId,
+        space: ctx.space,
+        agent: ctx.bot.builtIn ? (ctx.bot.slug === 'penny' ? 'mail' : ctx.bot.slug) : ctx.bot.slug,
+        botId: ctx.bot.id,
+        ...i,
+      });
+      return { ok: true, cardSent: true, title: r.card.title };
+    },
   });
 
   // ---- money (Guard + Face ID card) ----

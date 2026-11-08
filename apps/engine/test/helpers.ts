@@ -1,4 +1,5 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { approvalSignMessage } from '@penny/shared';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createEngine, type Engine, type EngineDeps } from '../src/app.ts';
@@ -144,7 +145,32 @@ export async function enrolledUser(t: TestEngine, handle = '+15550100') {
     publicKeyEd25519: keys.publicKeyB64Url,
   });
   const space: SpaceRef = { spaceId: `any;-;${handle}`, userHandle: handle };
-  return { userId: user.id, accountId: r.accountId, keys, space };
+  return { userId: user.id, accountId: r.accountId, deviceId: r.deviceId, keys, space };
+}
+
+/** The card token from a live card URL (https://.../a/<token>). */
+export function tokenFromUrl(url: string | undefined): string {
+  return /\/a\/([A-Za-z0-9_-]{43})/.exec(url ?? '')?.[1] ?? '';
+}
+
+/**
+ * Body for POST /v1/approvals/:id/sign, as the iPhone builds it: read the card by
+ * token, sign approvalSignMessage(approvalHash, challenge) with the device key.
+ */
+export async function signBody(
+  t: TestEngine,
+  token: string,
+  dev: { keys: { sign: (m: string) => string }; deviceId: string },
+  extra: Record<string, unknown> = { signedDelegateAction: 'AAAAAAAA' },
+): Promise<Record<string, unknown>> {
+  const view = await t.engine.services.approvals.getByToken(token);
+  const a = view.approval;
+  if (!a) throw new Error('not an approval card');
+  return {
+    deviceId: dev.deviceId,
+    signature: dev.keys.sign(approvalSignMessage(a.approvalHash, a.challenge ?? 'used')),
+    ...extra,
+  };
 }
 
 export function idemKey() {

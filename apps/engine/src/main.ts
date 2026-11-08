@@ -9,6 +9,7 @@ import { NearAiEmbedder, nearAiModels } from './brain/model.ts';
 import type { MarketPort } from './brain/registry.ts';
 import { createRegistry, FakeMarket } from './brain/tools.ts';
 import { LangfuseTracer, noopTracer } from './brain/tracing.ts';
+import { renderCardPng } from './cards/render.ts';
 import { ComposioConnector } from './connectors/composio.ts';
 import { createPgliteDb, createPostgresDb } from './db/client.ts';
 import { loadEnv } from './env.ts';
@@ -164,6 +165,10 @@ const engine = createEngine({
   attestRequire: env.PENNY_ENV === 'mainnet',
   log,
   publicBaseUrl: env.PUBLIC_BASE_URL,
+  renderCardImage: (card) => renderCardPng(card, new Date()),
+  ...(env.PENNY_PROVE_SECRET ? { proveSecret: env.PENNY_PROVE_SECRET } : {}),
+  explorerBaseUrl:
+    env.NEAR_NETWORK === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io',
   ...(env.PENNY_ENV === 'mainnet'
     ? {
         mainnetMaxPerTxUsd: env.PENNY_MAINNET_MAX_PER_TX_USD,

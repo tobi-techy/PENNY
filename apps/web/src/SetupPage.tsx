@@ -25,20 +25,44 @@ export function SetupPage() {
     setBusy(true);
     setState('idle');
     try {
-      const key = (await loadDeviceKey()) ?? (await createDeviceKey());
-      if (await passkeySupported()) {
-        try {
-          await createPasskey('Penny');
-        } catch {
-          /* passkey is a gate, not a requirement */
-        }
+      const enrollCode = code.trim().toUpperCase();
+      if (!(await passkeySupported())) {
+        setNote(
+          'This browser has no Face ID passkey. Use the Penny app on your iPhone instead, or open this link in Safari on your iPhone.',
+        );
+        setState('error');
+        return;
       }
+      // The engine issues the passkey challenge and checks the passkey on its side.
+      const ch = await api('/v1/devices/passkey/challenge', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enrollCode }),
+      });
+      if (!ch.ok) {
+        setNote(
+          'That code did not work. Codes last 10 minutes and work once — text Penny for a fresh link.',
+        );
+        setState('error');
+        return;
+      }
+      const challenge = (await ch.json()) as {
+        challengeId: string;
+        challenge: string;
+        rpId: string;
+        userId: string;
+      };
+      const key = (await loadDeviceKey()) ?? (await createDeviceKey());
+      const passkey = await createPasskey(challenge);
       const res = await api('/v1/devices/enroll', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'idempotency-key': idem() },
         body: JSON.stringify({
-          enrollCode: code.trim().toUpperCase(),
+          enrollCode,
           publicKeyEd25519: b64url(key.publicKey),
+          platform: 'web_passkey',
+          passkey,
+          passkeyChallengeId: challenge.challengeId,
         }),
       });
       if (res.status === 201) {
@@ -57,8 +81,16 @@ export function SetupPage() {
         setNote(`Something went wrong (${res.status}). Try again.`);
         setState('error');
       }
-    } catch {
-      setNote('Could not reach Penny. Check your connection and try again.');
+    } catch (e) {
+      if ((e as Error).name === 'PasskeyCancelled') {
+        setNote('Face ID was cancelled. Nothing was set up. Tap Link this browser to try again.');
+      } else if ((e as Error).name === 'NoSecureKeyStore') {
+        setNote(
+          'This browser cannot keep a safe approval key. Use the Penny app on your iPhone instead — text Penny and tap the setup card.',
+        );
+      } else {
+        setNote('Could not reach Penny. Check your connection and try again.');
+      }
       setState('error');
     } finally {
       setBusy(false);
@@ -70,8 +102,8 @@ export function SetupPage() {
       <h1>Link this browser to Penny</h1>
       <p>
         Penny helps with the everyday stuff — inbox, bills, errands, money. This makes an approval
-        key in this browser, locked behind your passkey or Face ID on this device. Nothing to
-        install; the key never leaves this browser.
+        key in this browser and a passkey behind Face ID on this phone. Nothing to install; the key
+        never leaves this browser, and Penny checks your Face ID passkey every time you approve.
       </p>
       <div className="card">
         <p>Your one-time code (Penny texted you a link with it filled in):</p>

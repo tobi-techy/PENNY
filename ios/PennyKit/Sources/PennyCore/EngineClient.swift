@@ -58,18 +58,36 @@ public struct EngineClient: Sendable {
         return approval
     }
 
-    // POST /v1/approvals/:id/submit  {signedDelegateAction}
-    public func submit(_ link: CardLink, signed: SignedDelegateAction, idempotencyKey: String = UUID().uuidString) async throws -> ApprovalStatus {
-        let body = CanonicalJSON.data(.object(["signedDelegateAction": .string(signed.base64)]))
-        let data = try await send("POST", "/v1/approvals/\(link.approvalId)/submit", cardToken: link.cardToken, body: body, idempotencyKey: idempotencyKey)
+    // GET /v1/approvals/by-token/:token -> the card (+ action, approval hash, challenge, expiry)
+    public func card(_ token: CardToken) async throws -> CardByToken {
+        let data = try await send("GET", "/v1/approvals/by-token/\(token.value)", cardToken: nil)
+        return try CardByToken.parse(data)
+    }
+
+    // POST /v1/approvals/:id/sign  {deviceId, signature, signedDelegateAction | planSignature}
+    public func sign(_ link: CardLink, deviceId: String, signatures: ApprovalSignatures,
+                     idempotencyKey: String = UUID().uuidString) async throws -> ApprovalStatus {
+        var fields: [String: JSONValue] = [
+            "deviceId": .string(deviceId),
+            "signature": .string(signatures.signature.base64URLEncodedString()),
+        ]
+        if let sda = signatures.signedDelegateAction { fields["signedDelegateAction"] = .string(sda.base64) }
+        if let plan = signatures.planSignature { fields["planSignature"] = .string(plan.base64URLEncodedString()) }
+        let data = try await send("POST", "/v1/approvals/\(link.approvalId)/sign", cardToken: link.cardToken,
+                                  body: CanonicalJSON.data(.object(fields)), idempotencyKey: idempotencyKey)
         return try StatusOnly.parse(data)
     }
 
-    // POST /v1/approvals/:id/submit  {planSignature} for write / create_bot approvals
-    public func submitPlan(_ link: CardLink, signature: Data, idempotencyKey: String = UUID().uuidString) async throws -> ApprovalStatus {
-        let body = CanonicalJSON.data(.object(["planSignature": .string(signature.base64URLEncodedString())]))
-        let data = try await send("POST", "/v1/approvals/\(link.approvalId)/submit", cardToken: link.cardToken, body: body, idempotencyKey: idempotencyKey)
-        return try StatusOnly.parse(data)
+    // POST /v1/approvals/by-token/:token/renew -> a fresh card arrives in the thread
+    public func renew(_ token: CardToken, idempotencyKey: String = UUID().uuidString) async throws {
+        _ = try await send("POST", "/v1/approvals/by-token/\(token.value)/renew", cardToken: nil,
+                           body: CanonicalJSON.data(.object([:])), idempotencyKey: idempotencyKey)
+    }
+
+    // POST /v1/cards/by-token/:token/press {buttonId}: Undo, Edit, Send (turns into an approval card), Not me
+    public func press(_ token: CardToken, buttonId: String, idempotencyKey: String = UUID().uuidString) async throws {
+        _ = try await send("POST", "/v1/cards/by-token/\(token.value)/press", cardToken: nil,
+                           body: CanonicalJSON.data(.object(["buttonId": .string(buttonId)])), idempotencyKey: idempotencyKey)
     }
 
     // POST /v1/approvals/:id/decline  {reason?}
@@ -160,6 +178,11 @@ public struct EngineClient: Sendable {
                root["error"]?.stringValue == "key_revoked" {
                 throw PennyError.keyRevoked
             }
+            if http.statusCode == 423 { throw PennyError.frozen }
+            if http.statusCode == 409, (try? JSONParser.parse(data))?["error"]?.stringValue == "frozen" {
+                throw PennyError.frozen
+            }
+            if http.statusCode == 410 { throw PennyError.expired }
             throw PennyError.http(status: http.statusCode)
         }
         return data

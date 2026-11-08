@@ -1,25 +1,28 @@
 import { createHash } from 'node:crypto';
 import {
   ApprovalId,
+  CardPressBody,
   DeclineBody,
   deviceRevokeMessage,
   EnrollBody,
   historyRequestMessage,
+  PasskeyApproveBody,
   policyUpdateMessage,
+  SignBody,
   SpectrumMessagesEvent,
-  SubmitBody,
 } from '@penny/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { parseCardAuth } from '../approvals/card-token.ts';
 import { ApprovalError, type ApprovalService } from '../approvals/service.ts';
 import { type PrivacyGate, unverifiedStatus } from '../brain/attestation.ts';
+import type { CardActions } from '../cards/actions.ts';
 import { verifyAssertion } from '../devices/appattest.ts';
 import { EnrollError, type EnrollService } from '../devices/enroll.ts';
 import { verifyEd25519 } from '../lib/crypto.ts';
 import type { Logger } from '../lib/logger.ts';
 import { verifySpectrumSignature } from '../photon/verify.ts';
-import type { ApprovalsRepo } from '../repo/approvals.ts';
+import { type ApprovalsRepo, ConcurrentTransitionError } from '../repo/approvals.ts';
 import type { IdempotencyRepo, WebhookEventsRepo } from '../repo/infra.ts';
 import type { DeviceRow, UsersRepo } from '../repo/users.ts';
 import { withIdempotency } from './idempotency.ts';
@@ -28,6 +31,7 @@ import { type AppVars, clientIp, type RateLimiter, rateLimit } from './security.
 export type RouteDeps = {
   approvals: ApprovalService;
   approvalsRepo: ApprovalsRepo;
+  cardActions: CardActions;
   users: UsersRepo;
   enroll: EnrollService;
   /** App Attest app id ("TEAMID.bundle.id"); assertions verified when set. */
@@ -57,6 +61,10 @@ function parseJson<T extends z.ZodType>(schema: T, raw: string): z.infer<T> | nu
 function asResult(e: unknown): { status: number; body: unknown } {
   if (e instanceof ApprovalError || e instanceof EnrollError)
     return { status: e.status, body: { error: e.code } };
+  // A lost CAS race (double tap, two devices) is a conflict, not a server fault.
+  // Unmapped it surfaced as 500 and the card told the user nothing had happened.
+  if (e instanceof ConcurrentTransitionError)
+    return { status: 409, body: { error: 'not_pending' } };
   throw e;
 }
 
@@ -105,6 +113,8 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     // Acknowledge fast; process after the response. On failure the row keeps
     // the error (audit trail) but stays unprocessed, so a redelivery reclaims
     // and reprocesses it. A crash leaves a stale claim, reclaimed after its TTL.
+    // Links in replies always use PUBLIC_BASE_URL, never this request's Host header:
+    // a crafted Host must never become a card link, and passkeys bind to that origin.
     queueMicrotask(() => {
       d.onInbound(parsed.data)
         .then(() => d.webhookEvents.markProcessed(dedupeKey))
@@ -150,6 +160,21 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     },
   );
 
+  r.post(
+    '/v1/devices/passkey/challenge',
+    rateLimit(d.enrollLimiter, (c) => `pkc:${clientIp(c)}`),
+    async (c) => {
+      const body = parseJson(
+        z.object({ enrollCode: z.string().min(4).max(32) }).strict(),
+        await c.req.text(),
+      );
+      if (!body) return c.json({ error: 'bad_request' }, 400);
+      const issued = await d.enroll.issuePasskeyChallenge(body.enrollCode);
+      if (!issued) return c.json({ error: 'invalid_code' }, 401);
+      return c.json(issued);
+    },
+  );
+
   // ---- approvals (Authorization: Card <token>) ----
   const approvalsRL = rateLimit(d.approvalLimiter, (c) => `apr:${clientIp(c)}`);
   const idOf = (raw: string) => (ApprovalId.safeParse(raw).success ? raw : null);
@@ -180,16 +205,95 @@ export function buildRoutes(d: RouteDeps): Hono<{ Variables: AppVars }> {
     }
   });
 
-  r.post('/v1/approvals/:id/submit', approvalsRL, async (c) => {
+  // Retired: it had no challenge check. The app uses /sign, the link page /passkey.
+  r.post('/v1/approvals/:id/submit', approvalsRL, (c) => c.json({ error: 'use_sign' }, 410));
+
+  // ---- one card URL for both paths: /a/<cardToken> ----
+  const tokenOf = (raw: string) => (/^[A-Za-z0-9_-]{43}$/.test(raw) ? raw : null);
+
+  r.get('/v1/approvals/by-token/:token', approvalsRL, async (c) => {
+    const token = tokenOf(c.req.param('token'));
+    if (!token) return c.json({ error: 'unauthorized' }, 401);
+    try {
+      return c.json(await d.approvals.getByToken(token));
+    } catch (e) {
+      const r2 = asResult(e);
+      return c.json(r2.body as object, r2.status as 401);
+    }
+  });
+
+  r.post('/v1/approvals/by-token/:token/renew', approvalsRL, async (c) => {
+    const token = tokenOf(c.req.param('token'));
+    if (!token) return c.json({ error: 'unauthorized' }, 401);
+    const raw = await c.req.text();
+    return withIdempotency(c, d.idempotency, `renew:${token.slice(0, 12)}`, raw, async () => {
+      try {
+        return { status: 200, body: await d.approvals.renewByToken(token) };
+      } catch (e) {
+        return asResult(e);
+      }
+    });
+  });
+
+  // iOS app: Face ID unlocked the Keychain key; it signed approvalHash + challenge.
+  r.post('/v1/approvals/:id/sign', approvalsRL, async (c) => {
     const id = idOf(c.req.param('id'));
     if (!id) return c.json({ error: 'unauthorized' }, 401);
     const raw = await c.req.text();
-    const body = parseJson(SubmitBody, raw);
+    const body = parseJson(SignBody, raw);
     if (!body) return c.json({ error: 'bad_request' }, 400);
     const token = parseCardAuth(c.req.header('authorization'));
-    return withIdempotency(c, d.idempotency, `submit:${id}`, raw, async () => {
+    return withIdempotency(c, d.idempotency, `sign:${id}`, raw, async () => {
       try {
-        return { status: 200, body: await d.approvals.submit(id, token, body) };
+        return { status: 200, body: await d.approvals.signWithDevice(id, token, body) };
+      } catch (e) {
+        return asResult(e);
+      }
+    });
+  });
+
+  // No install: the WebAuthn assertion is verified here, on the server.
+  r.post('/v1/approvals/:id/passkey', approvalsRL, async (c) => {
+    const id = idOf(c.req.param('id'));
+    if (!id) return c.json({ error: 'unauthorized' }, 401);
+    const raw = await c.req.text();
+    const body = parseJson(PasskeyApproveBody, raw);
+    if (!body) return c.json({ error: 'bad_request' }, 400);
+    const token = parseCardAuth(c.req.header('authorization'));
+    return withIdempotency(c, d.idempotency, `passkey:${id}`, raw, async () => {
+      try {
+        return { status: 200, body: await d.approvals.approveWithPasskey(id, token, body) };
+      } catch (e) {
+        return asResult(e);
+      }
+    });
+  });
+
+  // ---- card buttons (info cards; Send turns a card into an approval card) ----
+  r.post('/v1/cards/by-token/:token/press', approvalsRL, async (c) => {
+    const token = tokenOf(c.req.param('token'));
+    if (!token) return c.json({ error: 'unauthorized' }, 401);
+    const raw = await c.req.text();
+    const body = parseJson(CardPressBody, raw);
+    if (!body) return c.json({ error: 'bad_request' }, 400);
+    return withIdempotency(c, d.idempotency, `press:${token.slice(0, 12)}`, raw, async () => {
+      try {
+        return { status: 200, body: await d.cardActions.press(token, body.buttonId) };
+      } catch (e) {
+        return asResult(e);
+      }
+    });
+  });
+
+  r.post('/v1/cards/by-token/:token/edit', approvalsRL, async (c) => {
+    const token = tokenOf(c.req.param('token'));
+    if (!token) return c.json({ error: 'unauthorized' }, 401);
+    const raw = await c.req.text();
+    const body = parseJson(z.object({ text: z.string().max(5000) }).strict(), raw);
+    if (!body) return c.json({ error: 'bad_request' }, 400);
+    return withIdempotency(c, d.idempotency, `edit:${token.slice(0, 12)}`, raw, async () => {
+      try {
+        return { status: 200, body: { card: await d.cardActions.editDraft(token, body.text) } };
       } catch (e) {
         return asResult(e);
       }

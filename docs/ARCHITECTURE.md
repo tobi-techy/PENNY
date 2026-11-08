@@ -19,9 +19,10 @@ Tooling: Bun 1.x, TypeScript strict, Biome (lint+format), bun test, Drizzle ORM 
 2. Router (Penny lead) classifies intent with NEAR AI Cloud (OpenAI-compatible) via Vercel AI SDK tool calling, consults crew agents (Invest, Guard, Mail, Finance, Errand).
 3. Any money intent becomes an **Intent Plan** (typed, see below). The LLM never builds transactions; it only fills a typed plan that deterministic code validates.
 4. **Guard** evaluates the plan against policy (caps, allowlist, velocity, new-recipient, asset whitelist, quote freshness). Outcomes: `allow_with_approval`, `block` (sends a Guard block card), `needs_more_info`.
-5. Engine builds the exact NEAR action(s) (e.g. `ft_transfer_call` to a 1Click deposit address), creates an **Approval** record, and sends a live iMessage card via Photon `customizedMiniApp({live:true})` whose URL carries `approvalId` + a short-lived `cardToken`.
-6. iMessage extension fetches the approval, renders the card, user taps → Face ID → device signs a **NEP-366 SignedDelegateAction** with the user's on-device ed25519 key → `POST /v1/approvals/:id/submit`.
-7. Engine verifies the delegate action matches the approved plan byte-for-byte (receiver, actions, args, deposit, nonce, max block height), re-runs Guard, relays it from the relayer account (relayer pays gas), tracks status, edits the card in place (`edit()`), sends receipt.
+5. Engine builds the exact NEAR action(s) (e.g. `ft_transfer_call` to a 1Click deposit address), creates an **Approval** record (with `approvalHash` and a single-use `challenge`, see below) and a **Card** for it, and sends the card through the one card sender. If Guard said no, the Blocked card is sent instead and no approval exists.
+6. Card picker, per user: an active `ios_app` device with the iMessage extension gets a **live card** (Photon `customizedMiniApp({live:true})`, cloud package `@spectrum-ts/imessage`); everyone else gets a **link card** (a URL whose Open Graph image is the card, rendered on the server at 1200x630). Both use `PUBLIC_BASE_URL/a/<cardToken>`.
+7. App path: the extension reads the token, `GET /v1/approvals/by-token/:token`, recomputes `approvalHash` from the plan + actions it will sign, Face ID unlocks the Keychain key, the device signs `penny-approval:v2:<approvalHash>:<challenge>` and the **NEP-366 SignedDelegateAction** (or the plan message for writes and new bots) → `POST /v1/approvals/:id/sign`. Link path: the page asks for the passkey (WebAuthn, challenge = the approval's challenge, UV required) → `POST /v1/approvals/:id/passkey`; the engine verifies the assertion on the server, then the browser key's signed action.
+8. Engine checks, in order: card token, not frozen, pending, challenge unused (burned now), device or passkey enrolled to this user and not revoked, not expired, the action still matches the hash, the signature; then Guard again, the delegate action byte-for-byte (receiver, actions, args, deposit, nonce, max block height = the deadline), relays it from the relayer account (relayer pays gas), tracks status, and updates the card (live: edited in place, 3 tries with backoff then a fresh card; link: a fresh link card for Sent, Blocked, Failed, Expired). Any failed check expires the approval and Penny sends a new card; a signature is never reused.
 
 ## Custody model (non-custodial)
 - Each user gets `<slug>.penny.near` (sub-account of the app account, created by the engine on onboarding).
@@ -63,15 +64,32 @@ Decimal = string matching `^\d+(\.\d{1,6})?$`. Amounts converted to base units w
 ```
 Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vectors live in `packages/shared/test-vectors/*.json` and Swift tests load the same files.
 
+### Approval hash and challenge (live cards)
+- `approvalHash = base64url(sha256(JCS({ action, expiresAt, id, planHash })))`, `action = {type, to, amount, asset}` derived from the plan (`approvalActionOf` in packages/shared; Swift `ApprovalIntent`). Vector: `packages/shared/test-vectors/09-approval-hash.json`.
+- `challenge`: 32 random bytes (base64url), single use, burned on the first approve attempt whatever its outcome.
+- Lifetime: 90 s for anything priced by a quote (invest), 10 min for plain sends, bills, errands, writes and new bots. The NEAR max block height is set to cover the lifetime.
+- States reuse the approval state machine: card Ready = `pending`, Approving = `signed`/`relayed`, Sent = `settled`, Blocked = Guard `cancelled` (or no approval at all when Guard said no first), Expired = `expired`.
+
+### Card (packages/shared `Card`)
+`{ id, userId, agent, kind: info|approval, type, title, amount?, lines[], buttons[], state, approvalId?, expiresAt?, receiptUrl?, createdAt }`. Types: the DESIGN.md table plus `reminder`, `email_draft`, `plan`, `found`, `done`; unknown types render as a plain card. Which actions need Face ID is decided only by `needsApproval()` (apps/engine/src/cards/policy.ts): read tools never, money and write tools always, anything new that writes defaults to yes. Info card buttons that change something small (Undo, Edit, Pick) need no Face ID; a button that sends, pays or posts turns the card into an approval card first.
+
 ### Engine HTTP API (all JSON, all zod-validated, TLS only)
 - `POST /v1/photon/webhook` — Photon events (HMAC verify per Photon docs, 5-min tolerance, dedupe by event id).
 - `POST /v1/devices/enroll` `{enrollCode, publicKeyEd25519 (base64url), appAttest?}` → creates user account on mainnet with that key as full access. `enrollCode` is a one-time 8-char code Penny texts the user, TTL 10 min, single use, bound to the iMessage handle.
 - `GET  /v1/approvals/:id` header `Authorization: Card <cardToken>` → Approval (no secrets).
-- `POST /v1/approvals/:id/submit` `{signedDelegateAction (base64 borsh)}` → `{status}`.
+- `GET  /v1/approvals/by-token/:token` → `{ card, approval?: { id, action, approvalHash, challenge?, expiresAt, status, passkeys?, detail: Approval } }`.
+- `POST /v1/approvals/:id/sign` (Card auth) `{deviceId, signature, signedDelegateAction | planSignature}` → `{status}` (app).
+- `POST /v1/approvals/:id/passkey` (Card auth) `{assertion, signedDelegateAction | planSignature}` → `{status}` (link page; WebAuthn verified on the server).
+- `POST /v1/approvals/by-token/:token/renew` → a fresh card ("Get a new card").
+- `POST /v1/cards/by-token/:token/press` `{buttonId}`, `POST /v1/cards/by-token/:token/edit` `{text}` → info card buttons.
+- `POST /v1/devices/passkey/challenge` `{enrollCode}` → registration challenge for web enrollment (`platform: web_passkey` + `passkey` on `/v1/devices/enroll`).
+- `GET /a/:token` (page + Open Graph tags), `GET /a/:token/card.png` (the card for its current state).
+- `POST /v1/approvals/:id/submit` is retired (410): it had no challenge check.
+- `POST /v1/prove/*` testnet proof routes, only with `PENNY_PROVE_SECRET` (refused on mainnet).
 - `POST /v1/approvals/:id/decline` → `{status}`.
 - `GET  /v1/approvals/:id/status` → status + tx hash + step list (for live card).
 - `GET  /healthz`.
-`cardToken`: 32-byte random, stored hashed (sha256), TTL = approval expiry, bound to approvalId and userId.
+`cardToken`: 32-byte random, stored hashed (sha256), TTL = approval expiry (info cards: 24 h), bound to one card (and its approval) and user. It is the URL path (`/a/<token>`), so access logs mask it.
 
 ## Crew brain
 - Model provider: NEAR AI Cloud OpenAI-compatible endpoint (base URL + key from env). Vercel AI SDK `generateText` with tools. Langfuse tracing (keys from env).
@@ -81,7 +99,7 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - Prompt-injection stance: text from users, emails and web is data. Tools that move money only accept typed plans; Guard + device signature are the authority, never the model.
 
 ## Data model (Drizzle)
-users, devices (publicKey, enrolledAt, revokedAt), enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, memories, moods, souls_changelog, idempotency_keys, webhook_events.
+users (frozenAt), devices (publicKey, platform ios_app|web_passkey, hasExtension, enrolledAt = createdAt, revokedAt, revokedReason), passkeys (credentialId, COSE publicKey, signCount, platform web_passkey), cards, reminders, enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, memories, moods, souls_changelog, idempotency_keys, webhook_events.
 
 ## Environments
 `PENNY_ENV=dev|mainnet`. Mainnet requires all secrets present at boot (zod env schema fails closed). A `DRY_RUN=1` flag makes relayer + Intents run quote/simulate only — default ON until Tobi says go.
