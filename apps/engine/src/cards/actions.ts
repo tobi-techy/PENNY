@@ -1,5 +1,9 @@
 import { type Card, WritePlan } from '@penny/shared';
-import { ApprovalError, type ApprovalService } from '../approvals/service.ts';
+import {
+  AFTER_EXPIRY_BUTTON_MS,
+  ApprovalError,
+  type ApprovalService,
+} from '../approvals/service.ts';
 import { sha256Hex } from '../lib/crypto.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { BotsRepo } from '../repo/bots.ts';
@@ -36,20 +40,25 @@ export class CardActions {
     },
   ) {}
 
-  private async load(token: string): Promise<CardRow> {
+  private async load(token: string, graceMs = 0): Promise<CardRow> {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token))
       throw new ApprovalError(401, 'unauthorized', 'unauthorized');
     const row = await this.d.cards.byTokenHash(sha256Hex(token));
-    if (!row || this.d.now().getTime() > row.tokenExpiresAt.getTime()) {
+    if (!row || this.d.now().getTime() > row.tokenExpiresAt.getTime() + graceMs) {
       throw new ApprovalError(401, 'unauthorized', 'unauthorized');
     }
     return row;
   }
 
   async press(token: string, buttonId: string): Promise<PressResult> {
-    const row = await this.load(token);
+    // Not me (freeze) and Get a new card show on blocked/expired cards: allow them after expiry
+    const row = await this.load(token, AFTER_EXPIRY_BUTTON_MS);
     const button = row.buttons.find((b) => b.id === buttonId);
     if (!button) throw new ApprovalError(404, 'no_button', 'that button is gone');
+    const late = this.d.now().getTime() > row.tokenExpiresAt.getTime();
+    if (late && button.action !== 'freeze' && button.action !== 'renew') {
+      throw new ApprovalError(401, 'unauthorized', 'unauthorized');
+    }
     const payload = row.payload ?? {};
 
     // Policy decides, not the card: approve happens only through Face ID endpoints.
@@ -62,16 +71,26 @@ export class CardActions {
       if (!plan.success || row.kind !== 'info' || !row.space) {
         throw new ApprovalError(409, 'not_sendable', 'nothing to send here');
       }
+      // one press wins: claim the draft (info -> approval) before creating anything
+      if (!(await this.d.cards.claimForApproval(row.id))) {
+        throw new ApprovalError(409, 'already_sent', 'this draft is already waiting for Face ID');
+      }
       const botId = typeof payload.botId === 'string' ? payload.botId : null;
       const bot = botId ? await this.d.bots.byId(botId) : null;
-      const r = await this.d.approvals.createWriteApproval({
-        userId: row.userId,
-        bot,
-        plan: plan.data,
-        space: row.space,
-        fromCard: { id: row.id, tokenHash: row.tokenHash },
-      });
+      const r = await this.d.approvals
+        .createWriteApproval({
+          userId: row.userId,
+          bot,
+          plan: plan.data,
+          space: row.space,
+          fromCard: { id: row.id, tokenHash: row.tokenHash },
+        })
+        .catch(async (e: unknown) => {
+          await this.d.cards.update(row.id, { kind: 'info' });
+          throw e;
+        });
       if (r.decision !== 'allow_with_approval') {
+        await this.d.cards.update(row.id, { kind: 'info' });
         throw new ApprovalError(409, 'blocked', r.reasons[0] ?? "can't send that");
       }
       const fresh = await this.d.cards.get(row.id);

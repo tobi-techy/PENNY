@@ -62,6 +62,8 @@ export const SEND_TTL_MS = 10 * 60_000;
 export const BOT_APPROVAL_TTL_MS = 10 * 60_000;
 /** A failed check or an expired card is replaced at most this many times in a row. */
 export const MAX_REISSUES = 3;
+/** Not me / Get a new card keep working this long after a card expires. */
+export const AFTER_EXPIRY_BUTTON_MS = 24 * 60 * 60_000;
 /** User copy when the user froze Penny. */
 export const FROZEN_TEXT = 'Penny is frozen. Text unfreeze to start again.';
 export const REQUOTE_AFTER_EXPIRY_MS = 10 * 60_000;
@@ -1042,12 +1044,12 @@ export class ApprovalService {
    * the action, approval hash, single-use challenge and expiry. The challenge is only
    * handed out while the approval is pending, unexpired and the challenge unused.
    */
-  async getByToken(token: string): Promise<ApprovalByTokenResponse> {
+  async getByToken(token: string, graceMs = READ_GRACE_MS): Promise<ApprovalByTokenResponse> {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token))
       throw new ApprovalError(401, 'unauthorized', 'unauthorized');
     const card = await this.d.cardsRepo.byTokenHash(sha256Hex(token));
     const now = this.d.now();
-    if (!card || now.getTime() > card.tokenExpiresAt.getTime() + READ_GRACE_MS) {
+    if (!card || now.getTime() > card.tokenExpiresAt.getTime() + graceMs) {
       throw new ApprovalError(401, 'unauthorized', 'unauthorized');
     }
     let row = card.approvalId ? await this.d.approvals.get(card.approvalId) : null;
@@ -1202,7 +1204,8 @@ export class ApprovalService {
 
   /** "Get a new card" on an expired card. Card token auth (read grace applies). */
   async renewByToken(token: string): Promise<{ approvalId: string | null }> {
-    const view = await this.getByToken(token);
+    // "Get a new card" shows on an expired card, so it must keep working after expiry
+    const view = await this.getByToken(token, AFTER_EXPIRY_BUTTON_MS);
     const id = view.card.approvalId;
     if (!id) throw new ApprovalError(409, 'not_approval', 'nothing to renew');
     const row = await this.d.approvals.get(id);
@@ -1210,8 +1213,9 @@ export class ApprovalService {
     if (row.status === 'pending' && this.d.now().getTime() > row.expiresAt.getTime())
       await this.expire(row);
     const now = await this.d.approvals.get(id);
-    if (!now || (now.status !== 'expired' && now.status !== 'failed')) {
-      throw new ApprovalError(409, 'not_expired', 'this card is still live');
+    if (!now || now.status !== 'expired') {
+      // failed rows may have moved money (a relay that never reported back): never re-send
+      throw new ApprovalError(409, 'not_expired', 'this card cannot be renewed');
     }
     const existing = await this.d.approvals.byReissuedFrom(id);
     if (existing) return { approvalId: existing.id };
@@ -1337,11 +1341,11 @@ export class ApprovalService {
     try {
       return await this.submitChecked(row, sub);
     } catch (e) {
-      if (
-        e instanceof ApprovalError &&
-        (e.code === 'delegate_mismatch' || e.code === 'bad_signature' || e.code === 'wrong_body')
-      ) {
-        await this.failAndReissue(row, e.code);
+      // The challenge is already burned: an approval still pending after any error can
+      // never be approved again, so expire it and send a fresh card (no stuck "approving").
+      const now = await this.d.approvals.get(row.id).catch(() => null);
+      if (now?.status === 'pending') {
+        await this.failAndReissue(now, e instanceof ApprovalError ? e.code : 'error');
       }
       throw e;
     }
@@ -1812,7 +1816,12 @@ export class ApprovalService {
         );
         await this.d.ledger.setStatusForApproval(row.id, 'released');
         await this.d.mood.on(row.userId, 'approval_failed');
-        await this.updateCard(row.id, 'failed', "didn't go through. nothing was sent.");
+        // The relay may have landed before it stopped reporting: don't claim nothing moved.
+        await this.updateCard(
+          row.id,
+          'failed',
+          "couldn't confirm this one. check your balance before trying again.",
+        );
         fixed += 1;
       } catch (e) {
         this.d.log.warn(

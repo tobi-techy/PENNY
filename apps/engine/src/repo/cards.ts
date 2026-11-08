@@ -35,6 +35,16 @@ export class CardsRepo {
     return r ?? null;
   }
 
+  /** info -> approval, exactly once (a second Send press gets false). */
+  async claimForApproval(id: string): Promise<boolean> {
+    const r = await this.db
+      .update(cards)
+      .set({ kind: 'approval', updatedAt: new Date() })
+      .where(and(eq(cards.id, id), eq(cards.kind, 'info')))
+      .returning({ id: cards.id });
+    return r.length === 1;
+  }
+
   async update(
     id: string,
     patch: Partial<

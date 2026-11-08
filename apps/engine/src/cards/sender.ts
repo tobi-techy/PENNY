@@ -232,7 +232,12 @@ export class CardSender {
       await this.d.cards.update(row.id, { messageRef: handle.ref }).catch(() => null);
       return handle.ref;
     } catch (e) {
-      this.d.log.error({ err: (e as Error).message, cardId: row.id }, 'card send failed');
+      // the live card didn't go out: send the same card as a picture link so the user still gets it
+      this.d.log.error(
+        { err: (e as Error).message, cardId: row.id },
+        'live card failed; sending link',
+      );
+      await this.safeText(space, url);
       return undefined;
     }
   }
@@ -255,7 +260,7 @@ export class CardSender {
             { err: (e as Error).message, cardId: row.id, attempt: i + 1 },
             'card edit failed',
           );
-          await sleep(EDIT_BACKOFF_MS[i] as number);
+          if (i < EDIT_BACKOFF_MS.length - 1) await sleep(EDIT_BACKOFF_MS[i] as number);
         }
       }
     }

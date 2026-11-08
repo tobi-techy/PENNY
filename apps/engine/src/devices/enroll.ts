@@ -179,7 +179,9 @@ export class EnrollService {
         if (e instanceof AttestError) throw new EnrollError(401, `attest_${e.code}`);
         throw e;
       }
-    } else if (this.attest.require && body.platform !== 'web_passkey') {
+    } else if (this.attest.require) {
+      // Mainnet needs a genuine app (App Attest). The platform field is the client's
+      // word, so web_passkey must not be a way around it.
       throw new EnrollError(401, 'attest_required');
     }
     const platform = body.platform ?? 'ios_app';
