@@ -100,3 +100,170 @@ input {
   letter-spacing: -1px;
   margin: 4px 0;
 }
+
+/* ---- the card (docs/DESIGN.md section 4; same as the iMessage card and og:image) ---- */
+.pcard {
+  background: #080d14;
+  border: 1px solid #1e2a38;
+  border-radius: 18px;
+  overflow: hidden;
+  color: #f1f5fa;
+  margin: 18px 0;
+}
+.pcard .art {
+  --art: #b1c3d8;
+  height: 96px;
+  background-image: radial-gradient(var(--art) 1.5px, transparent 1.9px);
+  background-size: 6px 6px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 20%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 20%, #000 55%, transparent 100%);
+}
+.pcard .art.calm {
+  opacity: 0.6;
+}
+.pcard .art.muted {
+  --art: #4a5563;
+}
+.art[data-type="invest"],
+.art[data-type="pick"] {
+  --art: #6ea1d6;
+}
+.art[data-type="send"],
+.art[data-type="done"] {
+  --art: #4fd57f;
+}
+.art[data-type="pay_bill"],
+.art[data-type="found"] {
+  --art: #fea247;
+}
+.art[data-type="request"],
+.art[data-type="plan"] {
+  --art: #b77df8;
+}
+.art[data-type="errand"] {
+  --art: #fa78b2;
+}
+.art[data-type="guard_block"] {
+  --art: #fc5855;
+}
+.art[data-type="checkin"],
+.art[data-type="reminder"] {
+  --art: #8fe4cc;
+}
+.art[data-type="write"],
+.art[data-type="email_draft"] {
+  --art: #8b8cf0;
+}
+.art[data-type="new_bot"] {
+  --art: #e8c766;
+}
+.pcard .body {
+  padding: 12px 16px 16px;
+}
+.pcard .tagrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.pcard .tag {
+  font:
+    11px / 1 ui-monospace,
+    "Geist Mono",
+    monospace;
+  letter-spacing: 0.8px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #0f1a26;
+  color: #b1c3d8;
+}
+.pcard .tag.red {
+  background: #3a1214;
+  color: #ff9c9c;
+}
+.pcard .timer {
+  font:
+    12px ui-monospace,
+    "Geist Mono",
+    monospace;
+  color: #b1c3d8;
+}
+.pcard .meta {
+  font-size: 13px;
+  color: #b1c3d8;
+  margin-top: 12px;
+}
+.pcard .amt {
+  font-size: 34px;
+  letter-spacing: -1.2px;
+  margin-top: 2px;
+}
+.pcard .headline {
+  font-size: 22px;
+  letter-spacing: -0.5px;
+  margin-top: 12px;
+}
+.pcard .dl {
+  margin-top: 10px;
+  border-top: 1px solid #ffffff1a;
+}
+.pcard .dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: #b1c3d8;
+  padding: 8px 0;
+  border-bottom: 1px solid #ffffff12;
+}
+.pcard .dl b {
+  font-weight: 400;
+  color: #f1f5fa;
+  text-align: right;
+  word-break: break-word;
+}
+.pcard .pill {
+  margin-top: 12px;
+  height: 44px;
+  border-radius: 999px;
+  background: #fff;
+  color: #111519;
+  font-size: 15px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+.pcard .pill.dim {
+  background: #ffffff1f;
+  color: #f1f5fa;
+}
+.pcard .pill.ok {
+  background: #0a2e27;
+  color: #8fe4cc;
+}
+.pcard .pill.red {
+  background: #3a1214;
+  color: #ff9c9c;
+}
+.pcard .buttons {
+  display: flex;
+  gap: 8px;
+}
+.pcard .foot {
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  color: #b1c3d8;
+  margin-top: 12px;
+}
+.pcard textarea {
+  width: 100%;
+  margin-top: 12px;
+  border-radius: 12px;
+  border: 1px solid #26313a;
+  background: #0e1318;
+  color: #f1f5fa;
+  font: inherit;
+  padding: 10px;
+}

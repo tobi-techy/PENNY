@@ -1,14 +1,25 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ApprovalPage } from './ApprovalPage.tsx';
+import { CardPage } from './CardPage.tsx';
+import { tokenFromPath } from './cardView.ts';
 import { SetupPage } from './SetupPage.tsx';
 import './styles.css';
 
 const path = window.location.pathname;
-const approval = /^\/a\/(apr_[A-Za-z0-9]+)/.exec(path);
+const token = tokenFromPath(path);
 const root = document.getElementById('root');
 if (root) {
   createRoot(root).render(
-    <StrictMode>{approval?.[1] ? <ApprovalPage id={approval[1]} /> : <SetupPage />}</StrictMode>,
+    <StrictMode>
+      {token ? (
+        <CardPage token={token} />
+      ) : path.startsWith('/a/') ? (
+        <main>
+          <p>This card is too old. Ask Penny again for a fresh one.</p>
+        </main>
+      ) : (
+        <SetupPage />
+      )}
+    </StrictMode>,
   );
 }
