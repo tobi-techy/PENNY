@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PasskeyRegistration } from './cards.ts';
 import { DECIMAL_RE } from './decimal.ts';
 
 // ---------- primitives ----------
@@ -324,8 +325,17 @@ export const EnrollBody = z
     publicKeyEd25519: Base64Url.length(43),
     appAttest: z.string().max(16_384).optional(),
     appAttestChallengeId: z.string().min(3).max(64).optional(),
+    /** ios_app (default, has the iMessage extension) or web_passkey (no install). */
+    platform: z.enum(['ios_app', 'web_passkey']).optional(),
+    /** web_passkey: the passkey made on this phone, checked on the server. */
+    passkey: PasskeyRegistration.optional(),
+    passkeyChallengeId: z.string().min(3).max(64).optional(),
   })
-  .strict();
+  .strict()
+  .refine((b) => b.platform !== 'web_passkey' || (b.passkey && b.passkeyChallengeId), {
+    message: 'web_passkey enrollment needs a passkey',
+    path: ['passkey'],
+  });
 export type EnrollBody = z.infer<typeof EnrollBody>;
 
 export const EnrollResponse = z

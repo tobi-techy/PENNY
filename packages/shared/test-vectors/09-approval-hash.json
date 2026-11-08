@@ -1,0 +1,8 @@
+{
+  "description": "approvalHash = base64url(sha256(JCS({action, expiresAt, id, planHash}))); the device signs approvalSignMessage(approvalHash, challenge) as UTF-8",
+  "input": "{\"id\":\"apr_01JC0000000000000000000000\",\"action\":{\"type\":\"send\",\"to\":\"amara.testnet\",\"amount\":\"0.1\",\"asset\":\"NEAR\"},\"expiresAt\":\"2026-11-05T19:10:00.000Z\",\"planHash\":\"q2XfvgGyrVKQkr5xNJARbeL6jLd4uuhW7GN7kX9ObQE\"}",
+  "canonical": "{\"action\":{\"amount\":\"0.1\",\"asset\":\"NEAR\",\"to\":\"amara.testnet\",\"type\":\"send\"},\"expiresAt\":\"2026-11-05T19:10:00.000Z\",\"id\":\"apr_01JC0000000000000000000000\",\"planHash\":\"q2XfvgGyrVKQkr5xNJARbeL6jLd4uuhW7GN7kX9ObQE\"}",
+  "sha256Base64Url": "6n_aSpN2MKS6kajO_LbFPNIjj2Zz7mlR5f4WD-H6EFM",
+  "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "signMessage": "penny-approval:v2:6n_aSpN2MKS6kajO_LbFPNIjj2Zz7mlR5f4WD-H6EFM:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+}
