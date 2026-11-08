@@ -17,6 +17,9 @@ public final class ApprovalCardModel: ObservableObject {
     @Published public private(set) var note: String?
     /// Unfreeze cards: the challenge Face ID signs.
     private var unfreezeChallenge: String?
+    /// "Not me" switches every key off: the screen asks first.
+    @Published public private(set) var confirmingFreeze: String?
+    private var askedForFreshPrice = false
 
     public let token: CardToken
     private let client: EngineClient
@@ -95,6 +98,11 @@ public final class ApprovalCardModel: ObservableObject {
             signingPreview = fetched.ticket.map { ActionSummary.describe($0.detail) } ?? []
             phase = CardPhase.from(card: fetched.card, now: Date())
             if fetched.card.state == .approving { startPolling() }
+            // an invest price lasts 90 s: opening the card gets a fresh one in place, once
+            if fetched.card.type == "invest", fetched.card.state == .ready, !askedForFreshPrice {
+                askedForFreshPrice = true
+                if (try? await client.freshPrice(token)) != nil { await load() }
+            }
         } catch let error as PennyError {
             phase = .unavailable(message: error.errorDescription ?? "Couldn't load this card.")
         } catch {
@@ -113,7 +121,8 @@ public final class ApprovalCardModel: ObservableObject {
         case .renew:
             Task { await renew() }
         case .notMe:
-            Task { await press(buttonId: card?.buttons.first(where: { $0.action == "freeze" })?.id ?? "notme") }
+            confirmingFreeze = card?.buttons.first(where: { $0.action == "freeze" })?.id ?? "notme"
+            onNeedsExpandedPresentation?()
         case let .button(id):
             if let b = card?.buttons.first(where: { $0.id == id }), b.action == "open", let v = b.value, let url = URL(string: v) {
                 onOpenURL?(url)
@@ -201,11 +210,30 @@ public final class ApprovalCardModel: ObservableObject {
         }
     }
 
+    /// "Yes, freeze everything" after Not me.
+    public func confirmFreeze() async {
+        guard let id = confirmingFreeze else { return }
+        confirmingFreeze = nil
+        do {
+            try await client.press(token, buttonId: id, confirm: true)
+            note = "Penny is frozen. Every key is off. Text unfreeze when you want it back."
+            await load()
+        } catch {
+            note = "That didn't work. Try again."
+        }
+    }
+
+    public func cancelFreeze() { confirmingFreeze = nil }
+
     /// "Get a new card": the engine checks Guard again and sends a fresh card to the thread.
     public func renew() async {
         do {
-            try await client.renew(token)
-            note = "A new card is on its way."
+            // only say a card is coming when one was actually made
+            if try await client.renew(token) != nil {
+                note = "A new card is on its way."
+            } else {
+                note = "Penny couldn't make a new card. Ask Penny again."
+            }
         } catch let error as PennyError {
             note = error.errorDescription
         } catch {

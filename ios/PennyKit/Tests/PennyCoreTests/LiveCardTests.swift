@@ -215,6 +215,15 @@ final class CardStateTests: XCTestCase {
         XCTAssertThrowsError(try PennyCard.parse(.object(["lines": .array([])])))
     }
 
+    func testTheServersStatusLineIsShownAndFailedNeverClaimsNothingMoved() throws {
+        let card = try PennyCard.parse(.object([
+            "title": "Send 1 USDC", "state": "failed",
+            "statusLine": "couldn't confirm this went through. check your balance before trying again.",
+        ]))
+        XCTAssertEqual(card.statusLine, "couldn't confirm this went through. check your balance before trying again.")
+        XCTAssertFalse(CardState.failed.closingLine?.lowercased().contains("nothing") ?? true)
+    }
+
     func testReceiptLinksMustBeHTTPS() throws {
         let ok = try PennyCard.parse(.object(["title": "Sent", "receiptUrl": "https://testnet.nearblocks.io/txns/abc"]))
         XCTAssertEqual(ok.receiptURL?.host, "testnet.nearblocks.io")

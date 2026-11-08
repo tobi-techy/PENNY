@@ -78,9 +78,16 @@ public struct EngineClient: Sendable {
         return try StatusOnly.parse(data)
     }
 
-    // POST /v1/approvals/by-token/:token/renew -> a fresh card arrives in the thread
-    public func renew(_ token: CardToken, idempotencyKey: String = UUID().uuidString) async throws {
-        _ = try await send("POST", "/v1/approvals/by-token/\(token.value)/renew", cardToken: nil,
+    // POST /v1/approvals/by-token/:token/renew -> the new approval id, or nil when none was made
+    public func renew(_ token: CardToken, idempotencyKey: String = UUID().uuidString) async throws -> String? {
+        let data = try await send("POST", "/v1/approvals/by-token/\(token.value)/renew", cardToken: nil,
+                                  body: CanonicalJSON.data(.object([:])), idempotencyKey: idempotencyKey)
+        return try JSONParser.parse(data)["approvalId"]?.stringValue
+    }
+
+    // POST /v1/approvals/by-token/:token/fresh-price: an invest card gets a fresh quote in place
+    public func freshPrice(_ token: CardToken, idempotencyKey: String = UUID().uuidString) async throws {
+        _ = try await send("POST", "/v1/approvals/by-token/\(token.value)/fresh-price", cardToken: nil,
                            body: CanonicalJSON.data(.object([:])), idempotencyKey: idempotencyKey)
     }
 
@@ -96,9 +103,12 @@ public struct EngineClient: Sendable {
     }
 
     // POST /v1/cards/by-token/:token/press {buttonId}: Undo, Edit, Send (turns into an approval card), Not me
-    public func press(_ token: CardToken, buttonId: String, idempotencyKey: String = UUID().uuidString) async throws {
+    public func press(_ token: CardToken, buttonId: String, confirm: Bool = false,
+                      idempotencyKey: String = UUID().uuidString) async throws {
+        var fields: [String: JSONValue] = ["buttonId": .string(buttonId)]
+        if confirm { fields["confirm"] = .bool(true) }
         _ = try await send("POST", "/v1/cards/by-token/\(token.value)/press", cardToken: nil,
-                           body: CanonicalJSON.data(.object(["buttonId": .string(buttonId)])), idempotencyKey: idempotencyKey)
+                           body: CanonicalJSON.data(.object(fields)), idempotencyKey: idempotencyKey)
     }
 
     // POST /v1/approvals/:id/decline  {reason?}

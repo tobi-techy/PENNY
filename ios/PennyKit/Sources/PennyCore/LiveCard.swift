@@ -50,7 +50,8 @@ public enum CardState: String, Sendable, CaseIterable {
         case .sent: return "Done. It went through."
         case .expired: return "This card ran out of time. Nothing moved."
         case .declined: return "You said no. Nothing moved."
-        case .failed: return "It didn't go through. Nothing moved."
+        // only the server knows whether anything moved: PennyCard.statusLine says so when it can
+        case .failed: return "It didn't go through."
         case .undone: return "Undone."
         default: return nil
         }
@@ -96,6 +97,8 @@ public struct PennyCard: Equatable, Sendable {
     public let approvalId: String?
     public let expiresAt: Date?
     public let receiptURL: URL?
+    /// What happened, as the server knows it ("couldn't confirm…"). Shown as is.
+    public var statusLine: String? = nil
 
     public static func parse(_ json: JSONValue) throws -> PennyCard {
         guard let o = json.objectValue, let title = o["title"]?.stringValue, !title.isEmpty else {
@@ -111,7 +114,7 @@ public struct PennyCard: Equatable, Sendable {
                                   value: item["value"]?.stringValue)
         }
         let receipt = o["receiptUrl"]?.stringValue.flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
-        return PennyCard(
+        var card = PennyCard(
             id: o["id"]?.stringValue ?? "",
             agent: o["agent"]?.stringValue ?? "penny",
             isApproval: o["kind"]?.stringValue == "approval",
@@ -125,6 +128,8 @@ public struct PennyCard: Equatable, Sendable {
             expiresAt: o["expiresAt"]?.stringValue.flatMap(Validate.date),
             receiptURL: receipt
         )
+        card.statusLine = o["statusLine"]?.stringValue.map { String($0.prefix(120)) }
+        return card
     }
 }
 

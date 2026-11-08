@@ -199,7 +199,7 @@ public enum CardPhase: Equatable, Sendable {
         case .blocked: return .blocked(message: card.lines.first?.value ?? "Guard said no.")
         case .expired: return .expired
         case .declined: return .declined
-        case .failed: return .failed(message: CardState.failed.closingLine ?? "", steps: [])
+        case .failed: return .failed(message: card.statusLine ?? CardState.failed.closingLine ?? "", steps: [])
         case .undone: return .closed(message: CardState.undone.closingLine ?? "Undone.")
         }
     }
