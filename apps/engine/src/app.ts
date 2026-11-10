@@ -16,7 +16,7 @@ import { ReflectionService } from './brain/reflection.ts';
 import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
 import { CardActions } from './cards/actions.ts';
-import { CardSender } from './cards/sender.ts';
+import { CardSender, toCardDto } from './cards/sender.ts';
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
@@ -33,6 +33,7 @@ import {
   webPageCsp,
 } from './http/security.ts';
 import { handleInbound } from './inbound.ts';
+import { sha256Hex } from './lib/crypto.ts';
 import type { Logger } from './lib/logger.ts';
 import type { InvestPort } from './market/invest.ts';
 import { OnboardingService } from './onboarding.ts';
@@ -226,6 +227,7 @@ export function createEngine(d: EngineDeps) {
     messaging: d.messaging,
     enroll,
     watches: repos.connectWatches,
+    cards: cardSender,
     ...(d.connectors ? { connectors: d.connectors } : {}),
     bills,
     publicBaseUrl: d.publicBaseUrl,
@@ -362,6 +364,52 @@ export function createEngine(d: EngineDeps) {
         now: now(),
       }),
       view ? 200 : 404,
+    );
+  });
+  /** Connect card: Penny-hosted so iMessage shows a real card, with one Continue
+   *  button to the provider. The destination is stored server-side, never in the URL. */
+  const connectCardView = async (raw: string) => {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(raw)) return null;
+    const row = await repos.cards.byTokenHash(sha256Hex(raw));
+    if (!row || row.type !== 'connect' || row.tokenExpiresAt.getTime() < now().getTime())
+      return null;
+    const connectUrl = typeof row.payload?.connectUrl === 'string' ? row.payload.connectUrl : null;
+    if (!connectUrl || !connectUrl.startsWith('https://')) return null;
+    return { card: toCardDto(row), connectUrl };
+  };
+  app.get('/c/:token/card.png', async (c) => {
+    const view = await connectCardView(c.req.param('token'));
+    if (!view) return c.json({ error: 'not_found' }, 404);
+    const png = await renderPng(view.card);
+    return new Response(png, {
+      headers: {
+        'content-type': 'image/png',
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff',
+      },
+    });
+  });
+  app.get('/c/:token', async (c) => {
+    const raw = c.req.param('token');
+    const view = await connectCardView(raw);
+    c.header('cache-control', 'no-store');
+    c.header('referrer-policy', 'no-referrer');
+    c.header('x-robots-tag', 'noindex');
+    if (!view)
+      return c.html(
+        '<!doctype html><meta name="robots" content="noindex"><h1>This link is gone.</h1>',
+        404,
+      );
+    const base = d.publicBaseUrl.replace(/\/$/, '');
+    const { connectPageHtml } = await import('./cards/page.ts');
+    return c.html(
+      connectPageHtml({
+        card: view.card,
+        connectUrl: view.connectUrl,
+        imageUrl: `${base}/c/${raw}/card.png`,
+        pageUrl: `${base}/c/${raw}`,
+      }),
     );
   });
   app.get('/assets/:file', async (c) => {
