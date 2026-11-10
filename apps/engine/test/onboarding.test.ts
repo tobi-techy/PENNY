@@ -115,6 +115,9 @@ describe('onboarding', () => {
     );
     await t.engine.services.crew.handle(userId, space, 'connect my gmail', { conversationId });
     expect(gmail.callbackUrls).toEqual(['https://penny.test/connected?app=gmail']);
+    // the URL arrives as its own rich-link card, not buried in a sentence
+    expect(t.messaging.richLinks).toEqual([{ space, url: 'https://connect.example/gmail' }]);
+    expect(texts().some((x) => x.includes('https://connect.example'))).toBe(false);
 
     // not connected yet: nothing said
     expect(await t.engine.services.onboarding.checkConnections()).toBe(0);

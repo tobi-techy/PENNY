@@ -27,7 +27,11 @@ export type SpectrumConfig = {
 
 // Minimal structural types so SDK types don't leak through the engine.
 type SentMessage = unknown;
-type SpectrumSpace = { send: (...content: unknown[]) => Promise<SentMessage> };
+type SpectrumSpace = {
+  send: (...content: unknown[]) => Promise<SentMessage>;
+  startTyping?: () => Promise<void>;
+  stopTyping?: () => Promise<void>;
+};
 
 export class SpectrumMessaging implements MessagingPort {
   private sent = new Map<string, { space: SpaceRef; message: SentMessage; url: string }>();
@@ -36,6 +40,7 @@ export class SpectrumMessaging implements MessagingPort {
   } | null = null;
   private sdk: {
     customizedMiniApp: (input: Record<string, unknown>) => unknown;
+    richlink: (url: string) => unknown;
     edit: (content: unknown, target: unknown) => unknown;
   } | null = null;
 
@@ -55,6 +60,7 @@ export class SpectrumMessaging implements MessagingPort {
       customizedMiniApp: prov.customizedMiniApp as unknown as (
         i: Record<string, unknown>,
       ) => unknown,
+      richlink: core.richlink as unknown as (url: string) => unknown,
       edit: core.edit as unknown as (c: unknown, t: unknown) => unknown,
     };
     return { im: this.im, sdk: this.sdk };
@@ -95,6 +101,39 @@ export class SpectrumMessaging implements MessagingPort {
   async sendText(ref: SpaceRef, text: string): Promise<void> {
     const s = await this.space(ref);
     await s.send(text);
+  }
+
+  /**
+   * A URL as iMessage's native link card. Spectrum passes only the URL and the
+   * client unfurls it; if that fails, a plain URL message still works.
+   */
+  async sendLink(ref: SpaceRef, url: string): Promise<void> {
+    const { sdk } = await this.init();
+    const s = await this.space(ref);
+    try {
+      await s.send(sdk.richlink(url));
+    } catch {
+      await s.send(url);
+    }
+  }
+
+  /** Typing is a nicety: never let a failed indicator block the reply. */
+  async startTyping(ref: SpaceRef): Promise<void> {
+    try {
+      const s = await this.space(ref);
+      await s.startTyping?.();
+    } catch {
+      /* best effort */
+    }
+  }
+
+  async stopTyping(ref: SpaceRef): Promise<void> {
+    try {
+      const s = await this.space(ref);
+      await s.stopTyping?.();
+    } catch {
+      /* best effort */
+    }
   }
 
   async sendCard(ref: SpaceRef, card: ApprovalCard): Promise<CardHandle> {

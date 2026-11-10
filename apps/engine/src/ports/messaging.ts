@@ -24,6 +24,11 @@ export type CardHandle = { cardId: string; ref: string };
 
 export interface MessagingPort {
   sendText(space: SpaceRef, text: string): Promise<void>;
+  /** Send a URL as a native rich-link card (falls back to the URL as text). */
+  sendLink(space: SpaceRef, url: string): Promise<void>;
+  /** Best-effort typing indicator; a failure here never breaks a reply. */
+  startTyping(space: SpaceRef): Promise<void>;
+  stopTyping(space: SpaceRef): Promise<void>;
   sendCard(space: SpaceRef, card: ApprovalCard): Promise<CardHandle>;
   /** Update a previously sent card in place (Spectrum edit()). */
   editCard(handle: CardHandle, card: ApprovalCard): Promise<void>;
@@ -31,11 +36,22 @@ export interface MessagingPort {
 
 export class FakeMessaging implements MessagingPort {
   texts: { space: SpaceRef; text: string }[] = [];
+  richLinks: { space: SpaceRef; url: string }[] = [];
+  typing: { space: SpaceRef; on: boolean }[] = [];
   cards: { space: SpaceRef; card: ApprovalCard }[] = [];
   edits: { handle: CardHandle; card: ApprovalCard }[] = [];
 
   async sendText(space: SpaceRef, text: string) {
     this.texts.push({ space, text });
+  }
+  async sendLink(space: SpaceRef, url: string) {
+    this.richLinks.push({ space, url });
+  }
+  async startTyping(space: SpaceRef) {
+    this.typing.push({ space, on: true });
+  }
+  async stopTyping(space: SpaceRef) {
+    this.typing.push({ space, on: false });
   }
   /** Set to make the next N edits throw (tests the retry-then-resend path). */
   failEdits = 0;
