@@ -68,7 +68,7 @@ More: `apps/engine/README.md`. iOS: `ios/README.md`.
 | Create a testnet account for the biller, e.g. `penny-demo-biller.testnet` | it exists on [testnet NearBlocks](https://testnet.nearblocks.io) |
 | Set `NEAR_NETWORK=testnet`, `NEAR_RPC_URL=https://rpc.testnet.near.org`, the testnet app and relayer keys, and `PENNY_DEMO_BILLER_ACCOUNT=penny-demo-biller.testnet` | engine boots and talks to testnet |
 | Set `NEAR_USDC_CONTRACT` to your Penny test dollar (tUSD) contract id, deployed from `contracts/guard/mock-ft` | every dollar action uses that token |
-| Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: it is a test run, the card still settles, but no receipt link follows |
+| Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: the card settles as a test run, the bill is not crossed off and its reminder stays, and Penny texts `paid (test run, nothing sent) ✓` with no receipt link |
 | Optional: set `PENNY_GUARD_CONTRACT=<shared guard id>` (e.g. `guard.penny.testnet`) | Guard checks the shared Guard contract; unset = autopilot off |
 | Text Penny, open the setup link | your Penny account is made on testnet; its `account_id` is on your `users` row |
 | Give that account tUSD: call `mint` on the tUSD contract from its owner account with `{"account_id":"<your penny account>","amount":"10000000"}` | 6 decimals, so `10000000` is `$10.00` |
@@ -81,7 +81,7 @@ On both networks the bill card shows `$5.00 in USDC`; on testnet that token is t
 
 ### Deploy notes
 
-- **Migrations.** A fresh database runs `0000..0008` at boot, ending with `0008_bills_reminders_onboarding`, which is additive and idempotent. An environment that already ran an earlier shape of this branch's migrations must be dropped and recreated: the merged journal renumbers them, so drizzle skips main's `0005`/`0006`/`0007` or a later step fails on a missing column. There is no repair path; only a fresh database is supported. See `apps/engine/README.md`.
+- **Migrations.** A fresh database runs `0000..0009` at boot, ending with the last migration (`0009`), which is additive. An environment that already ran an earlier shape of this branch's migrations must be dropped and recreated: the merged journal renumbers them, so drizzle skips main's `0005`/`0006`/`0007` or a later step fails on a missing column. There is no repair path; only a fresh database is supported. See `apps/engine/README.md`.
 
 ## Safety defaults
 
