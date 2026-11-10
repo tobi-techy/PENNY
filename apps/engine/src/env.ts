@@ -67,6 +67,22 @@ const BaseEnv = z.object({
   NEAR_RELAYER_PUBLIC_KEY: optionalStr,
   NEAR_APP_PRIVATE_KEY: optionalStr,
   NEAR_APP_PUBLIC_KEY: optionalStr,
+  /**
+   * Testnet only: the dollar token accounts are registered with (tUSD). Unset on
+   * mainnet, where the adapter always uses native USDC.
+   */
+  NEAR_USDC_CONTRACT: optionalStr.refine(
+    (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),
+    'must be a NEAR account id',
+  ),
+  /**
+   * The single shared Guard contract (contracts/guard), e.g. guard.penny.testnet.
+   * Unset = on-chain autopilot off and guardFor() returns undefined.
+   */
+  PENNY_GUARD_CONTRACT: optionalStr.refine(
+    (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),
+    'must be a NEAR account id',
+  ),
   ONECLICK_API_KEY: optionalStr,
   /** Optional 1Click JWT. Without a key or JWT 1Click adds a 0.2% fee (shown on the card). */
   ONECLICK_JWT: optionalStr,
@@ -116,6 +132,21 @@ const MAINNET_REQUIRED = [
 ] as const;
 
 export const EnvSchema = BaseEnv.superRefine((env, ctx) => {
+  // The test dollar override exists for testnet only; mainnet always moves USDC.
+  if (env.NEAR_USDC_CONTRACT && env.NEAR_NETWORK === 'mainnet') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['NEAR_USDC_CONTRACT'],
+      message: 'NEAR_USDC_CONTRACT may only be set on testnet',
+    });
+  }
+  if (env.NEAR_USDC_CONTRACT && env.PENNY_ENV === 'mainnet') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['NEAR_USDC_CONTRACT'],
+      message: 'NEAR_USDC_CONTRACT may only be set on testnet',
+    });
+  }
   if (env.PENNY_PROVE_SECRET && (env.PENNY_ENV === 'mainnet' || env.NEAR_NETWORK !== 'testnet')) {
     ctx.addIssue({
       code: 'custom',

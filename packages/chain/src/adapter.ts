@@ -148,6 +148,7 @@ export class ChainAdapter {
       rpc: this.rpc,
       appAccountId: o.appAccountId,
       mode: this.mode,
+      usdcContract: this.usdc,
       ...(o.appSigner ? { signer: o.appSigner } : {}),
       ...(o.appPublicKey ? { appPublicKey: o.appPublicKey } : {}),
     });

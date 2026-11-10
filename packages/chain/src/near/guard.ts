@@ -13,9 +13,18 @@ const ONE_YOCTO = 1n;
 
 /**
  * TypeScript client for the penny-guard contract (contracts/guard).
- * One guard contract per user: `guard.<userAccountId>`, owned by the user.
- * Owner calls (set_policy/pause/revoke/...) attach exactly 1 yocto as the
- * contract requires. Agent spend is called by the agent account itself.
+ *
+ * The contract is deployed once as a shared, locked account (for example
+ * `guard.penny.testnet`) and initialised with `new(tokens)`. Tokens are fixed for
+ * life; there is no `add_token` and no per-user `guard.<user>` account. Every
+ * owner's budgets and agent policies live under keys prefixed with that owner's
+ * account id, so one deployment serves every user.
+ *
+ * Owner calls (`set_policy`/`pause_*`/`resume_*`/`revoke_*`/`withdraw`) are signed
+ * by the owner account and carry 1 yocto. The owner is an explicit argument on
+ * every owner-scoped call because one client instance serves every owner. Agent
+ * `spend` is called by the agent account itself and names the owner.
+ *
  * Everything is dry-run unless the mode gate (mode.ts) says live.
  */
 export type GuardTokenLimit = { token: string; perTxCap: string; dailyCap: string };
@@ -26,6 +35,7 @@ export type GuardPolicyInput = {
   expiresAtNs?: string;
 };
 export type GuardPolicyView = {
+  owner_id: string;
   agent_id: string;
   limits: { token: string; per_tx_cap: string; daily_cap: string }[];
   allowlist: string[];
@@ -38,10 +48,6 @@ export type GuardPolicyView = {
 export type GuardCallResult =
   | { mode: 'dry_run'; txHash: string; contractId: string; method: string }
   | { mode: 'broadcast'; txHash: string; contractId: string; method: string; outcome: unknown };
-
-export function guardContractId(userAccountId: string): string {
-  return `guard.${userAccountId}`;
-}
 
 function policyArgs(policy: GuardPolicyInput) {
   return {
@@ -61,8 +67,8 @@ export class GuardContract {
   constructor(
     private readonly o: {
       rpc: NearRpc;
+      /** The shared contract id from config (PENNY_GUARD_CONTRACT), never per-user. */
       contractId: string;
-      ownerAccountId: string;
       ownerSigner?: TxSigner;
       mode?: ChainMode;
     },
@@ -70,37 +76,18 @@ export class GuardContract {
     this.mode = o.mode ?? DEFAULT_MODE;
   }
 
-  static forUser(rpc: NearRpc, userAccountId: string, ownerSigner?: TxSigner, mode?: ChainMode) {
-    return new GuardContract({
-      rpc,
-      contractId: guardContractId(userAccountId),
-      ownerAccountId: userAccountId,
-      ...(ownerSigner ? { ownerSigner } : {}),
-      ...(mode ? { mode } : {}),
-    });
-  }
-
   get contractId(): string {
     return this.o.contractId;
   }
 
   /**
-   * Deploy plan: create `guard.<user>` and deploy code in one tx from the
-   * user account, then `new(owner, tokens)` must be called by the owner.
-   * Returns the unsigned plan; live deploy needs the wasm bytes + signer.
+   * Init plan for the shared contract: `new(tokens)` signed by the contract itself
+   * or its parent. The account and wasm are deployed once by the operator
+   * (`contracts/guard/build.sh`), not per user. Tokens are fixed for life.
    */
-  deployActions(codeBytes: Uint8Array, tokens: string[]) {
-    if (!tokens.length) throw new Error('guard deploy needs at least one allowed token');
-    return [
-      actionCreators.createAccount(),
-      actionCreators.deployContract(codeBytes),
-      actionCreators.functionCall(
-        'new',
-        canonicalBytes({ owner_id: this.o.ownerAccountId, tokens }),
-        GAS_CALL,
-        0n,
-      ),
-    ];
+  deployActions(tokens: string[]) {
+    if (!tokens.length) throw new Error('guard init needs at least one allowed token');
+    return [actionCreators.functionCall('new', canonicalBytes({ tokens }), GAS_CALL, 0n)];
   }
 
   private async call(
@@ -113,7 +100,12 @@ export class GuardContract {
     if (!signer) {
       // No key material: still build the tx hash a signer would produce is
       // impossible without a key, so report a plan-only dry run.
-      return { mode: 'dry_run', txHash: `dry_${method}_${this.o.contractId}`, contractId: this.o.contractId, method };
+      return {
+        mode: 'dry_run',
+        txHash: `dry_${method}_${this.o.contractId}`,
+        contractId: this.o.contractId,
+        method,
+      };
     }
     const key = await this.o.rpc.viewAccessKey(signerId, signer.publicKey.toString());
     if (!key) {
@@ -121,7 +113,12 @@ export class GuardContract {
       if (isLive(this.mode, true, opts.live ?? { dryRun: true })) {
         throw new Error(`signer key not found on ${signerId}`);
       }
-      return { mode: 'dry_run', txHash: `dry_${method}_${this.o.contractId}`, contractId: this.o.contractId, method };
+      return {
+        mode: 'dry_run',
+        txHash: `dry_${method}_${this.o.contractId}`,
+        contractId: this.o.contractId,
+        method,
+      };
     }
     const built = buildTx({
       signerId,
@@ -146,42 +143,70 @@ export class GuardContract {
     return { mode: 'broadcast', txHash: built.hash, contractId: this.o.contractId, method, outcome };
   }
 
-  private ownerCall(method: string, args: Record<string, unknown>, live?: LiveRequest) {
-    return this.call(this.o.ownerSigner, this.o.ownerAccountId, method, args, {
+  /**
+   * Owner-signed call. The signer must be the owner named in the call, otherwise a
+   * shared-contract client could mutate another owner's policy.
+   */
+  private ownerCall(
+    ownerAccountId: string,
+    method: string,
+    args: Record<string, unknown>,
+    live?: LiveRequest,
+  ) {
+    if (this.o.ownerSigner && this.o.ownerSigner.accountId !== ownerAccountId) {
+      throw new Error(
+        `guard owner signer is ${this.o.ownerSigner.accountId}, not ${ownerAccountId}`,
+      );
+    }
+    return this.call(this.o.ownerSigner, ownerAccountId, method, args, {
       deposit: ONE_YOCTO,
       ...(live ? { live } : {}),
     });
   }
 
-  setPolicy(agentId: string, policy: GuardPolicyInput, live?: LiveRequest) {
-    return this.ownerCall('set_policy', { agent_id: agentId, policy: policyArgs(policy) }, live);
+  setPolicy(
+    ownerAccountId: string,
+    agentId: string,
+    policy: GuardPolicyInput,
+    live?: LiveRequest,
+  ) {
+    return this.ownerCall(
+      ownerAccountId,
+      'set_policy',
+      { agent_id: agentId, policy: policyArgs(policy) },
+      live,
+    );
   }
-  pauseAgent(agentId: string, live?: LiveRequest) {
-    return this.ownerCall('pause_agent', { agent_id: agentId }, live);
+  pauseAgent(ownerAccountId: string, agentId: string, live?: LiveRequest) {
+    return this.ownerCall(ownerAccountId, 'pause_agent', { agent_id: agentId }, live);
   }
-  resumeAgent(agentId: string, live?: LiveRequest) {
-    return this.ownerCall('resume_agent', { agent_id: agentId }, live);
+  resumeAgent(ownerAccountId: string, agentId: string, live?: LiveRequest) {
+    return this.ownerCall(ownerAccountId, 'resume_agent', { agent_id: agentId }, live);
   }
-  revokeAgent(agentId: string, live?: LiveRequest) {
-    return this.ownerCall('revoke_agent', { agent_id: agentId }, live);
+  revokeAgent(ownerAccountId: string, agentId: string, live?: LiveRequest) {
+    return this.ownerCall(ownerAccountId, 'revoke_agent', { agent_id: agentId }, live);
   }
-  pauseAll(live?: LiveRequest) {
-    return this.ownerCall('pause_all', {}, live);
+  pauseAll(ownerAccountId: string, live?: LiveRequest) {
+    return this.ownerCall(ownerAccountId, 'pause_all', {}, live);
   }
-  resumeAll(live?: LiveRequest) {
-    return this.ownerCall('resume_all', {}, live);
+  resumeAll(ownerAccountId: string, live?: LiveRequest) {
+    return this.ownerCall(ownerAccountId, 'resume_all', {}, live);
   }
-  addToken(token: string, live?: LiveRequest) {
-    return this.ownerCall('add_token', { token }, live);
-  }
-  withdraw(token: string, amountBaseUnits: string, live?: LiveRequest) {
-    return this.ownerCall('withdraw', { token, amount: amountBaseUnits }, live);
+  withdraw(ownerAccountId: string, token: string, amountBaseUnits: string, live?: LiveRequest) {
+    return this.ownerCall(ownerAccountId, 'withdraw', { token, amount: amountBaseUnits }, live);
   }
 
   /** Agent-initiated spend. The agent account signs; the contract enforces caps. */
   spend(
     agentSigner: TxSigner,
-    input: { token: string; recipient: string; amountBaseUnits: string; nonce: string; memo?: string },
+    input: {
+      ownerAccountId: string;
+      token: string;
+      recipient: string;
+      amountBaseUnits: string;
+      nonce: string;
+      memo?: string;
+    },
     live?: LiveRequest,
   ) {
     return this.call(
@@ -189,6 +214,7 @@ export class GuardContract {
       agentSigner.accountId,
       'spend',
       {
+        owner_id: input.ownerAccountId,
         token: input.token,
         recipient: input.recipient,
         amount: input.amountBaseUnits,
@@ -200,24 +226,39 @@ export class GuardContract {
   }
 
   // ---- views (no signer, no gas) ----
-  async getPolicy(agentId: string): Promise<GuardPolicyView | null> {
+  async getTokens(): Promise<string[]> {
+    return ((await this.o.rpc.callView(this.o.contractId, 'get_tokens', {})) ?? []) as string[];
+  }
+  async getPolicy(ownerAccountId: string, agentId: string): Promise<GuardPolicyView | null> {
     return (await this.o.rpc.callView(this.o.contractId, 'get_policy', {
+      owner_id: ownerAccountId,
       agent_id: agentId,
     })) as GuardPolicyView | null;
   }
-  async getSpentToday(agentId: string, token: string): Promise<string> {
+  async getAgents(ownerAccountId: string): Promise<GuardPolicyView[]> {
+    return ((await this.o.rpc.callView(this.o.contractId, 'get_agents', {
+      owner_id: ownerAccountId,
+    })) ?? []) as GuardPolicyView[];
+  }
+  async getSpentToday(ownerAccountId: string, agentId: string, token: string): Promise<string> {
     const r = await this.o.rpc.callView(this.o.contractId, 'get_spent_today', {
+      owner_id: ownerAccountId,
       agent_id: agentId,
       token,
     });
     return String(r ?? '0');
   }
-  async getBudget(token: string): Promise<string> {
-    const r = await this.o.rpc.callView(this.o.contractId, 'get_budget', { token });
+  async getBudget(ownerAccountId: string, token: string): Promise<string> {
+    const r = await this.o.rpc.callView(this.o.contractId, 'get_budget', {
+      owner_id: ownerAccountId,
+      token,
+    });
     return String(r ?? '0');
   }
-  async isPausedAll(): Promise<boolean> {
-    return Boolean(await this.o.rpc.callView(this.o.contractId, 'is_paused_all', {}));
+  async isPausedAll(ownerAccountId: string): Promise<boolean> {
+    return Boolean(
+      await this.o.rpc.callView(this.o.contractId, 'is_paused_all', { owner_id: ownerAccountId }),
+    );
   }
 }
 

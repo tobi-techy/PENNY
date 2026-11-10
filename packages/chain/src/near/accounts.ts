@@ -94,16 +94,26 @@ export function buildCreateAccountActions(
   ];
 }
 
-/** App pays USDC storage for the new user so they can receive USDC (separate tx: different receiver). */
-export function buildUsdcStorageActions(accountId: string): Action[] {
-  return [
-    actionCreators.functionCall(
-      'storage_deposit',
-      canonicalBytes({ account_id: accountId, registration_only: true }),
-      10n * TGAS,
-      USDC_STORAGE_DEPOSIT,
-    ),
-  ];
+/**
+ * App pays storage for the new user so they can receive the network's dollar token
+ * (USDC on mainnet, tUSD on testnet). The token contract is the tx receiver, so it
+ * must be the adapter's actual token, never a hard-coded mainnet USDC.
+ */
+export function buildUsdcStorageActions(
+  accountId: string,
+  token: string,
+): { receiverId: string; actions: Action[] } {
+  return {
+    receiverId: token,
+    actions: [
+      actionCreators.functionCall(
+        'storage_deposit',
+        canonicalBytes({ account_id: accountId, registration_only: true }),
+        10n * TGAS,
+        USDC_STORAGE_DEPOSIT,
+      ),
+    ],
+  };
 }
 
 export interface PlannedTx {
@@ -131,6 +141,8 @@ export interface AccountFactoryOptions {
   signer?: TxSigner;
   mode?: ChainMode;
   initialBalanceYocto?: bigint;
+  /** Dollar token registered for the user: USDC on mainnet, tUSD on testnet. */
+  usdcContract?: string;
 }
 
 function describe(actions: Action[]): string[] {
@@ -146,9 +158,11 @@ function describe(actions: Action[]): string[] {
 export class AccountFactory {
   private readonly mode: ChainMode;
   private readonly appPublicKey: string | undefined;
+  private readonly usdcContract: string;
 
   constructor(private readonly o: AccountFactoryOptions) {
     this.mode = o.mode ?? DEFAULT_MODE;
+    this.usdcContract = o.usdcContract ?? USDC_CONTRACT;
     this.appPublicKey = o.appPublicKey ?? o.signer?.publicKey.toString();
     if (o.signer && o.signer.accountId !== o.appAccountId)
       throw new AccountError('signer is not the app account', 'APP_KEY_MISSING');
@@ -178,7 +192,7 @@ export class AccountFactory {
       pk,
       this.o.initialBalanceYocto ?? DEFAULT_INITIAL_BALANCE,
     );
-    const storageActions = buildUsdcStorageActions(accountId);
+    const storage = buildUsdcStorageActions(accountId, this.usdcContract);
     const txs: PlannedTx[] = [
       {
         label: 'create_account',
@@ -187,9 +201,9 @@ export class AccountFactory {
         actions: describe(createActions),
       },
       {
-        label: 'usdc_storage',
+        label: 'usd_storage',
         signerId: this.o.appAccountId,
-        receiverId: USDC_CONTRACT,
+        receiverId: storage.receiverId,
         actions: ['functionCall:storage_deposit'],
       },
     ];
@@ -211,9 +225,9 @@ export class AccountFactory {
     const tx2 = buildTx({
       signerId: this.o.appAccountId,
       signerPublicKey: pub,
-      receiverId: USDC_CONTRACT,
+      receiverId: storage.receiverId,
       nonce: key.nonce + 2n,
-      actions: storageActions,
+      actions: storage.actions,
       blockHash: key.blockHash,
     });
     (txs[0] as PlannedTx).txHash = tx1.hash;
