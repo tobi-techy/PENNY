@@ -10,6 +10,7 @@ import {
   FakeConnector,
   gateComposioTools,
   isReadSlug,
+  sessionCreateOptions,
   toolkitsForBot,
   writeTargetProblem,
 } from '../src/connectors/composio.ts';
@@ -254,5 +255,16 @@ describe('connect flow + write approvals through the crew', () => {
     if (created.decision !== 'allow_with_approval') throw new Error('no approval');
     await t.engine.services.approvals.decline(created.approvalId, created.cardToken);
     expect(fake.writes).toHaveLength(1); // still only the approved one
+  });
+});
+
+describe('Composio session options', () => {
+  test('firewall hooks are opt-in (they need a paid Composio plan)', () => {
+    const free = sessionCreateOptions(['gmail']);
+    expect(free.toolkits).toEqual(['gmail']);
+    expect('hooks' in free).toBe(false);
+
+    const paid = sessionCreateOptions(['gmail'], true);
+    expect('hooks' in paid).toBe(true);
   });
 });

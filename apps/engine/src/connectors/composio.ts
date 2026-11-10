@@ -16,7 +16,8 @@ import { z } from 'zod';
  *   Everything else returns a proposal the model must route through
  *   `propose_write`, which creates a Face ID approval card. On approval the
  *   engine executes the write itself; the model never executes writes.
- * - Composio Firewall condition checks are a second, natural-language layer.
+ * - Composio Firewall condition checks are an optional second layer (paid plans;
+ *   off by default, see COMPOSIO_FIREWALL).
  */
 
 export type ConnectResult =
@@ -260,6 +261,20 @@ const FIREWALL_HOOKS = [
   },
 ];
 
+/**
+ * Options for a Composio session. Penny's own read/write gate is the primary
+ * control (above). Firewall hooks are a second natural-language layer and a
+ * paid-plan feature, so they only go out when explicitly enabled.
+ */
+export function sessionCreateOptions(toolkits: string[], firewall = false) {
+  return {
+    toolkits,
+    manageConnections: true,
+    sandbox: { enable: false },
+    ...(firewall ? { hooks: FIREWALL_HOOKS } : {}),
+  };
+}
+
 type SessionLike = {
   tools(): Promise<ToolSet>;
   authorize(toolkit: string, options?: { callbackUrl?: string }): Promise<unknown>;
@@ -275,11 +290,14 @@ const MAX_SESSIONS = 5_000;
 export class ComposioConnector implements ConnectorPort {
   readonly name = 'composio';
   private readonly composio: Composio<VercelProvider>;
+  /** Composio Firewall hooks are a paid-plan feature; off unless explicitly enabled. */
+  private readonly firewall: boolean;
   /** Per-user sessions, expired after SESSION_TTL_MS so revoked or new connections are picked up. */
   private readonly sessions = new Map<string, { at: number; pending: Promise<SessionLike> }>();
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, opts: { firewall?: boolean } = {}) {
     this.composio = new Composio({ apiKey, provider: new VercelProvider() });
+    this.firewall = opts.firewall ?? false;
   }
 
   private sessionFor(userId: string, botSlug: string): Promise<SessionLike> | null {
@@ -294,12 +312,10 @@ export class ComposioConnector implements ConnectorPort {
         if (oldest !== undefined) this.sessions.delete(oldest);
       }
       pending = (async () => {
-        const session = await this.composio.create(userId, {
-          toolkits,
-          manageConnections: true,
-          sandbox: { enable: false },
-          hooks: FIREWALL_HOOKS,
-        });
+        const session = await this.composio.create(
+          userId,
+          sessionCreateOptions(toolkits, this.firewall),
+        );
         return session as unknown as SessionLike;
       })();
       pending.catch(() => this.sessions.delete(key));
