@@ -97,10 +97,18 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
   }
 
   const device = await d.users.activeDevice(user.id);
-  const r = await d.crew.handle(user.id, space, text, {
-    conversationId,
-    enrolled: Boolean(device),
-  });
+  // iMessage shows Penny typing while the crew thinks. Stops even on a throw.
+  const r = await (async () => {
+    await d.messaging.startTyping(space);
+    try {
+      return await d.crew.handle(user.id, space, text, {
+        conversationId,
+        enrolled: Boolean(device),
+      });
+    } finally {
+      await d.messaging.stopTyping(space);
+    }
+  })();
   const reply = toPlainText(r.text);
   await d.messaging.sendText(space, reply);
   await d.messages.add({ conversationId, direction: 'outbound', text: reply });

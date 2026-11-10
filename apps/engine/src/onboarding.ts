@@ -121,8 +121,14 @@ export class OnboardingService {
   }
 
   /** Penny just sent a connect link: watch for it to go live. */
-  async watchConnect(userId: string, toolkit: string): Promise<void> {
+  async watchConnect(
+    userId: string,
+    toolkit: string,
+    opts: { link?: string; space?: SpaceRef } = {},
+  ): Promise<void> {
     await this.d.watches.watch(userId, toolkit, new Date(this.d.now().getTime() + WATCH_TTL_MS));
+    // Send the connect URL as its own card, not buried in a sentence.
+    if (opts.link && opts.space) await this.d.messaging.sendLink(opts.space, opts.link);
   }
 
   /** Scheduler: announce new connections, then do the first useful thing. */

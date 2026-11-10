@@ -584,6 +584,20 @@ describe('freeze', () => {
   });
 });
 
+describe('typing', () => {
+  test('Penny shows typing for the whole model turn', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554099');
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: 'hey back' }]),
+    );
+    const before = t.messaging.typing.length;
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what can you do?'));
+    expect(t.messaging.typing.slice(before).map((x) => x.on)).toEqual([true, false]);
+  });
+});
+
 function inboundDeps() {
   const e = t.engine;
   return {

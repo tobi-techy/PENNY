@@ -188,17 +188,25 @@ export function builtinTools(): ToolDef<never>[] {
       );
       if (r.status === 'connected') return { ok: true, connected: true, toolkit: i.toolkit };
       if (r.status === 'link') {
-        await ctx.onboarding?.watchConnect(ctx.userId, i.toolkit);
+        await ctx.onboarding?.watchConnect(ctx.userId, i.toolkit, {
+          link: r.redirectUrl,
+          space: ctx.space,
+        });
         const what =
           i.toolkit === 'gmail'
             ? "i only read, and nothing gets sent from it without your ok. i'll text you the moment it's connected."
             : "i'll text you the moment it's connected.";
+        // With onboarding wired, the link arrives as its own card; keep the raw
+        // URL out of the sentence so iMessage renders a preview instead of text.
+        const tellUser = ctx.onboarding
+          ? `i sent you a link to connect your ${i.toolkit}. tap the card above.\n${what}`
+          : `tap to connect your ${i.toolkit}: ${r.redirectUrl}\n${what}`;
         return {
           ok: false,
           connected: false,
           toolkit: i.toolkit,
           connectUrl: r.redirectUrl,
-          tellUser: `tap to connect your ${i.toolkit}: ${r.redirectUrl}\n${what}`,
+          tellUser,
         };
       }
       return { ok: false, connected: false, error: r.reason };
