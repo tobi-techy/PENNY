@@ -56,6 +56,60 @@ export function linkPageHtml(input: {
 </html>`;
 }
 
+/**
+ * A connect card page: the same Open Graph treatment as a link card, with one
+ * Continue button to the provider's authorization page. The destination is
+ * stored server-side with the card, never taken from the query string.
+ */
+export function connectPageHtml(input: {
+  card: Card;
+  connectUrl: string;
+  imageUrl: string;
+  pageUrl: string;
+}): string {
+  const desc = 'Penny can watch for bills and email. Nothing is sent without your ok.';
+  const tags = [
+    `<meta property="og:site_name" content="Penny" />`,
+    `<meta property="og:type" content="website" />`,
+    `<meta property="og:title" content="${esc(input.card.title)}" />`,
+    `<meta property="og:description" content="${esc(desc)}" />`,
+    `<meta property="og:url" content="${esc(input.pageUrl)}" />`,
+    `<meta property="og:image" content="${esc(input.imageUrl)}" />`,
+    `<meta property="og:image:type" content="image/png" />`,
+    `<meta property="og:image:width" content="${OG_WIDTH}" />`,
+    `<meta property="og:image:height" content="${OG_HEIGHT}" />`,
+    `<meta property="og:image:alt" content="${esc(input.card.title)}" />`,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="robots" content="noindex" />`,
+    `<meta name="referrer" content="no-referrer" />`,
+  ].join('\n    ');
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${esc(input.card.title)} · Penny</title>
+    ${tags}
+    <style>
+      body { margin: 0; background: #080d14; color: #f1f5fa; font: 16px/1.5 -apple-system, system-ui, sans-serif; }
+      main { max-width: 520px; margin: 0 auto; padding: 32px 20px 48px; text-align: center; }
+      img { width: 100%; height: auto; border-radius: 16px; border: 1px solid #1e2a38; }
+      h1 { font-size: 28px; margin: 24px 0 8px; }
+      p { color: #b1c3d8; margin: 0 0 24px; }
+      a { display: block; background: #4fd57f; color: #06130c; text-decoration: none; font-weight: 600; padding: 14px 18px; border-radius: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="${esc(input.imageUrl)}" alt="${esc(input.card.title)}" />
+      <h1>${esc(input.card.title)}</h1>
+      <p>${esc(desc)}</p>
+      <a href="${esc(input.connectUrl)}" rel="noopener noreferrer">Continue</a>
+    </main>
+  </body>
+</html>`;
+}
+
 /** The setup link's picture card (the code itself rides in the URL fragment). */
 export const SETUP_CARD: Card = {
   id: 'crd_00000000000000000000000000',

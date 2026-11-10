@@ -46,6 +46,8 @@ export type OnboardingDeps = {
   messaging: MessagingPort;
   enroll: EnrollService;
   watches: ConnectWatchesRepo;
+  /** Picture cards (the connect link rides on a hosted card). */
+  cards?: import('./cards/sender.ts').CardSender;
   connectors?: ConnectorPort;
   bills?: BillsService;
   publicBaseUrl: string;
@@ -128,7 +130,18 @@ export class OnboardingService {
   ): Promise<void> {
     await this.d.watches.watch(userId, toolkit, new Date(this.d.now().getTime() + WATCH_TTL_MS));
     // Send the connect URL as its own card, not buried in a sentence.
-    if (opts.link && opts.space) await this.d.messaging.sendLink(opts.space, opts.link);
+    if (!opts.link || !opts.space) return;
+    if (this.d.cards) {
+      const { url } = await this.d.cards.createConnectCard({
+        userId,
+        space: opts.space,
+        toolkit,
+        connectUrl: opts.link,
+      });
+      await this.d.messaging.sendLink(opts.space, url);
+      return;
+    }
+    await this.d.messaging.sendLink(opts.space, opts.link);
   }
 
   /** Scheduler: announce new connections, then do the first useful thing. */

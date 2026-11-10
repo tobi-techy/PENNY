@@ -111,6 +111,46 @@ export class CardSender {
     return `${this.d.publicBaseUrl.replace(/\/$/, '')}/a/${token}`;
   }
 
+  /**
+   * A Penny-hosted connect card. The page at /c/<token> carries Open Graph
+   * tags, so iMessage shows a real card; its Continue button goes to the
+   * provider's authorization page. The URL is stored server-side, never in
+   * the query string, so this cannot be used as an open redirect.
+   */
+  async createConnectCard(input: {
+    userId: string;
+    space: SpaceRef;
+    toolkit: string;
+    connectUrl: string;
+  }): Promise<{ token: string; url: string }> {
+    const token = randomToken(32);
+    const now = this.d.now();
+    const name = input.toolkit === 'gmail' ? 'Gmail' : input.toolkit;
+    const row = await this.d.cards.create({
+      userId: input.userId,
+      agent: 'penny',
+      kind: 'info',
+      type: 'connect',
+      title: `Connect ${name}`.slice(0, 80),
+      amount: null,
+      lines: [
+        { label: 'What', value: `Penny can watch your ${name}` },
+        { label: 'Promise', value: 'nothing is sent without your ok' },
+      ],
+      buttons: [],
+      state: 'ready',
+      approvalId: null,
+      tokenHash: sha256Hex(token),
+      tokenExpiresAt: new Date(now.getTime() + INFO_CARD_TTL_MS),
+      payload: { connectUrl: input.connectUrl, toolkit: input.toolkit },
+      channel: 'link',
+      space: input.space,
+      expiresAt: null,
+    });
+    this.remember(row.id, token);
+    return { token, url: `${this.d.publicBaseUrl.replace(/\/$/, '')}/c/${token}` };
+  }
+
   async send(
     input: NewCard,
   ): Promise<{ card: Card; token: string; url: string; channel: Channel; ref?: string }> {
