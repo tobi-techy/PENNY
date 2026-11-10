@@ -107,6 +107,7 @@ export async function makeEngine(
       limits: { perIpPerMin: 1000, perUserPerMin: 1000, maxBodyBytes: 65_536 },
       now: () => clock.now,
       invest,
+      autoLearn: false,
       ...opts.extra,
     });
   const t: TestEngine = {

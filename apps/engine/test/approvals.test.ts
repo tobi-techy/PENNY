@@ -148,7 +148,7 @@ describe('submit', () => {
     // card edited in place: approving, then sent
     const cardId = (await t.engine.repos.approvals.get(r.approvalId))?.cardId;
     const mine = t.messaging.edits.filter((e) => e.handle.cardId === cardId);
-    expect(mine.map((e) => e.card.subcaption)).toEqual(['approving…', 'sending…', 'sent ✓']);
+    expect(mine.map((e) => e.card.subcaption)).toEqual(['approving…', 'sending…', 'sent']);
     // approval_events is append-only at the DB level
     await expect(
       Promise.resolve(t.db.db.execute(sql`update approval_events set reason = 'x'`)),

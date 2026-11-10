@@ -181,12 +181,10 @@ describe('parseBills', () => {
         ...over,
       }) as BillRow;
     expect(newBillsText([b({})], new Set(['bil_1']))).toBe(
-      "mail here 📬 new bill in: DStv: ₦18,400, due sat 14 nov. i'll remind you.",
+      "new bill: DStv: ₦18,400, due sat 14 nov. i'll remind you.",
     );
     // only promise a reminder for a bill that actually got one
-    expect(newBillsText([b({})], new Set())).toBe(
-      'mail here 📬 new bill in: DStv: ₦18,400, due sat 14 nov.',
-    );
+    expect(newBillsText([b({})], new Set())).toBe('new bill: DStv: ₦18,400, due sat 14 nov.');
     expect(newBillsText([b({}), b({ payeeName: 'IKEDC', dueOn: null })])).toContain('2 new bills');
   });
 });
@@ -314,12 +312,12 @@ describe('bills + reminders (engine)', () => {
     ];
     const first = await t.engine.services.bills.scanAll();
     expect(first.notified).toBe(1);
-    const sent = t.messaging.texts.filter((x) => x.text.startsWith('mail here'));
+    const sent = t.messaging.texts.filter((x) => x.text.startsWith('new bill'));
     expect(sent).toHaveLength(1);
     expect(sent[0]?.text).toContain('DStv: ₦18,400, due sat 14 nov');
     expect(sent[0]?.text).not.toContain('IKEDC');
     await t.engine.services.bills.scanAll();
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('mail here'))).toHaveLength(1);
+    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(1);
     expect(await t.engine.services.bills.open(u.userId)).toHaveLength(2);
   });
 
@@ -371,15 +369,15 @@ describe('bills + reminders (engine)', () => {
       return original(space, text);
     };
     expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('mail here'))).toHaveLength(0);
+    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(0);
 
     expect((await t.engine.services.bills.scanAll()).notified).toBe(1);
-    const sent = t.messaging.texts.filter((x) => x.text.startsWith('mail here'));
+    const sent = t.messaging.texts.filter((x) => x.text.startsWith('new bill'));
     expect(sent).toHaveLength(1);
     expect(sent[0]?.text).toContain('DStv: ₦18,400');
     // and only once
     expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('mail here'))).toHaveLength(1);
+    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(1);
   });
 
   test('a failed reminder send retries, then gives up after three attempts', async () => {
@@ -575,7 +573,7 @@ describe('paying a bill in USDC (demo biller)', () => {
     const pending = await t.engine.repos.reminders.scheduled(u.userId);
     expect(pending.some((p) => p.billId === bill.billId)).toBe(true);
     expect(t.messaging.texts.at(-1)?.text).toBe(
-      "paid (test run, nothing sent) ✓ Penny Demo Utility, $5.00. it's still on your list.",
+      "paid (test run, nothing sent). Penny Demo Utility, $5.00. it's still on your list.",
     );
   });
 
@@ -709,7 +707,7 @@ describe('testnet: bills pay in the test dollar (tUSD), never native NEAR', () =
     expect(out.status).toBe('settled');
     expect(await t.engine.services.bills.open(u.userId)).toHaveLength(0);
     expect(t.messaging.texts.at(-1)?.text).toBe(
-      "paid ✓ Penny Demo Utility, $5.00. i've crossed it off and cancelled the reminder.\nreceipt: https://testnet.nearblocks.io/txns/TESTNET_TX_1",
+      "paid. Penny Demo Utility, $5.00. i've crossed it off and cancelled the reminder.\nreceipt: https://testnet.nearblocks.io/txns/TESTNET_TX_1",
     );
   });
 

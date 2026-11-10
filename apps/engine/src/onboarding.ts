@@ -29,7 +29,7 @@ export function isGreeting(text: string): boolean {
 }
 
 export const WELCOME_TEXT =
-  "hey 👋 i'm penny. i help run the everyday stuff from right here: bills, reminders, your inbox, money.";
+  "hey, i'm penny. i help run the everyday stuff from right here: bills, reminders, your inbox, money.";
 
 export const FIRST_STEPS_TEXT =
   'a good first step: say "connect my gmail" and i\'ll keep an eye out for bills and remind you before they\'re due. or try "remind me to call mum at 6".';
@@ -38,7 +38,7 @@ export const SETUP_LEAD_TEXT =
   'one quick thing before i can do that: tap this to turn on approvals. 10 seconds, nothing to install. you approve every payment or action yourself.';
 
 export const ENROLLED_TEXT =
-  "you're set ✓ approvals are on. anything that spends money or acts for you comes here as a card first, and only goes ahead when you approve it. go ahead and ask me again.";
+  "you're set. approvals are on. anything that spends money or acts for you comes here as a card first, and only goes ahead when you approve it. go ahead and ask me again.";
 
 export type OnboardingDeps = {
   users: UsersRepo;
@@ -149,7 +149,7 @@ export class OnboardingService {
           await this.say(
             target.space,
             target.conversationId,
-            `${w.toolkit}'s connected ✓ what should i do with it?`,
+            `${w.toolkit}'s connected. what should i do with it?`,
           );
       } catch (e) {
         this.d.log.warn({ err: (e as Error).name, toolkit: w.toolkit }, 'connect check failed');
@@ -163,7 +163,7 @@ export class OnboardingService {
     target: { conversationId: string; space: SpaceRef },
   ): Promise<void> {
     const { space, conversationId } = target;
-    await this.say(space, conversationId, "gmail's connected ✓ give me a sec, checking for bills…");
+    await this.say(space, conversationId, "gmail's connected. give me a sec, checking for bills…");
     if (!this.d.bills) return;
     const r = await this.d.bills.scan(userId, { interactive: true });
     if (!r.ok) {

@@ -3,7 +3,7 @@ import type { ApprovalService } from './approvals/service.ts';
 import type { Crew } from './brain/crew.ts';
 import type { RateLimiter } from './http/security.ts';
 import type { Logger } from './lib/logger.ts';
-import { toPlainText } from './lib/plain-text.ts';
+import { hasEmoji, stripEmoji, toPlainText } from './lib/plain-text.ts';
 import type { OnboardingService } from './onboarding.ts';
 import type { MessagingPort, SpaceRef } from './ports/messaging.ts';
 import type { MessagesRepo } from './repo/bots.ts';
@@ -109,7 +109,11 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
       await d.messaging.stopTyping(space);
     }
   })();
-  const reply = toPlainText(r.text);
+  const plain = toPlainText(r.text);
+  // Penny mirrors emoji only when the user used one first; otherwise drop them.
+  const reply = hasEmoji(text) ? plain : stripEmoji(plain);
   await d.messaging.sendText(space, reply);
   await d.messages.add({ conversationId, direction: 'outbound', text: reply });
+  // Background: remember durable facts from this turn. Never delays the reply.
+  void d.crew.learnFromTurn(user.id, text);
 }

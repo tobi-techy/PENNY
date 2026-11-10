@@ -54,6 +54,23 @@ export class MemoryService {
     return id;
   }
 
+  /** Recent memories for this user, newest first (dedupe + tests). */
+  async recent(userId: string, k = 50): Promise<{ kind: string; text: string }[]> {
+    return this.db
+      .select({ kind: memories.kind, text: memories.text })
+      .from(memories)
+      .where(eq(memories.userId, userId))
+      .orderBy(desc(memories.createdAt))
+      .limit(Math.min(Math.max(k, 1), 200));
+  }
+
+  /** True when the same normalised fact is already stored for this user. */
+  async hasText(userId: string, text: string): Promise<boolean> {
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    const want = norm(text);
+    return (await this.recent(userId, 100)).some((r) => norm(r.text) === want);
+  }
+
   /** Memories learned since a date, newest first (weekly reflection). */
   async learnedSince(
     userId: string,

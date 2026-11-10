@@ -191,11 +191,11 @@ describe('live card (Photon customizedMiniApp)', () => {
     attempts = t.messaging.editAttempts;
     cards = t.messaging.cards.length;
     const cardId = (await t.engine.repos.approvals.get(r2.approvalId))?.cardId as string;
-    await t.engine.services.cards.update(cardId, { state: 'sent' }, { subcaption: 'sent ✓' });
+    await t.engine.services.cards.update(cardId, { state: 'sent' }, { subcaption: 'sent' });
     expect(t.messaging.editAttempts - attempts).toBe(3);
     expect(t.messaging.cards.length).toBe(cards + 1);
     expect(t.messaging.cards.at(-1)?.card.url).toBe(`https://penny.test/a/${r2.cardToken}`);
-    expect(t.messaging.cards.at(-1)?.card.subcaption).toBe('sent ✓');
+    expect(t.messaging.cards.at(-1)?.card.subcaption).toBe('sent');
     // an unanswered card expiring is not worth a new message, even when the edit fails
     const r3 = await t.engine.services.approvals.createMoneyApproval({
       userId: u.userId,
@@ -595,6 +595,30 @@ describe('typing', () => {
     const before = t.messaging.typing.length;
     await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what can you do?'));
     expect(t.messaging.typing.slice(before).map((x) => x.on)).toEqual([true, false]);
+  });
+});
+
+describe('plain tone', () => {
+  test('decorative emoji are removed unless the user sent one first', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554101');
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: 'on it 🎉' }]),
+    );
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what can you do?'));
+    expect(t.messaging.texts.at(-1)?.text).toBe('on it');
+  });
+
+  test('an emoji from the user is mirrored', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554102');
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: 'on it 🎉' }]),
+    );
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what can you do? 🎉'));
+    expect(t.messaging.texts.at(-1)?.text).toBe('on it 🎉');
   });
 });
 

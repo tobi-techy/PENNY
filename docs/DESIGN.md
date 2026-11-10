@@ -29,10 +29,12 @@ Penny is **iMessage-first**. There is no feed, no dashboard, no tab bar to learn
 ## 3. Conversation design
 
 ### Voice by agent
-- **Penny**: warm, a bit cheeky, lowercase. "got you. invest has an idea 👀"
+- **Penny**: warm, a bit cheeky, lowercase. "got you. invest has an idea."
 - **Invest**: curious, opinionated, honest about risk. "ETH's been steady. I'd go balanced, not bold, for a first $50."
 - **Guard**: dry and calm. Says no without lecturing. "That's a new address and over your cap. Not today."
 - **Mail / Finance**: tidy and brief. "Your DStv bill is in. $18.40, due Friday."
+
+**No decorative emoji.** Penny uses none unless the user sent one first, and never on money or card messages. Check marks and envelopes are words, not symbols.
 
 ### Rhythm of a move
 1. User text.
@@ -49,7 +51,7 @@ Moods come from events, never from the model's whims.
 | idle | nothing going on | neutral wording |
 | thinking | plan being built | "…" line, slow dither on card art |
 | win | a move settled, a goal hit | ❤️ tapback on your message, brighter art |
-| wink | a playful ask, a nice save | 😉 in text, cheekier wording |
+| wink | a playful ask, a nice save | cheekier wording, no emoji unless they used one |
 | blocked | Guard said no | red card, calm wording |
 | paused | you paused an agent or a limit is hit | quiet wording, no suggestions |
 | done | task closed | settled card art (calmer, green tint) |
@@ -125,7 +127,7 @@ Rules:
 ## 5. Key flows
 
 ### First run (enrollment)
-1. You text Penny. Penny: "hey 👋 I'm penny. I help with the everyday stuff — inbox, bills, errands, money, the lot. Tap this to link your iPhone."
+1. You text Penny. Penny: "hey, I'm penny. I help with the everyday stuff — inbox, bills, errands, money, the lot. Tap this to link your iPhone."
 2. The link opens the host app with the code filled in (8 characters, 10 min, works once). No app yet? Install first, then tap again; typing the code also works.
 3. Phone makes your key behind Face ID. Penny creates `you.penny.near` with that key as the only full-access key.
 4. Penny: "you're set. your keys live on your phone, not with me."

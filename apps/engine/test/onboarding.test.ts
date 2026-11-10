@@ -133,7 +133,7 @@ describe('onboarding', () => {
     ];
     expect(await t.engine.services.onboarding.checkConnections()).toBe(1);
     expect(texts().slice(-2)).toEqual([
-      "gmail's connected ✓ give me a sec, checking for bills…",
+      "gmail's connected. give me a sec, checking for bills…",
       "found 1 open bill:\n• DStv: ₦18,400, due sat 14 nov\ni'll remind you the day before each one's due. paid one already? just tell me.",
     ]);
     // announced once; the bill is not texted again by the background scan
@@ -157,9 +157,9 @@ describe('onboarding', () => {
   test('/connected page tells them to go back to Messages', async () => {
     const res = await t.engine.app.request('/connected?app=gmail');
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain('Gmail connected ✓');
+    expect(await res.text()).toContain('Gmail connected');
     const odd = await (await t.engine.app.request('/connected?app=<script>')).text();
-    expect(odd).toContain('Your app connected ✓');
+    expect(odd).toContain('Your app connected');
     expect(odd).not.toContain('<script>');
   });
 });

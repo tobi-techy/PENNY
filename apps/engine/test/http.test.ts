@@ -166,7 +166,7 @@ describe('POST /v1/photon/webhook', () => {
     });
     expect((await post(event('spc-msg-4', 'how am i doing', '+15550123'))).status).toBe(200);
     await tick();
-    expect(t.messaging.texts.at(-1)?.text).toBe('hey tobi, all good 💸');
+    expect(t.messaging.texts.at(-1)?.text).toBe('hey tobi, all good');
   });
 
   test('markdown never reaches the thread', async () => {

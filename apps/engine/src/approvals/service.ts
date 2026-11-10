@@ -1914,7 +1914,7 @@ export class ApprovalService {
     }
     await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'write executed');
     await this.d.mood.on(row.userId, 'approval_settled');
-    await this.updateCard(row.id, 'sent', 'done ✓');
+    await this.updateCard(row.id, 'sent', 'done');
     return { status: 'settled' };
   }
 
@@ -2162,7 +2162,7 @@ export class ApprovalService {
       }
       await this.d.mood.on(row.userId, 'approval_settled');
       const dry = (await this.d.approvals.events(id)).some((e) => e.reason === 'relayed (dry run)');
-      await this.updateCard(id, 'sent', 'sent ✓', this.receiptOpts(row.txHash, dry));
+      await this.updateCard(id, 'sent', 'sent', this.receiptOpts(row.txHash, dry));
       return 'settled';
     }
     await this.d.approvals.transition(id, row.kind, 'relayed', 'failed', 'chain reported failure');
