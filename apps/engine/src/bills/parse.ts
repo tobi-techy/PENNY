@@ -22,8 +22,14 @@ export type ParsedBill = {
 
 // Case-sensitive on purpose: a bare "N" only counts as naira when it is a
 // capital directly before digits ("N18,400"), so "in2024" never reads as money.
-const AMOUNT_RE =
-  /(₦|NGN\s?|USD\s?|\bN(?=\d)|\$)\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/;
+const AMOUNT_FIGURE = String.raw`(₦|NGN\s?|USD\s?|\bN(?=\d)|\$)\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)`;
+const AMOUNT_SCAN_RE = new RegExp(AMOUNT_FIGURE, 'g');
+// A figure the email itself calls the amount owed wins over the first figure in the
+// text ("previous balance ₦18,400 … amount due ₦12,000" must pay 12,000).
+const CUE_AMOUNT_RE = new RegExp(
+  String.raw`(?:\b(?:amount|total|balance|invoice)\s+due\b|\binvoice\s+total\b|\byour\s+bill\s+(?:is|of|amount|total|for)\b|\bdue\b|\btotal\b)[^.;\n]{0,40}?${AMOUNT_FIGURE}`,
+  'i',
+);
 
 /** Receipts and payment confirmations are not bills to pay. */
 const RECEIPT_RE =
@@ -33,8 +39,9 @@ export function isReceipt(subject: string): boolean {
   return RECEIPT_RE.test(subject);
 }
 
-export function parseAmount(text: string): { amount: string; currency: 'NGN' | 'USD' } | null {
-  const m = text.match(AMOUNT_RE);
+function moneyFigure(
+  m: RegExpMatchArray | null,
+): { amount: string; currency: 'NGN' | 'USD' } | null {
   if (!m?.[1] || !m[2]) return null;
   const sym = m[1].trim().toUpperCase();
   const currency = sym === '$' || sym === 'USD' ? 'USD' : 'NGN';
@@ -42,6 +49,19 @@ export function parseAmount(text: string): { amount: string; currency: 'NGN' | '
   if (amount.includes('.')) amount = amount.replace(/\.?0+$/, '');
   if (!/^\d+(\.\d{1,2})?$/.test(amount) || /^0+(\.0+)?$/.test(amount)) return null;
   return { amount: amount.replace(/^0+(?=\d)/, ''), currency };
+}
+
+export function parseAmount(text: string): { amount: string; currency: 'NGN' | 'USD' } | null {
+  const cued = text.match(CUE_AMOUNT_RE);
+  if (cued) return moneyFigure(cued);
+  // No cue: a single distinct figure is safe; two different figures are ambiguous,
+  // and paying the wrong one is worse than asking (the card says the email had none).
+  const figures = new Map<string, { amount: string; currency: 'NGN' | 'USD' }>();
+  for (const m of text.matchAll(AMOUNT_SCAN_RE)) {
+    const f = moneyFigure(m);
+    if (f) figures.set(`${f.currency}:${f.amount}`, f);
+  }
+  return figures.size === 1 ? ([...figures.values()][0] ?? null) : null;
 }
 
 const MONTHS = [
@@ -129,11 +149,12 @@ export function parseDueDate(text: string, ref: Date): string | null {
   const base = Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate());
   if (/^today\b/.test(s)) return ymd(new Date(base));
   if (/^tomorrow\b/.test(s)) return ymd(new Date(base + 86_400_000));
-  m = s.match(/^(?:this\s+|next\s+)?(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/);
+  m = s.match(/^(this\s+|next\s+)?(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/);
   if (m) {
-    const want = DAYS.indexOf(m[1] as (typeof DAYS)[number]);
+    const want = DAYS.indexOf(m[2] as (typeof DAYS)[number]);
     let delta = (want - ref.getUTCDay() + 7) % 7;
-    if (delta === 0) delta = 7;
+    // "due Friday" on a Friday is today; only "next Friday" means a week out.
+    if (delta === 0 && m[1]?.trim() === 'next') delta = 7;
     return ymd(new Date(base + delta * 86_400_000));
   }
   return null;

@@ -78,7 +78,7 @@ export type EngineDeps = {
   privacy?: PrivacyGate;
   /** User-facing IANA time zone for reminders and "now" (PENNY_TIMEZONE). */
   timeZone?: string;
-  /** Which NEAR network the chain adapter talks to; testnet pays bills in NEAR. Default mainnet. */
+  /** Which NEAR network the chain adapter talks to. Testnet pays bills in tUSD. Default mainnet. */
   chainNetwork?: 'mainnet' | 'testnet';
   /** NEAR account of the demo biller (PENNY_DEMO_BILLER_ACCOUNT); unset = no demo biller. */
   demoBillerAccount?: string;
@@ -181,6 +181,7 @@ export function createEngine(d: EngineDeps) {
       : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
     onBillPaid: (userId, billId, receipt) => bills.markPaid(userId, billId, receipt),
+    recheckBill: (userId, billId) => bills.recheckBill(userId, billId),
     onNeedsSetup: async (userId, space) => {
       await onboarding.sendSetupLink(userId, space);
     },
@@ -213,6 +214,9 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     timeZone,
     now,
+    onBillClosed: async (userId, billId) => {
+      await approvals?.cancelPayBillApprovals(userId, billId);
+    },
   });
   const onboarding: OnboardingService = new OnboardingService({
     users: repos.users,

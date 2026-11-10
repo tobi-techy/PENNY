@@ -211,6 +211,16 @@ export class RemindersRepo {
       .limit(Math.min(Math.max(limit, 1), 50));
   }
 
+  /** The live reminder for a bill, if one is still going to fire. */
+  async scheduledForBill(billId: string): Promise<ReminderRow | null> {
+    const [r] = await this.db
+      .select()
+      .from(reminders)
+      .where(and(eq(reminders.billId, billId), eq(reminders.status, 'scheduled')))
+      .limit(1);
+    return r ?? null;
+  }
+
   /** Undo a user's own scheduled reminder (scheduled -> undone). */
   async undoForUser(userId: string, id: string): Promise<boolean> {
     const r = await this.db
@@ -228,10 +238,6 @@ export class RemindersRepo {
       .update(reminders)
       .set({ status: 'undone' })
       .where(and(eq(reminders.billId, billId), eq(reminders.status, 'scheduled')));
-  }
-
-  async markFailed(id: string): Promise<void> {
-    await this.db.update(reminders).set({ status: 'failed' }).where(eq(reminders.id, id));
   }
 
   async get(id: string): Promise<ReminderRow | null> {
@@ -270,5 +276,30 @@ export class RemindersRepo {
       .where(and(eq(reminders.id, id), eq(reminders.status, 'scheduled')))
       .returning({ id: reminders.id });
     return r.length === 1;
+  }
+
+  /**
+   * A reminder text that failed to send. A transient messaging outage must not
+   * lose the reminder forever: put it back to scheduled and retry on the next
+   * tick, up to `maxAttempts`, then stop. Returns true when it is now terminal.
+   */
+  async markFailed(id: string, error: string, maxAttempts = 3): Promise<boolean> {
+    const [row] = await this.db
+      .select({ attempts: reminders.attempts })
+      .from(reminders)
+      .where(and(eq(reminders.id, id), eq(reminders.status, 'sent')))
+      .limit(1);
+    if (!row) return false;
+    const attempts = row.attempts + 1;
+    const failed = attempts >= maxAttempts;
+    await this.db
+      .update(reminders)
+      .set({
+        attempts,
+        lastError: error.slice(0, 500),
+        status: failed ? 'failed' : 'scheduled',
+      })
+      .where(and(eq(reminders.id, id), eq(reminders.status, 'sent')));
+    return failed;
   }
 }

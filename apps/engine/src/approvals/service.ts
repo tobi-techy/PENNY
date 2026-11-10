@@ -158,6 +158,11 @@ export type ApprovalDeps = {
     billId: string,
     receipt: { txHash: string | null; dryRun: boolean },
   ) => Promise<void>;
+  /** Re-read a bill before a stale pay_bill card is renewed or relayed. */
+  recheckBill?: (
+    userId: string,
+    billId: string,
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** A new-bot card was replaced by a fresh one: the bot follows the new approval. */
   onBotReissued?: (fromApprovalId: string, toApprovalId: string) => Promise<void>;
 };
@@ -270,6 +275,9 @@ function titleFor(plan: IntentPlan): string {
 
 export const NEEDS_SETUP_REASON =
   "Approvals aren't set up yet. Penny just texted them a setup link: tell them to tap it, then ask again.";
+
+/** Friendly, plain text for a bill that already has a live payment card. */
+export const BILL_ALREADY_PENDING = 'there is already a card out for this bill';
 
 /** Postgres unique violation (23505), as raised by pglite or postgres-js under drizzle. */
 export function isUniqueViolation(e: unknown): boolean {
@@ -616,30 +624,48 @@ export class ApprovalService {
         ];
     const recipient = planRecipient(plan);
     if (recipient && !input.facts) facts.unshift({ label: 'To', value: recipient.slice(0, 80) });
+    // A bill card names the biller the user knows, not its payout account.
+    const billName =
+      plan.kind === 'pay_bill' ? input.facts?.find((f) => f.label === 'Bill')?.value : undefined;
+    const cardTitle = billName ? `Pay ${billName}`.slice(0, 80) : cardTitleFor(plan);
 
     const ph = planHash(plan, built.actions);
-    await this.d.approvals.create({
-      id,
-      userId,
-      botId: bot?.id ?? null,
-      kind: plan.kind,
-      plan,
-      title: titleFor(plan),
-      amountDisplay,
-      amountMicros: g.amountMicrosUsd,
-      facts,
-      signerId: user.accountId,
-      receiverId: built.receiverId,
-      actions: built.actions,
-      nonce: signing.nonce,
-      maxBlockHeight: signing.maxBlockHeight,
-      expiresAt,
-      status: 'pending',
-      planHash: ph,
-      cardTokenHash: hash,
-      ...this.challengeFields(id, plan, expiresAt, ph),
-      reissuedFrom: input.reissuedFrom ?? null,
-    });
+    // The typed plan is the only source of the bill id. The partial unique index
+    // approvals_bill_live_uq is the real guarantee: at most one pending/signed/relayed
+    // card per bill, so two concurrent turns cannot both pay the same bill.
+    const billId = plan.kind === 'pay_bill' ? plan.billId : null;
+    try {
+      await this.d.approvals.create({
+        id,
+        userId,
+        botId: bot?.id ?? null,
+        kind: plan.kind,
+        plan,
+        billId,
+        title: titleFor(plan),
+        amountDisplay,
+        amountMicros: g.amountMicrosUsd,
+        facts,
+        signerId: user.accountId,
+        receiverId: built.receiverId,
+        actions: built.actions,
+        nonce: signing.nonce,
+        maxBlockHeight: signing.maxBlockHeight,
+        expiresAt,
+        status: 'pending',
+        planHash: ph,
+        cardTokenHash: hash,
+        ...this.challengeFields(id, plan, expiresAt, ph),
+        reissuedFrom: input.reissuedFrom ?? null,
+      });
+    } catch (e) {
+      // A concurrent turn already claimed this bill. Say it in plain words, not a 500.
+      // Reissues keep their own unique-violation handling in the callers above.
+      if (billId && !input.reissuedFrom && isUniqueViolation(e)) {
+        return { decision: 'block', reasons: [BILL_ALREADY_PENDING] };
+      }
+      throw e;
+    }
     await this.d.ledger.reserve({
       userId,
       approvalId: id,
@@ -663,7 +689,7 @@ export class ApprovalService {
       await this.d.cards.update(input.fromCard.id, {
         approvalId: id,
         state: 'ready',
-        title: cardTitleFor(plan),
+        title: cardTitle,
         amount: amountFor(plan, amountDisplay),
         lines: facts.slice(0, 4).map((f) => ({ label: f.label.slice(0, 40), value: f.value })),
         buttons: APPROVE_BUTTONS,
@@ -679,7 +705,7 @@ export class ApprovalService {
           userId,
           agent: agentFor(plan.kind, bot),
           type: cardTypeFor(plan.kind),
-          title: cardTitleFor(plan),
+          title: cardTitle,
           amount: amountFor(plan, amountDisplay),
           lines: facts.slice(0, 4),
           expiresAt,
@@ -1358,6 +1384,18 @@ export class ApprovalService {
     if (!space) return null;
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
     const plan = row.plan as IntentPlan;
+    // A renewal must not mint a card for a bill that was paid or dismissed meanwhile.
+    if (plan.kind === 'pay_bill') {
+      const check = await this.d.recheckBill?.(row.userId, plan.billId);
+      if (!check || !check.ok) {
+        await this.updateCard(
+          row.id,
+          'failed',
+          `${check?.reason ?? "that bill can't be paid any more"}. nothing moved.`,
+        );
+        return null;
+      }
+    }
     if (plan.kind === 'invest') {
       this.requoted.add(row.id);
       const r = await this.createInvestApproval({
@@ -1892,6 +1930,24 @@ export class ApprovalService {
     // reservation. Bot caps and recipient must be preserved: load the bot
     // that created this approval, and keep velocity from other approvals.
     const plan = row.plan as MoneyPlan;
+    // A card minted before the bill closed must not relay. Re-read the bill here,
+    // after the device signature and before any chain step, and fail closed.
+    if (plan.kind === 'pay_bill') {
+      const check = await this.d.recheckBill?.(row.userId, plan.billId);
+      if (!check || !check.ok) {
+        const reason = check?.reason ?? "i couldn't check that bill, so nothing was sent";
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'pending',
+          'cancelled',
+          `bill recheck: ${reason}`,
+        );
+        await this.d.ledger.setStatusForApproval(row.id, 'released');
+        await this.updateCard(row.id, 'failed', `${reason}. nothing moved.`);
+        throw new ApprovalError(409, 'bill_closed', reason);
+      }
+    }
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
     const ctx = await this.guardContext(row.userId, bot);
     ctx.spentLast24hMicros =
@@ -2163,6 +2219,31 @@ export class ApprovalService {
     const due = await this.d.approvals.pendingExpiredBefore(this.d.now());
     for (const r of due) if (!isTerminal(r.status)) await this.expire(r);
     return due.length;
+  }
+
+  /**
+   * The user closed a bill (paid elsewhere or dismissed). Cancel its pending card
+   * and release the reservation, so an old card can no longer pay a closed bill.
+   * A `signed` row is not cancelled: its relay may already be in flight, and the
+   * submit-time bill recheck is the guard in front of that step.
+   */
+  async cancelPayBillApprovals(userId: string, billId: string): Promise<number> {
+    let cancelled = 0;
+    for (const row of await this.d.approvals.pendingForBill(userId, billId)) {
+      try {
+        await this.d.approvals.transition(row.id, row.kind, 'pending', 'cancelled', 'bill closed');
+        await this.d.ledger.setStatusForApproval(row.id, 'released');
+        await this.updateCard(row.id, 'failed', 'you closed this bill. nothing moved.');
+        cancelled += 1;
+      } catch (e) {
+        // A concurrent approve moved the row first; submitMoney's own bill recheck stops it.
+        this.d.log.warn(
+          { approvalId: row.id, err: (e as Error).name },
+          'cancel on bill close failed',
+        );
+      }
+    }
+    return cancelled;
   }
 
   /**

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { bills } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
@@ -54,5 +54,15 @@ export class BillsRepo {
   async markNotified(ids: string[], at: Date): Promise<void> {
     if (!ids.length) return;
     await this.db.update(bills).set({ notifiedAt: at }).where(inArray(bills.id, ids));
+  }
+
+  /** Open bills the user has not been told about yet (a failed text is retried). */
+  async unnotified(userId: string, limit = 50): Promise<BillRow[]> {
+    return this.db
+      .select()
+      .from(bills)
+      .where(and(eq(bills.userId, userId), eq(bills.status, 'open'), isNull(bills.notifiedAt)))
+      .orderBy(desc(bills.receivedAt), desc(bills.id))
+      .limit(Math.min(Math.max(limit, 1), 100));
   }
 }

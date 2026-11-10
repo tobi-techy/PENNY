@@ -12,6 +12,7 @@ import {
   WritePlan,
 } from '@penny/shared';
 import { z } from 'zod';
+import { normalizeOffsetDateTime } from '../bills/time.ts';
 import { draftEmail, setReminder } from '../cards/everyday.ts';
 import { INVEST_ASSETS } from '../market/invest.ts';
 import type { MarketPort, ToolContext, ToolDef } from './registry.ts';
@@ -48,6 +49,13 @@ async function propose(ctx: ToolContext, plan: MoneyPlan) {
 
 const empty = z.object({}).strict();
 const InvestInput = z.object({ portfolioId: z.enum(INVEST_ASSETS), amountUsd: Decimal }).strict();
+/** Accepts both `2026-11-14T18:00:00+01:00` and minute precision `2026-11-14T18:00+01:00`. */
+const ReminderAt = z
+  .string()
+  .refine((s) => normalizeOffsetDateTime(s) !== null, {
+    message: 'Use a date-time like 2026-11-14T18:00+01:00',
+  })
+  .transform((s) => normalizeOffsetDateTime(s) ?? s);
 
 export function builtinTools(): ToolDef<never>[] {
   const defs: ToolDef<never>[] = [];
@@ -135,8 +143,11 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'close_bill',
     description:
-      'Mark a bill as paid (the user says they paid it elsewhere) or dismissed (not a real bill / not theirs). Cancels its reminder. Only when the user says so.',
-    risk: 'read', // the user's own bill list, no outside effect
+      "Mark a bill as paid (the user says they paid it elsewhere) or dismissed (not a real bill / not theirs). Cancels its reminder and any open payment card for it. Only when the user says so. This only updates Penny's own list; nothing outside Penny changes, so no approval is needed.",
+    // risk stays `read`: Penny's own bookkeeping, no outside effect. AGENT.md's
+    // write rule covers acting in the user's name outside Penny (posting, sending,
+    // spending); editing this user's bill list is not such an action.
+    risk: 'read',
     input: z
       .object({ billId: z.string().min(1).max(64), status: z.enum(['paid', 'dismissed']) })
       .strict(),
@@ -153,7 +164,10 @@ export function builtinTools(): ToolDef<never>[] {
   });
   add({
     id: 'cancel_reminder',
-    description: 'Cancel an upcoming reminder by reminderId (from list_reminders).',
+    description:
+      "Cancel an upcoming reminder by reminderId (from list_reminders). This only updates Penny's own reminder list; nothing outside Penny changes, so no approval is needed.",
+    // risk stays `read`: Penny's own bookkeeping, no outside effect (AGENT.md's
+    // write rule is about acting in the user's name outside Penny).
     risk: 'read',
     input: z.object({ reminderId: z.string().min(1).max(64) }).strict(),
     execute: async (ctx, i) =>
@@ -254,11 +268,11 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'set_reminder',
     description:
-      "Set a reminder. dueAt is an ISO-8601 date-time with the user's UTC offset (e.g. 2026-11-09T07:00:00+01:00). Sends a card with Undo.",
-    risk: 'read', // stays inside Penny; the reminder is a text from Penny later
-    input: z
-      .object({ text: z.string().min(1).max(200), dueAt: z.iso.datetime({ offset: true }) })
-      .strict(),
+      "Set a reminder. dueAt is an ISO-8601 date-time with the user's UTC offset, e.g. 2026-11-09T07:00+01:00 (seconds optional). Sends a card with Undo. Nothing goes outside Penny; Penny texts the user when it is due.",
+    // risk stays `read`: the reminder lives inside Penny and the later text is
+    // Penny talking to the user, not an action in the user's name (AGENT.md).
+    risk: 'read',
+    input: z.object({ text: z.string().min(1).max(200), dueAt: ReminderAt }).strict(),
     execute: async (ctx, i) => {
       if (!ctx.everyday) return { ok: false, error: 'reminders are not set up' };
       const r = await setReminder(ctx.everyday, {

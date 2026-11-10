@@ -155,6 +155,8 @@ export const approvals = pgTable(
       enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write'],
     }).notNull(),
     plan: jsonb('plan').notNull(),
+    /** The bill a pay_bill card pays. A live-card partial unique index claims it. */
+    billId: text('bill_id'),
     title: text('title').notNull(),
     amountDisplay: text('amount_display').notNull(),
     amountMicros: bigint('amount_micros', { mode: 'bigint' }).notNull().default(sql`0`),
@@ -201,6 +203,11 @@ export const approvals = pgTable(
     uniqueIndex('approvals_reissued_from_uq')
       .on(t.reissuedFrom)
       .where(sql`${t.reissuedFrom} is not null`),
+    // one live card per bill: the database, not a read-then-write scan, is the
+    // guarantee a bill cannot be paid twice by two concurrent crew turns.
+    uniqueIndex('approvals_bill_live_uq')
+      .on(t.userId, t.billId)
+      .where(sql`${t.billId} is not null and ${t.status} in ('pending', 'signed', 'relayed')`),
   ],
 );
 
@@ -291,6 +298,9 @@ export const reminders = pgTable(
       .default('user'),
     /** The bill a bill reminder is for (one reminder per bill). */
     billId: text('bill_id'),
+    /** Failed send attempts. Retries while below the cap, then stops. */
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
     status: text('status', { enum: ['scheduled', 'sent', 'undone', 'failed'] })
       .notNull()
       .default('scheduled'),

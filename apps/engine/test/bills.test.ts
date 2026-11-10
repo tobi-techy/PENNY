@@ -9,7 +9,13 @@ import {
   parseDueDate,
 } from '../src/bills/parse.ts';
 import { billSearchQuery, newBillsText } from '../src/bills/service.ts';
-import { describeNow, localDate, localTimeOn, tzOffsetMinutes } from '../src/bills/time.ts';
+import {
+  describeNow,
+  localDate,
+  localTimeOn,
+  normalizeOffsetDateTime,
+  tzOffsetMinutes,
+} from '../src/bills/time.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
 import type { BillRow } from '../src/repo/bills.ts';
 import {
@@ -58,6 +64,12 @@ describe('parseAmount', () => {
     ['Pay N12500 today', { amount: '12500', currency: 'NGN' }],
     ['Invoice total $12.00', { amount: '12', currency: 'USD' }],
     ['USD 9.99 renewal', { amount: '9.99', currency: 'USD' }],
+    [
+      'Previous balance ₦18,400. Amount due ₦12,000 on 14 Nov',
+      { amount: '12000', currency: 'NGN' },
+    ],
+    ['You saved $5 on your last order. Your bill is $12.50', { amount: '12.5', currency: 'USD' }],
+    ['Invoice total $12.00', { amount: '12', currency: 'USD' }],
   ])('%s', (text, want) => {
     expect(parseAmount(text)).toEqual(want as never);
   });
@@ -65,6 +77,9 @@ describe('parseAmount', () => {
     expect(parseAmount('Invoice in2024 ready')).toBeNull();
     expect(parseAmount('Account No 1234')).toBeNull();
     expect(parseAmount('₦0.00 due')).toBeNull();
+  });
+  test('two different figures with no cue stay unknown rather than guessing', () => {
+    expect(parseAmount('You saved $5 on your last order. Reference $12.50')).toBeNull();
   });
 });
 
@@ -81,6 +96,8 @@ describe('parseDueDate', () => {
     ['Due date: 2026-12-01', '2026-12-01'],
     ['subscription expires 15/11/2026', '2026-11-15'],
     ['due 3 Jan', '2027-01-03'],
+    ['due Wednesday', '2026-11-04'], // same weekday as the email arrived = today
+    ['due next Wednesday', '2026-11-11'],
   ])('%s -> %s', (text, want) => {
     expect(parseDueDate(text, WED)).toBe(want);
   });
@@ -156,14 +173,19 @@ describe('parseBills', () => {
   test('new bills text', () => {
     const b = (over: Partial<BillRow>) =>
       ({
+        id: 'bil_1',
         payeeName: 'DStv',
         amount: '18400',
         currency: 'NGN',
         dueOn: '2026-11-14',
         ...over,
       }) as BillRow;
-    expect(newBillsText([b({})])).toBe(
-      "mail here 📬 new bill in: DStv: ₦18,400, due sat 14 nov. i'll remind you the day before.",
+    expect(newBillsText([b({})], new Set(['bil_1']))).toBe(
+      "mail here 📬 new bill in: DStv: ₦18,400, due sat 14 nov. i'll remind you.",
+    );
+    // only promise a reminder for a bill that actually got one
+    expect(newBillsText([b({})], new Set())).toBe(
+      'mail here 📬 new bill in: DStv: ₦18,400, due sat 14 nov.',
     );
     expect(newBillsText([b({}), b({ payeeName: 'IKEDC', dueOn: null })])).toContain('2 new bills');
   });
@@ -177,6 +199,14 @@ describe('time', () => {
     );
     expect(localDate('Africa/Lagos', new Date('2026-11-04T23:30:00Z'))).toBe('2026-11-05');
     expect(describeNow('Africa/Lagos', WED)).toContain('UTC+01:00');
+  });
+  test('reminder times accept minute precision and reject impossible dates', () => {
+    expect(normalizeOffsetDateTime('2026-11-14T18:00+01:00')).toBe('2026-11-14T18:00:00+01:00');
+    expect(normalizeOffsetDateTime('2026-11-14T18:00:00+01:00')).toBe('2026-11-14T18:00:00+01:00');
+    expect(normalizeOffsetDateTime('2026-11-14T18:00Z')).toBe('2026-11-14T18:00:00Z');
+    expect(normalizeOffsetDateTime('2026-02-30T18:00+01:00')).toBeNull();
+    expect(normalizeOffsetDateTime('2026-11-14T18:00+25:00')).toBeNull();
+    expect(normalizeOffsetDateTime('tomorrow at six')).toBeNull();
   });
 });
 
@@ -303,6 +333,105 @@ describe('bills + reminders (engine)', () => {
     expect(await t.engine.services.bills.open(lurker.userId)).toHaveLength(0);
   });
 
+  test('a bill that lands the afternoon before its due date still gets a reminder', async () => {
+    t.clock.now = new Date('2026-11-13T15:00:00Z'); // Lagos 16:00, day-before 09:00 gone
+    inbox.inbox = [dstvMail];
+    const r = await t.engine.services.bills.scan(u.userId, { interactive: true });
+    const reminders = await t.engine.repos.reminders.scheduled(u.userId);
+    expect(reminders).toHaveLength(1);
+    expect(reminders[0]?.dueAt.toISOString()).toBe('2026-11-14T08:00:00.000Z'); // due date 09:00
+    expect(reminders[0]?.text).toContain('is due today.');
+    const billId = reminders[0]?.billId ?? '';
+    expect(billId).not.toBe('');
+    expect(r.ok ? r.reminded : []).toEqual([billId]);
+  });
+
+  test('a bill that lands on its due date gets a reminder a few minutes out', async () => {
+    t.clock.now = new Date('2026-11-14T12:00:00Z'); // Lagos 13:00, due-date 09:00 gone
+    inbox.inbox = [dstvMail];
+    const r = await t.engine.services.bills.scan(u.userId, { interactive: true });
+    const reminders = await t.engine.repos.reminders.scheduled(u.userId);
+    expect(reminders).toHaveLength(1);
+    expect(reminders[0]?.dueAt.toISOString()).toBe('2026-11-14T12:05:00.000Z');
+    expect(reminders[0]?.text).toContain('is due today.');
+    const billId = reminders[0]?.billId ?? '';
+    expect(billId).not.toBe('');
+    expect(r.ok ? r.reminded : []).toEqual([billId]);
+  });
+
+  test('a failed new-bill text is retried on the next scan, not lost', async () => {
+    inbox.inbox = [dstvMail];
+    const original = t.messaging.sendText.bind(t.messaging);
+    let fail = true;
+    t.messaging.sendText = async (space, text) => {
+      if (fail) {
+        fail = false;
+        throw new Error('messages down');
+      }
+      return original(space, text);
+    };
+    expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
+    expect(t.messaging.texts.filter((x) => x.text.startsWith('mail here'))).toHaveLength(0);
+
+    expect((await t.engine.services.bills.scanAll()).notified).toBe(1);
+    const sent = t.messaging.texts.filter((x) => x.text.startsWith('mail here'));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain('DStv: ₦18,400');
+    // and only once
+    expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
+    expect(t.messaging.texts.filter((x) => x.text.startsWith('mail here'))).toHaveLength(1);
+  });
+
+  test('a failed reminder send retries, then gives up after three attempts', async () => {
+    const original = t.messaging.sendText.bind(t.messaging);
+    let failures = 1;
+    t.messaging.sendText = async (space, text) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('messages down');
+      }
+      return original(space, text);
+    };
+    t.clock.now = new Date('2026-11-09T07:00:05Z');
+    const rem = await t.engine.repos.reminders.create({
+      userId: u.userId,
+      text: 'gym',
+      dueAt: new Date('2026-11-09T07:00:00Z'),
+      space: u.space,
+    });
+    expect(await t.engine.services.bills.sendDue()).toBe(0);
+    expect(await t.engine.repos.reminders.get(rem.id)).toMatchObject({
+      status: 'scheduled',
+      attempts: 1,
+    });
+    expect(await t.engine.services.bills.sendDue()).toBe(1);
+    expect(await t.engine.repos.reminders.get(rem.id)).toMatchObject({
+      status: 'sent',
+      attempts: 1,
+    });
+  });
+
+  test('a reminder that fails three times stops instead of retrying forever', async () => {
+    t.messaging.sendText = async () => {
+      throw new Error('messages down');
+    };
+    t.clock.now = new Date('2026-11-09T07:00:05Z');
+    const rem = await t.engine.repos.reminders.create({
+      userId: u.userId,
+      text: 'gym',
+      dueAt: new Date('2026-11-09T07:00:00Z'),
+      space: u.space,
+    });
+    expect(await t.engine.services.bills.sendDue()).toBe(0);
+    expect(await t.engine.services.bills.sendDue()).toBe(0);
+    expect(await t.engine.services.bills.sendDue()).toBe(0);
+    expect(await t.engine.repos.reminders.get(rem.id)).toMatchObject({
+      status: 'failed',
+      attempts: 3,
+    });
+    expect(await t.engine.services.bills.sendDue()).toBe(0);
+  });
+
   test('set_reminder via the crew: one reminders table, texted once when due', async () => {
     t.setModels(
       scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'reminder' } }]),
@@ -402,7 +531,7 @@ describe('paying a bill in USDC (demo biller)', () => {
     });
   });
 
-  test('card pays the registry account, never one from the email; settling marks the bill paid', async () => {
+  test('card pays the registry account, never one from the email; a dry run leaves the bill open', async () => {
     const bill = await billFor('Penny Demo Utility');
     t.setModels(
       scriptedModel([{ tool: 'route', input: { bot: 'mail', reason: 'pay' } }]),
@@ -434,12 +563,89 @@ describe('paying a bill in USDC (demo biller)', () => {
     const again = await t.engine.services.bills.paymentPlan(u.userId, bill.billId);
     expect(again).toEqual({ ok: false, reason: 'there is already a card out for this bill' });
 
-    // sign + relay (dry run settles) -> bill paid, reminder gone
+    // sign + relay: the default is a dry run, so nothing moved. The card settles
+    // but the bill and its reminder stay, and the text says it was a test run.
     const out = await approveLatest(t, u, row.id);
     expect(out.status).toBe('settled');
-    expect((await t.engine.services.bills.open(u.userId)).map((b) => b.payee)).toEqual(['DStv']);
+    expect((await t.engine.services.bills.open(u.userId)).map((b) => b.payee).sort()).toEqual([
+      'DStv',
+      'Penny Demo Utility',
+    ]);
     const pending = await t.engine.repos.reminders.scheduled(u.userId);
-    expect(pending.every((p) => p.billId !== bill.billId)).toBe(true);
+    expect(pending.some((p) => p.billId === bill.billId)).toBe(true);
+    expect(t.messaging.texts.at(-1)?.text).toBe(
+      "paid (test run, nothing sent) ✓ Penny Demo Utility, $5.00. it's still on your list.",
+    );
+  });
+
+  test('two concurrent turns cannot both put a card out for the same bill', async () => {
+    const bill = await billFor('Penny Demo Utility');
+    const plan = {
+      kind: 'pay_bill' as const,
+      billId: bill.billId,
+      payee: DEMO,
+      amount: '5',
+      asset: 'USDC' as const,
+    };
+    const make = () =>
+      t.engine.services.approvals.createMoneyApproval({
+        userId: u.userId,
+        bot: null,
+        plan,
+        space: u.space,
+      });
+    const results = await Promise.all([make(), make()]);
+    expect(results.filter((r) => r.decision === 'allow_with_approval')).toHaveLength(1);
+    expect(results.find((r) => r.decision === 'block')).toMatchObject({
+      reasons: ['there is already a card out for this bill'],
+    });
+  });
+
+  test('closing a bill cancels its open card', async () => {
+    const bill = await billFor('Penny Demo Utility');
+    const r = await t.engine.services.approvals.createMoneyApproval({
+      userId: u.userId,
+      bot: null,
+      plan: {
+        kind: 'pay_bill',
+        billId: bill.billId,
+        payee: DEMO,
+        amount: '5',
+        asset: 'USDC',
+      },
+      space: u.space,
+    });
+    if (r.decision !== 'allow_with_approval') throw new Error(`expected a card: ${r.decision}`);
+    const closed = await t.engine.services.bills.close(u.userId, bill.billId, 'paid');
+    expect(closed.ok).toBe(true);
+    expect((await t.engine.repos.approvals.get(r.approvalId))?.status).toBe('cancelled');
+
+    // the old link cannot pay the closed bill
+    const out = await approveLatest(t, u, r.approvalId);
+    expect(out.status).not.toBe('settled');
+  });
+
+  test('a card minted before the bill closed cannot relay', async () => {
+    const bill = await billFor('Penny Demo Utility');
+    const r = await t.engine.services.approvals.createMoneyApproval({
+      userId: u.userId,
+      bot: null,
+      plan: {
+        kind: 'pay_bill',
+        billId: bill.billId,
+        payee: DEMO,
+        amount: '5',
+        asset: 'USDC',
+      },
+      space: u.space,
+    });
+    if (r.decision !== 'allow_with_approval') throw new Error(`expected a card: ${r.decision}`);
+    // Close behind the card's back (no cancel hook), so only submit-time recheck can stop it.
+    expect(await t.engine.repos.bills.close(u.userId, bill.billId, 'paid')).not.toBeNull();
+
+    const out = await approveLatest(t, u, r.approvalId);
+    expect(out.status).not.toBe('settled');
+    expect((await t.engine.repos.approvals.get(r.approvalId))?.status).not.toBe('settled');
   });
 
   test('a naira bill is refused with a plain reason and no card', async () => {

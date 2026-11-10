@@ -154,6 +154,22 @@ export class ApprovalsRepo {
       .limit(500);
   }
 
+  /** Pending payment cards for one bill (the bill was closed underneath them). */
+  async pendingForBill(userId: string, billId: string): Promise<ApprovalRow[]> {
+    return this.db
+      .select()
+      .from(approvals)
+      .where(
+        and(
+          eq(approvals.userId, userId),
+          eq(approvals.billId, billId),
+          eq(approvals.kind, 'pay_bill'),
+          eq(approvals.status, 'pending'),
+        ),
+      )
+      .limit(50);
+  }
+
   async events(approvalId: string) {
     return this.db
       .select()

@@ -96,10 +96,12 @@ export type BillsDeps = {
   log: Logger;
   timeZone: string;
   now: () => Date;
+  /** Cancel live payment cards when a bill is closed (wired to the approval service). */
+  onBillClosed?: (userId: string, billId: string) => Promise<void>;
 };
 
 export type ScanResult =
-  | { ok: true; newBills: BillRow[]; open: BillRow[] }
+  | { ok: true; newBills: BillRow[]; reminded: string[]; open: BillRow[] }
   | { ok: false; error: string };
 
 /**
@@ -155,25 +157,53 @@ export class BillsService {
       })),
       opts.interactive ? now : null,
     );
-    for (const b of newBills) await this.scheduleBillReminder(b);
-    return { ok: true, newBills, open: await this.d.bills.open(userId) };
+    const reminded: string[] = [];
+    for (const b of newBills) if (await this.scheduleBillReminder(b)) reminded.push(b.id);
+    return { ok: true, newBills, reminded, open: await this.d.bills.open(userId) };
   }
 
-  /** Reminder at 09:00 local the day before the due date, if that is still ahead. */
-  private async scheduleBillReminder(b: BillRow): Promise<void> {
-    if (!b.dueOn) return;
-    const at = localTimeOn(this.d.timeZone, addDays(b.dueOn, -1), REMINDER_HOUR);
-    if (at.getTime() <= this.d.now().getTime()) return;
+  private async hasBillReminder(billId: string): Promise<boolean> {
+    // One reminder per bill, so a scheduled row is the proof the promise holds.
+    return (await this.d.reminders.scheduledForBill(billId)) !== null;
+  }
+
+  /**
+   * Remind at 09:00 local the day before the due date. If that has already passed
+   * (the email landed late), fall back to 09:00 on the due date, then to a few
+   * minutes out when the bill arrives on its due date. Returns whether a reminder
+   * actually exists, so the new-bill text never promises one that was not made.
+   */
+  private async scheduleBillReminder(b: BillRow): Promise<boolean> {
+    if (!b.dueOn) return false;
+    const now = this.d.now();
+    const dayBefore = localTimeOn(this.d.timeZone, addDays(b.dueOn, -1), REMINDER_HOUR);
+    const dueMorning = localTimeOn(this.d.timeZone, b.dueOn, REMINDER_HOUR);
+    let at: Date;
+    let when: 'tomorrow' | 'today';
+    if (dayBefore.getTime() > now.getTime()) {
+      at = dayBefore;
+      when = 'tomorrow';
+    } else if (dueMorning.getTime() > now.getTime()) {
+      at = dueMorning;
+      when = 'today';
+    } else {
+      // Due today and 09:00 has gone: a few minutes out, but never on the next day.
+      const soon = new Date(now.getTime() + 5 * 60_000);
+      if (this.today() !== b.dueOn || localDate(this.d.timeZone, soon) !== b.dueOn) return false;
+      at = soon;
+      when = 'today';
+    }
     const target = await this.d.users.primarySpace(b.userId);
-    if (!target) return; // never texted Penny: nowhere to remind them
+    if (!target) return false; // never texted Penny: nowhere to remind them
     const amount = b.amount ? ` (${formatMoney(b.amount, b.currency)})` : '';
-    await this.d.reminders.createForBill({
+    const created = await this.d.reminders.createForBill({
       userId: b.userId,
       billId: b.id,
-      text: `heads up: your ${b.payeeName} bill${amount} is due tomorrow.`,
+      text: `heads up: your ${b.payeeName} bill${amount} is due ${when}.`,
       dueAt: at,
       space: target.space,
     });
+    return created !== null || (await this.hasBillReminder(b.id));
   }
 
   /** Background: scan every user, text them about bills that are new and still relevant. */
@@ -189,23 +219,45 @@ export class BillsService {
           const target = await this.d.users.primarySpace(userId);
           if (!target) continue; // never texted Penny: nowhere to tell them
           const r = await this.scan(userId, { interactive: false });
-          if (!r.ok || !r.newBills.length) continue;
-          users += 1;
+          if (!r.ok) continue; // read failed: leave unnotified bills for the next scan
+          if (r.newBills.length) users += 1;
+          // Retry every bill whose text never went out. A bill is marked notified
+          // only after a successful send, so a failed send is not lost.
+          const pendingText = await this.d.bills.unnotified(userId);
+          if (!pendingText.length) continue;
           const now = this.d.now();
           const today = this.today();
-          const fresh = r.newBills.filter((b) =>
+          const inserted = new Set(r.newBills.map((b) => b.id));
+          const fresh = (b: BillRow) =>
             b.dueOn
               ? b.dueOn >= today
-              : now.getTime() - (b.receivedAt ?? now).getTime() < FRESH_NO_DUE_MS,
-          );
+              : now.getTime() - (b.receivedAt ?? now).getTime() < FRESH_NO_DUE_MS;
           // Old bills found on a first scan are stored quietly, never texted.
+          const quiet = pendingText.filter((b) => inserted.has(b.id) && !fresh(b));
+          if (quiet.length)
+            await this.d.bills.markNotified(
+              quiet.map((b) => b.id),
+              now,
+            );
+          const toText = pendingText.filter((b) => !quiet.some((q) => q.id === b.id));
+          if (!toText.length) continue;
+          const reminded = new Set(
+            (await this.d.reminders.scheduled(userId))
+              .map((rem) => rem.billId)
+              .filter((id): id is string => Boolean(id)),
+          );
+          const text = newBillsText(toText, reminded);
+          try {
+            await this.d.messaging.sendText(target.space, text);
+          } catch (e) {
+            // Keep notified_at null; the next scan retries this exact text once.
+            this.d.log.warn({ err: (e as Error).name, userId }, 'bill text failed; will retry');
+            continue;
+          }
           await this.d.bills.markNotified(
-            r.newBills.map((b) => b.id),
+            toText.map((b) => b.id),
             now,
           );
-          if (!fresh.length) continue;
-          const text = newBillsText(fresh);
-          await this.d.messaging.sendText(target.space, text);
           await this.d.messages.add({
             conversationId: target.conversationId,
             direction: 'outbound',
@@ -283,13 +335,30 @@ export class BillsService {
     billId: string,
     receipt: { txHash: string | null; dryRun: boolean } = { txHash: null, dryRun: true },
   ): Promise<void> {
+    // A dry run moved no money: never close the bill, cancel its reminder or imply
+    // that a payment happened. The bill and reminder stay exactly as they were.
+    if (receipt.dryRun) {
+      const b = await this.d.bills.get(userId, billId);
+      if (!b) return;
+      const target = await this.d.users.primarySpace(userId);
+      if (!target) return;
+      const text = `paid (test run, nothing sent) ✓ ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. it's still on your list.`;
+      await this.d.messaging.sendText(target.space, text);
+      await this.d.messages.add({
+        conversationId: target.conversationId,
+        direction: 'outbound',
+        text,
+      });
+      return;
+    }
     const b = await this.d.bills.close(userId, billId, 'paid');
     if (!b) return;
     await this.d.reminders.undoForBill(b.id);
+    await this.d.onBillClosed?.(userId, b.id);
     const target = await this.d.users.primarySpace(userId);
     if (!target) return;
     const link =
-      receipt.txHash && !receipt.dryRun && this.d.explorerTxUrl
+      receipt.txHash && this.d.explorerTxUrl
         ? `\nreceipt: ${this.d.explorerTxUrl}${receipt.txHash}`
         : '';
     const text = `paid ✓ ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder.${link}`;
@@ -305,7 +374,23 @@ export class BillsService {
     const b = await this.d.bills.close(userId, billId, to);
     if (!b) return { ok: false as const, error: 'no open bill with that id' };
     await this.d.reminders.undoForBill(b.id);
+    // A closed bill must not still have a card that can pay it.
+    await this.d.onBillClosed?.(userId, b.id);
     return { ok: true as const, bill: billView(b, this.today(), this.billers) };
+  }
+
+  /**
+   * Re-read a bill before a stale card is renewed or relayed. Closes the gap
+   * where a card minted before the bill was paid/dismissed could still spend.
+   */
+  async recheckBill(
+    userId: string,
+    billId: string,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const bill = await this.d.bills.get(userId, billId);
+    if (!bill) return { ok: false, reason: 'that bill is no longer here' };
+    const pay = payability(bill, this.billers);
+    return pay.payable ? { ok: true } : { ok: false, reason: pay.why };
   }
 
   async reminders(userId: string) {
@@ -345,20 +430,25 @@ export class BillsService {
           });
         sent += 1;
       } catch (e) {
-        await this.d.reminders.markFailed(r.id);
-        this.d.log.warn({ err: (e as Error).name, reminderId: r.id }, 'reminder send failed');
+        const err = (e as Error).name || 'send_failed';
+        const terminal = await this.d.reminders.markFailed(r.id, err);
+        this.d.log.warn(
+          { err, reminderId: r.id, terminal },
+          terminal ? 'reminder send failed; giving up' : 'reminder send failed; will retry',
+        );
       }
     }
     return sent;
   }
 }
 
-export function newBillsText(fresh: BillRow[]): string {
+export function newBillsText(fresh: BillRow[], reminded: ReadonlySet<string> = new Set()): string {
   const line = (b: BillRow) =>
     `${b.payeeName}: ${formatMoney(b.amount, b.currency)}${b.dueOn ? `, due ${formatDay(b.dueOn)}` : ''}`;
   if (fresh.length === 1) {
     const b = fresh[0] as BillRow;
-    const remind = b.dueOn ? " i'll remind you the day before." : '';
+    // Promise only what actually exists: a late bill with no reminder gets no promise.
+    const remind = b.dueOn && reminded.has(b.id) ? " i'll remind you." : '';
     return `mail here 📬 new bill in: ${line(b)}.${remind}`;
   }
   const shown = fresh.slice(0, 3).map((b) => `• ${line(b)}`);
