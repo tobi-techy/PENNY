@@ -55,6 +55,8 @@ const BaseEnv = z.object({
   NEARAI_ATTESTATION_TTL_SEC: z.coerce.number().int().min(30).max(3600).default(300),
 
   COMPOSIO_API_KEY: optionalStr,
+  /** Composio Firewall hooks are a paid-plan feature; off unless set to 1. */
+  COMPOSIO_FIREWALL: flag.default('0'),
 
   /** "TEAMID.bundle.id" for App Attest verification, e.g. A1B2C3D4E5.app.penny.host */
   APP_ATTEST_APP_ID: optionalStr,

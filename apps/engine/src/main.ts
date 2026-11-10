@@ -162,7 +162,13 @@ const engine = createEngine({
   ...(invest ? { invest } : {}),
   relayerMaxDepositYocto,
   registry: createRegistry(),
-  ...(env.COMPOSIO_API_KEY ? { connectors: new ComposioConnector(env.COMPOSIO_API_KEY) } : {}),
+  ...(env.COMPOSIO_API_KEY
+    ? {
+        connectors: new ComposioConnector(env.COMPOSIO_API_KEY, {
+          firewall: env.COMPOSIO_FIREWALL === '1',
+        }),
+      }
+    : {}),
   ...(env.APP_ATTEST_APP_ID ? { attestAppId: env.APP_ATTEST_APP_ID } : {}),
   attestRequire: env.PENNY_ENV === 'mainnet',
   log,
