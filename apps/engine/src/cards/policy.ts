@@ -15,6 +15,8 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   check_guard: false,
   propose_split: false, // a nudge card only; no money moves
   find_bills: false,
+  list_bills: false,
+  list_reminders: false,
   connect_app: false, // sends the user a link to connect; acts only after they do it themselves
   remember: false,
   recall: false,
@@ -29,6 +31,9 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   draft_email: false,
   edit_draft: false,
   make_plan: false,
+  close_bill: false, // mark your own saved bill paid / not mine
+  cancel_reminder: false,
+  send_setup_link: false, // texts the user their own setup link
   // money: always Face ID
   propose_send: true,
   propose_invest: true,

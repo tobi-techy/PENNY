@@ -131,11 +131,13 @@ export function CardPage({ token }: { token: string }) {
     } catch (e) {
       const name = (e as Error).name;
       setErr(
-        name === 'PasskeyCancelled'
-          ? 'Face ID was cancelled. Nothing was sent.'
-          : name === 'PasskeyUnavailable'
-            ? 'This phone has no passkey for Penny. Open the setup link Penny sent you.'
-            : "That didn't go through. Nothing moved.",
+        name === 'ApprovalMismatch'
+          ? "This card doesn't add up, so I didn't sign it. Nothing moved. Ask Penny for a new one."
+          : name === 'PasskeyCancelled'
+            ? 'Face ID was cancelled. Nothing was sent.'
+            : name === 'PasskeyUnavailable'
+              ? 'This phone has no passkey for Penny. Open the setup link Penny sent you.'
+              : "That didn't go through. Nothing moved.",
       );
     } finally {
       setBusy(false);

@@ -31,7 +31,12 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'connect_app',
       'propose_write',
       'find_bills',
+      'list_bills',
+      'close_bill',
       'set_reminder',
+      'list_reminders',
+      'cancel_reminder',
+      'send_setup_link',
       'draft_email',
     ],
   },
@@ -46,6 +51,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'propose_invest',
       'remember',
       'recall',
+      'send_setup_link',
     ],
   },
   { slug: 'guard', name: 'Guard', toolIds: ['check_guard', 'recall'] },
@@ -60,6 +66,12 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'draft_email',
       'remember',
       'recall',
+      'list_bills',
+      'close_bill',
+      'set_reminder',
+      'list_reminders',
+      'cancel_reminder',
+      'send_setup_link',
     ],
   },
   {
@@ -75,19 +87,28 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'find_bills',
       'remember',
       'recall',
+      'list_bills',
+      'close_bill',
+      'set_reminder',
+      'list_reminders',
+      'send_setup_link',
     ],
   },
   {
     slug: 'errand',
     name: 'Errand',
     toolIds: [
-      'propose_errand',
+      // propose_errand stays out until errands have a real task and bid source; its
+      // chain action (ft_transfer_call to intents.near with a made-up memo) is a stub.
       'check_guard',
       'connect_app',
       'propose_write',
       'set_reminder',
       'remember',
       'recall',
+      'list_reminders',
+      'cancel_reminder',
+      'send_setup_link',
     ],
   },
 ];
@@ -196,7 +217,7 @@ export class BotService {
       return {
         ok: false,
         reasons: [
-          'Set up approvals first (tap the setup link Penny sent you), then I can make this bot.',
+          "Approvals aren't set up yet. Penny just texted them a setup link: once they've tapped it, I can make this bot.",
         ],
       };
     await this.d.bots.insert({ ...base, status: 'pending_approval', approvalId: card.approvalId });

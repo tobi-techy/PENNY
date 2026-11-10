@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "smoke": "bun run scripts/smoke-readonly.ts",
-    "plan:agents": "bun run scripts/bootstrap-agents.ts"
+    "plan:agents": "bun run scripts/bootstrap-agents.ts",
+    "deploy:testnet": "bun run scripts/deploy-testnet.ts"
   },
   "dependencies": {
     "@near-js/crypto": "2.5.1",

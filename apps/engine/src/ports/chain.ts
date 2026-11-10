@@ -1,3 +1,4 @@
+import type { GuardContract, TxSigner } from '@penny/chain';
 import { type Approval, type MoneyPlan, type NearAction, toBaseUnits } from '@penny/shared';
 
 /**
@@ -50,6 +51,12 @@ export interface ChainPort {
     publicKeyEd25519B64Url: string,
     windowSec?: number,
   ): Promise<{ nonce: string; maxBlockHeight: string }>;
+  /**
+   * Client for the configured shared Guard contract. Undefined when
+   * PENNY_GUARD_CONTRACT is unset (on-chain autopilot off). The owner account is
+   * passed to each owner-scoped call, not derived per user.
+   */
+  guardFor?(ownerAccountId: string, ownerSigner?: TxSigner): GuardContract | undefined;
 }
 
 /** Deterministic fake for tests and DRY_RUN dev. Never touches a network. */
@@ -109,6 +116,20 @@ export class FakeChain implements ChainPort {
             type: 'FunctionCall' as const,
             methodName: 'ft_transfer',
             args: { receiver_id: dep, amount: toBaseUnits(plan.amountUsd, 6).toString() },
+            gas: '30000000000000',
+            deposit: '1',
+          },
+        ],
+      };
+    }
+    if (plan.kind === 'pay_bill') {
+      return {
+        receiverId: this.usdcContract,
+        actions: [
+          {
+            type: 'FunctionCall' as const,
+            methodName: 'ft_transfer',
+            args: { receiver_id: plan.payee, amount: toBaseUnits(plan.amount, 6).toString() },
             gas: '30000000000000',
             deposit: '1',
           },

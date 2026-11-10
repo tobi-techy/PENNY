@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import { Hono } from 'hono';
 import { ApprovalService, type Clock } from './approvals/service.ts';
+import { resolveBillers } from './bills/billers.ts';
+import { BillsService } from './bills/service.ts';
+import { DEFAULT_TIME_ZONE } from './bills/time.ts';
 import type { PrivacyGate } from './brain/attestation.ts';
 import { BotService } from './brain/bots.ts';
 import { Crew } from './brain/crew.ts';
@@ -32,11 +35,14 @@ import {
 import { handleInbound } from './inbound.ts';
 import type { Logger } from './lib/logger.ts';
 import type { InvestPort } from './market/invest.ts';
+import { OnboardingService } from './onboarding.ts';
 import type { ChainPort } from './ports/chain.ts';
 import type { MessagingPort } from './ports/messaging.ts';
 import { ApprovalsRepo } from './repo/approvals.ts';
+import { BillsRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import { CardsRepo, PasskeysRepo, RemindersRepo } from './repo/cards.ts';
+import { ConnectWatchesRepo } from './repo/connect-watches.ts';
 import {
   AttestChallengesRepo,
   GuardDecisionsRepo,
@@ -70,6 +76,12 @@ export type EngineDeps = {
   now?: Clock;
   /** NEAR AI TEE attestation (NEARAI_ATTESTATION warn|enforce); absent = off. */
   privacy?: PrivacyGate;
+  /** User-facing IANA time zone for reminders and "now" (PENNY_TIMEZONE). */
+  timeZone?: string;
+  /** Which NEAR network the chain adapter talks to. Testnet pays bills in tUSD. Default mainnet. */
+  chainNetwork?: 'mainnet' | 'testnet';
+  /** NEAR account of the demo biller (PENNY_DEMO_BILLER_ACCOUNT); unset = no demo biller. */
+  demoBillerAccount?: string;
   /** PNG of a card (live card image + og:image). Absent: no image on live cards. */
   renderCardImage?: (card: import('@penny/shared').Card) => Promise<Uint8Array>;
   /** Explorer base for receipts, e.g. https://testnet.nearblocks.io */
@@ -79,6 +91,14 @@ export type EngineDeps = {
   /** Test hook: no real waits between live-card edit retries. */
   sleep?: (ms: number) => Promise<void>;
 };
+
+const APP_LABELS: Record<string, string> = { gmail: 'Gmail', github: 'GitHub' };
+
+const CONNECTED_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{app}} connected · Penny</title>
+<style>body{font-family:-apple-system,system-ui,sans-serif;max-width:28rem;margin:18vh auto;padding:0 1.5rem;color:#111;line-height:1.5}h1{font-size:1.5rem;margin:0 0 .5rem}p{color:#555}</style>
+</head><body><h1>{{app}} connected ✓</h1><p>You can close this and go back to Messages. Penny will text you in a moment.</p></body></html>`;
 
 export function createEngine(d: EngineDeps) {
   const now = d.now ?? (() => new Date());
@@ -93,10 +113,13 @@ export function createEngine(d: EngineDeps) {
     attestChallenges: new AttestChallengesRepo(d.db),
     idempotency: new IdempotencyRepo(d.db),
     guardDecisions: new GuardDecisionsRepo(d.db),
+    bills: new BillsRepo(d.db),
+    connectWatches: new ConnectWatchesRepo(d.db),
     cards: new CardsRepo(d.db),
     passkeys: new PasskeysRepo(d.db),
     reminders: new RemindersRepo(d.db),
   };
+  const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
   const cardSender = new CardSender({
     cards: repos.cards,
     users: repos.users,
@@ -157,15 +180,55 @@ export function createEngine(d: EngineDeps) {
         }
       : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
+    onBillPaid: (userId, billId, receipt) => bills.markPaid(userId, billId, receipt),
+    recheckBill: (userId, billId) => bills.recheckBill(userId, billId),
+    onNeedsSetup: async (userId, space) => {
+      await onboarding.sendSetupLink(userId, space);
+    },
     onBotDeclined: (id) => botService.onApprovalDeclined(id),
     onBotReissued: (from, to) => botService.onApprovalReissued(from, to),
   });
-  const enroll = new EnrollService(repos.users, d.chain, now, {
-    ...(d.attestAppId ? { appId: d.attestAppId } : {}),
-    require: d.attestRequire ?? false,
-    challenges: repos.attestChallenges,
-    passkeys: repos.passkeys,
+  const enroll: EnrollService = new EnrollService(
+    repos.users,
+    d.chain,
+    now,
+    {
+      ...(d.attestAppId ? { appId: d.attestAppId } : {}),
+      require: d.attestRequire ?? false,
+      challenges: repos.attestChallenges,
+      passkeys: repos.passkeys,
+      publicBaseUrl: d.publicBaseUrl,
+    },
+    (userId): Promise<void> => onboarding.onEnrolled(userId),
+  );
+  const bills = new BillsService({
+    bills: repos.bills,
+    reminders: repos.reminders,
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    ...(d.connectors ? { connectors: d.connectors } : {}),
+    approvals: repos.approvals,
+    billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
+    explorerTxUrl: `${d.explorerBaseUrl ?? (d.chainNetwork === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io')}/txns/`,
+    log: d.log,
+    timeZone,
+    now,
+    onBillClosed: async (userId, billId) => {
+      await approvals?.cancelPayBillApprovals(userId, billId);
+    },
+  });
+  const onboarding: OnboardingService = new OnboardingService({
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    enroll,
+    watches: repos.connectWatches,
+    ...(d.connectors ? { connectors: d.connectors } : {}),
+    bills,
     publicBaseUrl: d.publicBaseUrl,
+    log: d.log,
+    now,
   });
   const crew = new Crew({
     router: d.models.router,
@@ -187,6 +250,10 @@ export function createEngine(d: EngineDeps) {
     tracer: d.tracer ?? noopTracer,
     log: d.log,
     ...(d.privacy ? { privacy: d.privacy } : {}),
+    bills,
+    onboarding,
+    timeZone,
+    now,
   });
   const cardActions = new CardActions({
     cards: repos.cards,
@@ -306,6 +373,11 @@ export function createEngine(d: EngineDeps) {
     return new Response(await readFile(file), { headers: { 'content-type': type } });
   });
 
+  // Where the browser lands after connecting an app. Static: Penny confirms in the thread.
+  app.get('/connected', (c) => {
+    const label = APP_LABELS[c.req.query('app') ?? ''] ?? 'Your app';
+    return c.html(CONNECTED_HTML.replaceAll('{{app}}', label));
+  });
   if (d.proveSecret) {
     app.route(
       '/',
@@ -324,7 +396,7 @@ export function createEngine(d: EngineDeps) {
     users: repos.users,
     messages: repos.messages,
     crew,
-    enroll,
+    onboarding,
     messaging: d.messaging,
     userLimiter,
     log: d.log,
@@ -355,14 +427,7 @@ export function createEngine(d: EngineDeps) {
   const scheduler = new Scheduler(
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
-      fireReminders: async (at: Date) => {
-        for (const r of await repos.reminders.due(at)) {
-          if (!(await repos.reminders.markSent(r.id))) continue;
-          await d.messaging.sendText(r.space, `reminder: ${r.text}`).catch((e: unknown) => {
-            d.log.warn({ err: (e as Error).name }, 'reminder send failed');
-          });
-        }
-      },
+      fireReminders: (at: Date) => bills.sendDue(at),
       refreshRelayed: () => approvals.refreshRelayed(),
       reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
@@ -370,6 +435,16 @@ export function createEngine(d: EngineDeps) {
       weeklyReflection: async (now) => {
         await reflection.reflectWeekly(now);
       },
+      ...(d.connectors
+        ? {
+            scanBills: async () => {
+              await bills.scanAll();
+            },
+            checkConnections: async () => {
+              await onboarding.checkConnections();
+            },
+          }
+        : {}),
     }),
     d.log,
     now,
@@ -380,6 +455,8 @@ export function createEngine(d: EngineDeps) {
     repos,
     services: {
       approvals,
+      bills,
+      onboarding,
       bots: botService,
       cards: cardSender,
       cardActions,

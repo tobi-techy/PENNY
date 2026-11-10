@@ -12,8 +12,8 @@ import {
   WritePlan,
 } from '@penny/shared';
 import { z } from 'zod';
+import { normalizeOffsetDateTime } from '../bills/time.ts';
 import { draftEmail, setReminder } from '../cards/everyday.ts';
-import { billQuery, parseBillEmails } from '../connectors/composio.ts';
 import { INVEST_ASSETS } from '../market/invest.ts';
 import type { MarketPort, ToolContext, ToolDef } from './registry.ts';
 import { ToolRegistry } from './registry.ts';
@@ -49,6 +49,13 @@ async function propose(ctx: ToolContext, plan: MoneyPlan) {
 
 const empty = z.object({}).strict();
 const InvestInput = z.object({ portfolioId: z.enum(INVEST_ASSETS), amountUsd: Decimal }).strict();
+/** Accepts both `2026-11-14T18:00:00+01:00` and minute precision `2026-11-14T18:00+01:00`. */
+const ReminderAt = z
+  .string()
+  .refine((s) => normalizeOffsetDateTime(s) !== null, {
+    message: 'Use a date-time like 2026-11-14T18:00+01:00',
+  })
+  .transform((s) => normalizeOffsetDateTime(s) ?? s);
 
 export function builtinTools(): ToolDef<never>[] {
   const defs: ToolDef<never>[] = [];
@@ -108,49 +115,105 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'find_bills',
     description:
-      'Find bills, invoices and payment notices in connected Gmail (read-only). If it says not connected, call connect_app for gmail and share the link.',
+      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail and share the link.",
     risk: 'read',
     input: empty,
     execute: async (ctx) => {
-      if (!ctx.connectors) return { ok: false, error: 'email not connected yet' };
-      try {
-        const raw = await ctx.connectors.executeRead(
-          ctx.userId,
-          ctx.bot.slug,
-          'GMAIL_FETCH_EMAILS',
-          {
-            query: billQuery(),
-            max_results: 10,
-            verbose: false,
-          },
-        );
-        const bills = parseBillEmails(raw);
-        return { ok: true, count: bills.length, bills };
-      } catch (e) {
-        return { ok: false, error: (e as Error).name, hint: 'try connect_app gmail' };
-      }
+      if (!ctx.bills || !ctx.connectors) return { ok: false, error: 'email not connected yet' };
+      const r = await ctx.bills.scan(ctx.userId, { interactive: true });
+      if (!r.ok) return { ok: false, error: r.error, hint: 'try connect_app gmail' };
+      const open = await ctx.bills.open(ctx.userId);
+      const fresh = new Set(r.newBills.map((b) => b.id));
+      return {
+        ok: true,
+        newCount: r.newBills.length,
+        bills: open.map((b) => ({ ...b, isNew: fresh.has(b.billId) })),
+      };
     },
+  });
+  add({
+    id: 'list_bills',
+    description:
+      'List open bills Penny already knows about (no inbox read). Soonest due first. Use find_bills to check the inbox for new ones.',
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) =>
+      ctx.bills ? { ok: true, bills: await ctx.bills.open(ctx.userId) } : { ok: false },
+  });
+  add({
+    id: 'close_bill',
+    description:
+      "Mark a bill as paid (the user says they paid it elsewhere) or dismissed (not a real bill / not theirs). Cancels its reminder and any open payment card for it. Only when the user says so. This only updates Penny's own list; nothing outside Penny changes, so no approval is needed.",
+    // risk stays `read`: Penny's own bookkeeping, no outside effect. AGENT.md's
+    // write rule covers acting in the user's name outside Penny (posting, sending,
+    // spending); editing this user's bill list is not such an action.
+    risk: 'read',
+    input: z
+      .object({ billId: z.string().min(1).max(64), status: z.enum(['paid', 'dismissed']) })
+      .strict(),
+    execute: async (ctx, i) =>
+      ctx.bills ? ctx.bills.close(ctx.userId, i.billId, i.status) : { ok: false },
+  });
+  add({
+    id: 'list_reminders',
+    description: "List the user's upcoming reminders (theirs and bill due-date ones).",
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) =>
+      ctx.bills ? { ok: true, reminders: await ctx.bills.reminders(ctx.userId) } : { ok: false },
+  });
+  add({
+    id: 'cancel_reminder',
+    description:
+      "Cancel an upcoming reminder by reminderId (from list_reminders). This only updates Penny's own reminder list; nothing outside Penny changes, so no approval is needed.",
+    // risk stays `read`: Penny's own bookkeeping, no outside effect (AGENT.md's
+    // write rule is about acting in the user's name outside Penny).
+    risk: 'read',
+    input: z.object({ reminderId: z.string().min(1).max(64) }).strict(),
+    execute: async (ctx, i) =>
+      ctx.bills ? ctx.bills.cancelReminder(ctx.userId, i.reminderId) : { ok: false },
   });
   add({
     id: 'connect_app',
     description:
-      'Check whether an outside app (gmail, github) is connected for this user. If not, returns a connect link to share with the user verbatim. After they authorize, retry the original task.',
+      'Connect an outside app (gmail, github) for this user. If already connected, says so. Otherwise returns a link: share tellUser verbatim. Penny watches for the connection and texts the user herself when it is live (for gmail she also checks for bills), so do not ask them to say done.',
     risk: 'read',
     input: z.object({ toolkit: z.enum(['gmail', 'github']) }).strict(),
     execute: async (ctx, i) => {
       if (!ctx.connectors) return { ok: false, error: 'connectors not configured' };
-      const r = await ctx.connectors.connect(ctx.userId, i.toolkit);
+      const r = await ctx.connectors.connect(
+        ctx.userId,
+        i.toolkit,
+        ctx.onboarding ? { callbackUrl: ctx.onboarding.connectedUrl(i.toolkit) } : {},
+      );
       if (r.status === 'connected') return { ok: true, connected: true, toolkit: i.toolkit };
-      if (r.status === 'link')
+      if (r.status === 'link') {
+        await ctx.onboarding?.watchConnect(ctx.userId, i.toolkit);
+        const what =
+          i.toolkit === 'gmail'
+            ? "i only read, and nothing gets sent from it without your ok. i'll text you the moment it's connected."
+            : "i'll text you the moment it's connected.";
         return {
           ok: false,
           connected: false,
           toolkit: i.toolkit,
           connectUrl: r.redirectUrl,
-          tellUser: `tap this to connect your ${i.toolkit}: ${r.redirectUrl} - then say done and I will retry.`,
+          tellUser: `tap to connect your ${i.toolkit}: ${r.redirectUrl}\n${what}`,
         };
+      }
       return { ok: false, connected: false, error: r.reason };
     },
+  });
+  add({
+    id: 'send_setup_link',
+    description:
+      'Text the user a fresh link to turn on approvals (no app to install). Penny already sends it automatically when an action needs approval; use this when they ask for the link again or say it expired.',
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) =>
+      ctx.onboarding
+        ? ctx.onboarding.sendSetupLink(ctx.userId, ctx.space, { force: true })
+        : { sent: false },
   });
   add({
     id: 'propose_write',
@@ -205,11 +268,11 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'set_reminder',
     description:
-      "Set a reminder. dueAt is an ISO-8601 date-time with the user's UTC offset (e.g. 2026-11-09T07:00:00+01:00). Sends a card with Undo.",
-    risk: 'read', // stays inside Penny; the reminder is a text from Penny later
-    input: z
-      .object({ text: z.string().min(1).max(200), dueAt: z.iso.datetime({ offset: true }) })
-      .strict(),
+      "Set a reminder. dueAt is an ISO-8601 date-time with the user's UTC offset, e.g. 2026-11-09T07:00+01:00 (seconds optional). Sends a card with Undo. Nothing goes outside Penny; Penny texts the user when it is due.",
+    // risk stays `read`: the reminder lives inside Penny and the later text is
+    // Penny talking to the user, not an action in the user's name (AGENT.md).
+    risk: 'read',
+    input: z.object({ text: z.string().min(1).max(200), dueAt: ReminderAt }).strict(),
     execute: async (ctx, i) => {
       if (!ctx.everyday) return { ok: false, error: 'reminders are not set up' };
       const r = await setReminder(ctx.everyday, {
@@ -284,10 +347,43 @@ export function builtinTools(): ToolDef<never>[] {
   });
   add({
     id: 'propose_pay_bill',
-    description: 'Propose paying a bill in USDC.',
+    description:
+      "Propose paying one of the user's saved bills in USDC, by billId (from find_bills or list_bills). Penny fills in the biller's payout account and the exact amount from the bill; you never supply a payee. Only works when the bill shows payableInApp; otherwise tell the user notPayableBecause and offer a reminder.",
     risk: 'money',
-    input: PayBillPlan,
-    execute: propose,
+    input: z.object({ billId: z.string().min(1).max(64) }).strict(),
+    execute: async (ctx, i) => {
+      if (!ctx.bills) return { decision: 'needs_more_info', reasons: ['bills are not set up'] };
+      // Check the dollars are there before showing a card that can only fail.
+      const wallet: { usdc?: string } = {};
+      if (ctx.accountId) {
+        try {
+          const usdc = (await ctx.market.getBalances(ctx.accountId)).find(
+            (b) => b.asset === 'USDC',
+          );
+          if (usdc) wallet.usdc = usdc.amount;
+        } catch {
+          /* balance unknown: Guard and the chain still stop a short payment */
+        }
+      }
+      const p = await ctx.bills.paymentPlan(ctx.userId, i.billId, wallet);
+      if (!p.ok) return { decision: 'needs_more_info', reasons: [p.reason] };
+      const r = await ctx.approvals.createMoneyApproval({
+        userId: ctx.userId,
+        bot: ctx.bot,
+        plan: p.plan,
+        space: ctx.space,
+        facts: p.facts,
+      });
+      if (r.decision === 'allow_with_approval') {
+        return {
+          decision: r.decision,
+          approvalId: r.approvalId,
+          reasons: r.reasons,
+          cardSent: true,
+        };
+      }
+      return r;
+    },
   });
   add({
     id: 'propose_errand',

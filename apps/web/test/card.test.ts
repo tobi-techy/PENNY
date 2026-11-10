@@ -56,3 +56,40 @@ describe('passkey options (the server checks the result)', () => {
     expect(o.attestation).toBe('none');
   });
 });
+
+describe('approval check before signing', () => {
+  test('recomputes planHash and approvalHash; any change is refused', async () => {
+    const { verifyApproval, describeAction } = await import('../src/chain/verify.ts');
+    const { approvalHash, approvalActionOf, planHash } = await import(
+      '../../../packages/shared/src/index.ts'
+    );
+    const plan = { kind: 'send', asset: 'NEAR', amount: '0.1', to: 'amara.testnet' } as const;
+    const actions = [{ type: 'Transfer', deposit: '100000000000000000000000' }] as const;
+    const ph = planHash(plan, [...actions]);
+    const expiresAt = '2026-11-09T10:00:00.000Z';
+    const id = 'apr_01JC0000000000000000000000';
+    const a = {
+      id,
+      expiresAt,
+      approvalHash: approvalHash({ id, action: approvalActionOf(plan), expiresAt, planHash: ph }),
+      detail: { id, plan, actions, planHash: ph },
+    };
+    const action = await verifyApproval(a);
+    expect(describeAction(action)).toBe('Send 0.1 NEAR to amara.testnet');
+    // server swaps the recipient but keeps the old hashes
+    await expect(
+      verifyApproval({ ...a, detail: { ...a.detail, plan: { ...plan, to: 'evil.testnet' } } }),
+    ).rejects.toThrow('plan hash');
+    // server swaps the actions
+    await expect(
+      verifyApproval({
+        ...a,
+        detail: { ...a.detail, actions: [{ type: 'Transfer', deposit: '9' }] },
+      }),
+    ).rejects.toThrow('plan hash');
+    // hash for a different expiry
+    await expect(verifyApproval({ ...a, expiresAt: '2026-11-10T10:00:00.000Z' })).rejects.toThrow(
+      'approval hash',
+    );
+  });
+});

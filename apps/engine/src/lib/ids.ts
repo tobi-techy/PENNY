@@ -12,6 +12,7 @@ export type IdPrefix =
   | 'gdc'
   | 'atch'
   | 'evt'
+  | 'bil'
   | 'crd'
   | 'pky'
   | 'rmd';

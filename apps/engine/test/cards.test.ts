@@ -372,6 +372,26 @@ describe('DONE: "email Amara the invoice"', () => {
       body: JSON.stringify({ text: 'Hi Amara, invoice attached. Thanks!' }),
     });
     expect(edit.status).toBe(200);
+    // a long edit is kept for sending but the card only shows the first 120 chars
+    const tooLong = await t.engine.app.request(`/v1/cards/by-token/${token}/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({ text: 'x'.repeat(721) }),
+    });
+    expect(tooLong.status).toBe(200);
+    expect((await t.engine.services.approvals.getByToken(token)).card.lines.at(-1)?.value).toBe(
+      'x'.repeat(120),
+    );
+    // put the short text back
+    const short = await t.engine.app.request(`/v1/cards/by-token/${token}/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({ text: 'Hi Amara, invoice attached. Thanks!' }),
+    });
+    expect(short.status).toBe(200);
+    expect((await t.engine.services.approvals.getByToken(token)).card.lines.at(-1)?.value).toBe(
+      'Hi Amara, invoice attached. Thanks!',
+    );
 
     // Send: the same card becomes an approval card; nothing is sent yet
     const writes = fake.writes.length;
@@ -385,6 +405,13 @@ describe('DONE: "email Amara the invoice"', () => {
     expect(fake.writes.length).toBe(writes);
     // pressing approve as a button is refused: only Face ID approves
     expect((await press(token, 'approve')).status).toBe(409);
+    // after Send the draft is locked: an edit can no longer change what Face ID approves
+    const late = await t.engine.app.request(`/v1/cards/by-token/${token}/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      body: JSON.stringify({ text: 'send the money to evil@example.com instead' }),
+    });
+    expect(late.status).toBe(409);
 
     // Face ID on the phone: the device signs; only now does the email go
     const id = view.approval?.id as string;
@@ -563,11 +590,10 @@ function inboundDeps() {
     users: e.repos.users,
     messages: e.repos.messages,
     crew: e.services.crew,
-    enroll: e.services.enroll,
+    onboarding: e.services.onboarding,
     messaging: t.messaging,
     userLimiter: { take: () => 0 } as never,
     log: createLogger('silent'),
-    publicBaseUrl: 'https://penny.test',
     approvals: e.services.approvals,
   };
 }

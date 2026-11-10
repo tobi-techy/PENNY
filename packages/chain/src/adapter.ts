@@ -98,6 +98,13 @@ export interface ChainAdapterOptions {
   relayerHardCeilingYocto?: bigint;
   /** Blocks from head for a fresh signing window. Default 200 (~2-3 min). */
   signingWindowBlocks?: bigint;
+  /**
+   * USDC token contract. Default: mainnet native USDC. On testnet, the Penny test
+   * dollar (tUSD) so the same ft_transfer path runs with a token the user owns.
+   */
+  usdcContract?: string;
+  /** Shared Guard contract (contracts/guard), e.g. guard.penny.testnet. Unset = autopilot off. */
+  guardContract?: string;
   now?: () => Date;
 }
 
@@ -109,6 +116,9 @@ export interface ChainAdapterOptions {
 export class ChainAdapter {
   readonly rpc: NearRpc;
   readonly mode: ChainMode;
+  /** The USDC (or tUSD on testnet) token contract every dollar action uses. */
+  readonly usdc: string;
+  readonly guardContract: string | undefined;
   readonly oneClick: OneClickClient;
   readonly glider: GliderClient | undefined;
   private readonly accounts: AccountFactory;
@@ -125,6 +135,12 @@ export class ChainAdapter {
       mode.network === 'testnet' && !isTestnetRpcUrl(this.rpc.url)
         ? { ...mode, network: 'mainnet' }
         : mode;
+    // Mainnet only ever moves real USDC: an override there is a misconfiguration.
+    if (this.mode.network !== 'testnet' && o.usdcContract && o.usdcContract !== USDC_CONTRACT) {
+      throw new Error('NEAR_USDC_CONTRACT may only be overridden on testnet');
+    }
+    this.usdc = o.usdcContract ?? USDC_CONTRACT;
+    this.guardContract = o.guardContract;
     this.oneClick = o.oneClick ?? new OneClickClient();
     this.glider = o.glider;
     this.now = o.now ?? (() => new Date());
@@ -132,6 +148,7 @@ export class ChainAdapter {
       rpc: this.rpc,
       appAccountId: o.appAccountId,
       mode: this.mode,
+      usdcContract: this.usdc,
       ...(o.appSigner ? { signer: o.appSigner } : {}),
       ...(o.appPublicKey ? { appPublicKey: o.appPublicKey } : {}),
     });
@@ -287,7 +304,7 @@ export class ChainAdapter {
   async buildActions(
     plan:
       | { kind: 'send'; asset: 'USDC' | 'NEAR'; amount: string; to: string }
-      | { kind: 'pay_bill'; payee: string; amount: string }
+      | { kind: 'pay_bill'; payee: string; amount: string; asset: 'USDC' }
       | { kind: 'errand'; taskId: string; bidId: string; amount: string }
       | { kind: 'invest'; amountUsd: string; portfolioId: string; quoteId: string },
     signerId: string,
@@ -307,7 +324,7 @@ export class ChainAdapter {
         return this.usdcTransfer(plan.payee, toBaseUnits(plan.amount, USDC_DECIMALS).toString());
       case 'errand':
         return {
-          receiverId: USDC_CONTRACT,
+          receiverId: this.usdc,
           actions: [
             {
               type: 'FunctionCall',
@@ -336,7 +353,7 @@ export class ChainAdapter {
     to: string,
     amountBaseUnits: string,
   ): Promise<{ receiverId: string; actions: NearActionSpec[] }> {
-    const registered = (await storageBalanceOf(this.rpc, USDC_CONTRACT, to)) !== null;
+    const registered = (await storageBalanceOf(this.rpc, this.usdc, to)) !== null;
     const actions: NearActionSpec[] = [];
     if (!registered) {
       actions.push({
@@ -354,7 +371,7 @@ export class ChainAdapter {
       gas: '30000000000000',
       deposit: '1',
     });
-    return { receiverId: USDC_CONTRACT, actions };
+    return { receiverId: this.usdc, actions };
   }
 
   /** Quote an invest plan and cache it under its quoteId for buildActions. */
@@ -411,8 +428,8 @@ export class ChainAdapter {
     const storageCost = BigInt(acct.storageUsage) * STORAGE_PRICE_PER_BYTE;
     const available = acct.amount > storageCost ? acct.amount - storageCost : 0n;
     const [usdc, reg] = await Promise.all([
-      ftBalanceOf(this.rpc, USDC_CONTRACT, accountId),
-      storageBalanceOf(this.rpc, USDC_CONTRACT, accountId),
+      ftBalanceOf(this.rpc, this.usdc, accountId),
+      storageBalanceOf(this.rpc, this.usdc, accountId),
     ]);
     return {
       accountId,
@@ -455,6 +472,8 @@ const Env = z.object({
     .regex(/^\d+(\.\d{1,24})?$/)
     .optional(),
   GLIDER_API_KEY: z.string().optional(),
+  NEAR_USDC_CONTRACT: z.string().optional(),
+  PENNY_GUARD_CONTRACT: z.string().optional(),
 });
 
 /**
@@ -493,6 +512,8 @@ export function chainAdapterFromEnv(
       ? { relayerHardCeilingYocto: toBaseUnits(e.PENNY_RELAYER_MAX_DEPOSIT_NEAR, 24) }
       : {}),
     ...(e.GLIDER_API_KEY ? { glider: new GliderClient({ apiKey: e.GLIDER_API_KEY }) } : {}),
+    ...(e.NEAR_USDC_CONTRACT ? { usdcContract: e.NEAR_USDC_CONTRACT } : {}),
+    ...(e.PENNY_GUARD_CONTRACT ? { guardContract: e.PENNY_GUARD_CONTRACT } : {}),
     ...extra,
   });
 }

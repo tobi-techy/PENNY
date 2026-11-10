@@ -73,7 +73,7 @@ describe('createUserAccount', () => {
     });
     expect(r.mode).toBe('dry_run');
     expect(r.accountId).toBe('tobi.penny.near');
-    expect(r.txs.map((t) => t.label)).toEqual(['create_account', 'usdc_storage']);
+    expect(r.txs.map((t) => t.label)).toEqual(['create_account', 'usd_storage']);
     expect(r.txs.every((t) => typeof t.txHash === 'string')).toBe(true);
     expect(m.sent).toHaveLength(0);
   });

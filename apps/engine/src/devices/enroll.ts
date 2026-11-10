@@ -58,6 +58,8 @@ export class EnrollService {
     private readonly chain: ChainPort,
     private readonly now: () => Date,
     private readonly attest: AttestConfig = { require: false },
+    /** A new device enrolled (not a retry). Failures are logged by the caller, never thrown. */
+    private readonly onEnrolled?: (userId: string) => Promise<void>,
   ) {}
 
   /** Issue a single-use App Attest challenge bound to a live enroll code. */
@@ -274,6 +276,13 @@ export class EnrollService {
     );
     if (passkey && this.attest.passkeys) {
       await this.attest.passkeys.create({ userId: claim.userId, deviceId: device.id, ...passkey });
+    }
+    if (this.onEnrolled) {
+      try {
+        await this.onEnrolled(claim.userId);
+      } catch {
+        /* telling the thread is best effort; enrollment already landed */
+      }
     }
     return {
       userId: claim.userId,

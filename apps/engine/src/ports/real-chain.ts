@@ -55,8 +55,19 @@ export class RealChain implements ChainPort {
     return this.adapter.prepareSigning(signerId, publicKeyEd25519B64Url, windowSec);
   }
 
-  /** Guard contract client for a user, owner-signed when a signer is supplied. */
-  guardFor(userAccountId: string, ownerSigner?: TxSigner): GuardContract {
-    return GuardContract.forUser(this.adapter.rpc, userAccountId, ownerSigner, this.adapter.mode);
+  /**
+   * Client for the configured shared Guard contract, owner-signed when a signer is
+   * supplied. Returns undefined when PENNY_GUARD_CONTRACT is unset (autopilot off).
+   * The owner account is passed to each owner-scoped call, not derived per user.
+   */
+  guardFor(_userAccountId: string, ownerSigner?: TxSigner): GuardContract | undefined {
+    const contractId = this.adapter.guardContract;
+    if (!contractId) return undefined;
+    return new GuardContract({
+      rpc: this.adapter.rpc,
+      contractId,
+      mode: this.adapter.mode,
+      ...(ownerSigner ? { ownerSigner } : {}),
+    });
   }
 }

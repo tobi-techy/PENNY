@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidTimeZone } from './bills/time.ts';
 
 const flag = z.enum(['0', '1']);
 const optionalStr = z
@@ -17,6 +18,19 @@ const BaseEnv = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   PUBLIC_BASE_URL: z.url().default('http://localhost:8787'),
+  /** IANA zone for "now" in prompts and reminder times (bill reminders at 09:00 local). */
+  PENNY_TIMEZONE: z
+    .string()
+    .default('Africa/Lagos')
+    .refine(isValidTimeZone, 'must be an IANA time zone like Africa/Lagos'),
+  /**
+   * NEAR account you control that receives USDC for the "Penny Demo Utility" biller.
+   * Unset = no demo biller; real billers get payout accounts in bills/billers.ts.
+   */
+  PENNY_DEMO_BILLER_ACCOUNT: optionalStr.refine(
+    (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),
+    'must be a NEAR account id',
+  ),
   DATABASE_URL: optionalStr,
 
   SPECTRUM_PROJECT_ID: optionalStr,
@@ -53,6 +67,22 @@ const BaseEnv = z.object({
   NEAR_RELAYER_PUBLIC_KEY: optionalStr,
   NEAR_APP_PRIVATE_KEY: optionalStr,
   NEAR_APP_PUBLIC_KEY: optionalStr,
+  /**
+   * Testnet only: the dollar token accounts are registered with (tUSD). Unset on
+   * mainnet, where the adapter always uses native USDC.
+   */
+  NEAR_USDC_CONTRACT: optionalStr.refine(
+    (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),
+    'must be a NEAR account id',
+  ),
+  /**
+   * The single shared Guard contract (contracts/guard), e.g. guard.penny.testnet.
+   * Unset = on-chain autopilot off and guardFor() returns undefined.
+   */
+  PENNY_GUARD_CONTRACT: optionalStr.refine(
+    (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),
+    'must be a NEAR account id',
+  ),
   ONECLICK_API_KEY: optionalStr,
   /** Optional 1Click JWT. Without a key or JWT 1Click adds a 0.2% fee (shown on the card). */
   ONECLICK_JWT: optionalStr,
@@ -102,6 +132,21 @@ const MAINNET_REQUIRED = [
 ] as const;
 
 export const EnvSchema = BaseEnv.superRefine((env, ctx) => {
+  // The test dollar override exists for testnet only; mainnet always moves USDC.
+  if (env.NEAR_USDC_CONTRACT && env.NEAR_NETWORK === 'mainnet') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['NEAR_USDC_CONTRACT'],
+      message: 'NEAR_USDC_CONTRACT may only be set on testnet',
+    });
+  }
+  if (env.NEAR_USDC_CONTRACT && env.PENNY_ENV === 'mainnet') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['NEAR_USDC_CONTRACT'],
+      message: 'NEAR_USDC_CONTRACT may only be set on testnet',
+    });
+  }
   if (env.PENNY_PROVE_SECRET && (env.PENNY_ENV === 'mainnet' || env.NEAR_NETWORK !== 'testnet')) {
     ctx.addIssue({
       code: 'custom',

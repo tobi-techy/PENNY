@@ -95,7 +95,10 @@ export interface MockRpc {
   sent: string[];
 }
 
-export function mockRpc(state: ChainState, opts: { sendTxResult?: unknown } = {}): MockRpc {
+export function mockRpc(
+  state: ChainState,
+  opts: { sendTxResult?: unknown; url?: string } = {},
+): MockRpc {
   const calls: { method: string; params: unknown }[] = [];
   const sent: string[] = [];
   const reply = (id: string, body: object) =>
@@ -203,7 +206,7 @@ export function mockRpc(state: ChainState, opts: { sendTxResult?: unknown } = {}
       error: { name: 'HANDLER_ERROR', cause: { name: 'BAD' }, message: 'bad request' },
     });
   };
-  return { rpc: new NearRpc({ url: 'http://mock.rpc', fetch: f }), calls, sent };
+  return { rpc: new NearRpc({ url: opts.url ?? 'http://mock.rpc', fetch: f }), calls, sent };
 }
 
 export const BLOCK_HASH = toBase58(new Uint8Array(32).fill(7));

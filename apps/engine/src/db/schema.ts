@@ -87,9 +87,14 @@ export const conversations = pgTable(
       .references(() => users.id),
     spaceId: text('space_id').notNull(),
     platform: text('platform').notNull(),
+    /** Penny line the user texts (Spectrum space phone), so proactive texts go out on it. */
+    phone: text('phone'),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex('conversations_space_uq').on(t.spaceId)],
+  (t) => [
+    uniqueIndex('conversations_space_uq').on(t.spaceId),
+    index('conversations_user_idx').on(t.userId, t.createdAt),
+  ],
 );
 
 export const messages = pgTable(
@@ -150,6 +155,8 @@ export const approvals = pgTable(
       enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write'],
     }).notNull(),
     plan: jsonb('plan').notNull(),
+    /** The bill a pay_bill card pays. A live-card partial unique index claims it. */
+    billId: text('bill_id'),
     title: text('title').notNull(),
     amountDisplay: text('amount_display').notNull(),
     amountMicros: bigint('amount_micros', { mode: 'bigint' }).notNull().default(sql`0`),
@@ -196,6 +203,11 @@ export const approvals = pgTable(
     uniqueIndex('approvals_reissued_from_uq')
       .on(t.reissuedFrom)
       .where(sql`${t.reissuedFrom} is not null`),
+    // one live card per bill: the database, not a read-then-write scan, is the
+    // guarantee a bill cannot be paid twice by two concurrent crew turns.
+    uniqueIndex('approvals_bill_live_uq')
+      .on(t.userId, t.billId)
+      .where(sql`${t.billId} is not null and ${t.status} in ('pending', 'signed', 'relayed')`),
   ],
 );
 
@@ -280,12 +292,25 @@ export const reminders = pgTable(
     space: jsonb('space')
       .$type<{ spaceId: string; phone?: string; userHandle: string }>()
       .notNull(),
-    status: text('status', { enum: ['scheduled', 'sent', 'undone'] })
+    /** user = asked for ("remind me…"); bill = the day before a saved bill is due. */
+    source: text('source', { enum: ['user', 'bill'] })
+      .notNull()
+      .default('user'),
+    /** The bill a bill reminder is for (one reminder per bill). */
+    billId: text('bill_id'),
+    /** Failed send attempts. Retries while below the cap, then stops. */
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    status: text('status', { enum: ['scheduled', 'sent', 'undone', 'failed'] })
       .notNull()
       .default('scheduled'),
     createdAt: createdAt(),
   },
-  (t) => [index('reminders_due_idx').on(t.status, t.dueAt)],
+  (t) => [
+    index('reminders_due_idx').on(t.status, t.dueAt),
+    index('reminders_user_idx').on(t.userId, t.status),
+    uniqueIndex('reminders_bill_uq').on(t.billId),
+  ],
 );
 
 export const approvalEvents = pgTable(
@@ -428,6 +453,61 @@ export const attestChallenges = pgTable('attest_challenges', {
   createdAt: createdAt(),
 });
 
+/**
+ * Bills Mail found in the user's inbox. One row per source email (deduped by
+ * source_key). Amount and due date are parsed deterministically from the email,
+ * never by the model. biller_id points at the fixed registry in bills/billers.ts.
+ */
+export const bills = pgTable(
+  'bills',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    sourceKey: text('source_key').notNull(), // gmail message id, or a hash of sender|subject|date
+    billerId: text('biller_id'),
+    payeeName: text('payee_name').notNull(),
+    subject: text('subject').notNull(),
+    amount: text('amount'), // decimal string, e.g. "18400" or "12.50"
+    currency: text('currency', { enum: ['NGN', 'USD'] }),
+    dueOn: text('due_on'), // YYYY-MM-DD
+    receivedAt: ts('received_at'),
+    status: text('status', { enum: ['open', 'paid', 'dismissed'] })
+      .notNull()
+      .default('open'),
+    notifiedAt: ts('notified_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('bills_user_source_uq').on(t.userId, t.sourceKey),
+    index('bills_user_status_idx').on(t.userId, t.status),
+  ],
+);
+
+/**
+ * A connect link Penny sent (gmail, github). The scheduler polls until the app is
+ * connected or the watch expires, then tells the user and kicks off the first job.
+ */
+export const connectWatches = pgTable(
+  'connect_watches',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    toolkit: text('toolkit').notNull(),
+    status: text('status', { enum: ['waiting', 'connected', 'expired'] })
+      .notNull()
+      .default('waiting'),
+    expiresAt: ts('expires_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.toolkit] }),
+    index('connect_watches_status_idx').on(t.status, t.expiresAt),
+  ],
+);
+
 export const schema = {
   users,
   devices,
@@ -449,4 +529,6 @@ export const schema = {
   soulsChangelog,
   idempotencyKeys,
   webhookEvents,
+  bills,
+  connectWatches,
 };

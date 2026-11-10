@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { buildHistoryMessages, formatMemories } from '../src/brain/crew.ts';
 import { webhookEvents } from '../src/db/schema.ts';
 import { createLogger } from '../src/lib/logger.ts';
-import { Scheduler } from '../src/scheduler.ts';
+import { defaultJobs, Scheduler } from '../src/scheduler.ts';
 import { enrolledUser, makeEngine, scriptedModel, type TestEngine } from './helpers.ts';
 
 let t: TestEngine;
@@ -180,6 +180,47 @@ describe('scheduler', () => {
     const third = await s.tick(new Date(101_500));
     expect(third.ran).toEqual(['ok', 'bad']);
     expect(ran).toEqual(['ok', 'ok']);
+  });
+
+  test('a slow tick does not stack a second copy on top of itself', async () => {
+    let release: () => void = () => {};
+    let started = 0;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const s = new Scheduler(
+      [
+        {
+          name: 'slow',
+          everyMs: 0,
+          run: async () => {
+            started += 1;
+            await gate;
+          },
+        },
+      ],
+      createLogger('silent'),
+      () => new Date(0),
+    );
+    const first = s.tick(new Date(0));
+    const second = await s.tick(new Date(1));
+    expect(second.ran).toEqual([]);
+    release();
+    expect((await first).ran).toEqual(['slow']);
+    expect(started).toBe(1);
+  });
+
+  test('boot does not scan every inbox, and Composio is checked once a minute', () => {
+    const jobs = defaultJobs({
+      expireApprovals: async () => {},
+      pruneWebhookEvents: async () => {},
+      pruneIdempotency: async () => {},
+      scanBills: async () => {},
+      checkConnections: async () => {},
+    });
+    const byName = new Map(jobs.map((job) => [job.name, job]));
+    expect(byName.get('check_connections')?.everyMs).toBe(60_000);
+    expect(byName.get('scan_bills')?.anchorOnStart).toBe(true);
   });
 });
 

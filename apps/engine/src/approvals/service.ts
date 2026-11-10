@@ -75,6 +75,19 @@ export const MAX_FRESH_PRICES = 8;
 export const UNFREEZE_CARD_TTL_MS = 10 * 60_000;
 /** User copy when the user froze Penny. */
 export const FROZEN_TEXT = 'Penny is frozen. Text unfreeze to start again.';
+
+/**
+ * Unfreeze is an approval, never a bare text: whoever holds the iMessage thread is
+ * exactly who a freeze is meant to stop. It rides the write card (plan signature),
+ * which the app and the web page already sign, but runs inside Penny.
+ */
+export const UNFREEZE_TOOLKIT = 'penny';
+export const UNFREEZE_SLUG = 'PENNY_UNFREEZE';
+
+function isUnfreeze(row: { kind: string; plan: unknown }): boolean {
+  const p = row.plan as { toolkit?: string; toolSlug?: string };
+  return row.kind === 'write' && p.toolkit === UNFREEZE_TOOLKIT && p.toolSlug === UNFREEZE_SLUG;
+}
 export const REQUOTE_AFTER_EXPIRY_MS = 10 * 60_000;
 const TEN_MIN = 10 * 60_000;
 
@@ -137,6 +150,19 @@ export type ApprovalDeps = {
   /** called when a create_bot approval settles */
   onBotApproved?: (approvalId: string) => Promise<void>;
   onBotDeclined?: (approvalId: string) => Promise<void>;
+  /** a user without approvals set up tried something that needs one (texts the setup link) */
+  onNeedsSetup?: (userId: string, space: SpaceRef) => Promise<void>;
+  /** called when a pay_bill approval settles on chain (marks the bill paid, sends a receipt) */
+  onBillPaid?: (
+    userId: string,
+    billId: string,
+    receipt: { txHash: string | null; dryRun: boolean },
+  ) => Promise<void>;
+  /** Re-read a bill before a stale pay_bill card is renewed or relayed. */
+  recheckBill?: (
+    userId: string,
+    billId: string,
+  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** A new-bot card was replaced by a fresh one: the bot follows the new approval. */
   onBotReissued?: (fromApprovalId: string, toApprovalId: string) => Promise<void>;
 };
@@ -247,6 +273,12 @@ function titleFor(plan: IntentPlan): string {
   }
 }
 
+export const NEEDS_SETUP_REASON =
+  "Approvals aren't set up yet. Penny just texted them a setup link: tell them to tap it, then ask again.";
+
+/** Friendly, plain text for a bill that already has a live payment card. */
+export const BILL_ALREADY_PENDING = 'there is already a card out for this bill';
+
 /** Postgres unique violation (23505), as raised by pglite or postgres-js under drizzle. */
 export function isUniqueViolation(e: unknown): boolean {
   const code = (x: unknown) =>
@@ -285,6 +317,16 @@ const APPROVE_BUTTONS = [
 
 export class ApprovalService {
   constructor(private readonly d: ApprovalDeps) {}
+
+  /** No device yet: send the setup link (throttled by onboarding) and say so. */
+  private async needsSetup(userId: string, space: SpaceRef): Promise<CreateResult> {
+    try {
+      await this.d.onNeedsSetup?.(userId, space);
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).name }, 'setup link send failed');
+    }
+    return { decision: 'needs_more_info', reasons: [NEEDS_SETUP_REASON] };
+  }
 
   private nearUsdFromRow(row: ApprovalRow): bigint | undefined {
     // micro-USD per NEAR from what Guard sized at creation (used for re-issues)
@@ -518,10 +560,7 @@ export class ApprovalService {
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
-      return {
-        decision: 'needs_more_info',
-        reasons: ['set up approvals first: tap the setup card penny sent you, then ask again.'],
-      };
+      return this.needsSetup(userId, input.space);
     }
     const extra: Partial<GuardContext> = {};
     if (input.quote) extra.quote = input.quote;
@@ -585,30 +624,48 @@ export class ApprovalService {
         ];
     const recipient = planRecipient(plan);
     if (recipient && !input.facts) facts.unshift({ label: 'To', value: recipient.slice(0, 80) });
+    // A bill card names the biller the user knows, not its payout account.
+    const billName =
+      plan.kind === 'pay_bill' ? input.facts?.find((f) => f.label === 'Bill')?.value : undefined;
+    const cardTitle = billName ? `Pay ${billName}`.slice(0, 80) : cardTitleFor(plan);
 
     const ph = planHash(plan, built.actions);
-    await this.d.approvals.create({
-      id,
-      userId,
-      botId: bot?.id ?? null,
-      kind: plan.kind,
-      plan,
-      title: titleFor(plan),
-      amountDisplay,
-      amountMicros: g.amountMicrosUsd,
-      facts,
-      signerId: user.accountId,
-      receiverId: built.receiverId,
-      actions: built.actions,
-      nonce: signing.nonce,
-      maxBlockHeight: signing.maxBlockHeight,
-      expiresAt,
-      status: 'pending',
-      planHash: ph,
-      cardTokenHash: hash,
-      ...this.challengeFields(id, plan, expiresAt, ph),
-      reissuedFrom: input.reissuedFrom ?? null,
-    });
+    // The typed plan is the only source of the bill id. The partial unique index
+    // approvals_bill_live_uq is the real guarantee: at most one pending/signed/relayed
+    // card per bill, so two concurrent turns cannot both pay the same bill.
+    const billId = plan.kind === 'pay_bill' ? plan.billId : null;
+    try {
+      await this.d.approvals.create({
+        id,
+        userId,
+        botId: bot?.id ?? null,
+        kind: plan.kind,
+        plan,
+        billId,
+        title: titleFor(plan),
+        amountDisplay,
+        amountMicros: g.amountMicrosUsd,
+        facts,
+        signerId: user.accountId,
+        receiverId: built.receiverId,
+        actions: built.actions,
+        nonce: signing.nonce,
+        maxBlockHeight: signing.maxBlockHeight,
+        expiresAt,
+        status: 'pending',
+        planHash: ph,
+        cardTokenHash: hash,
+        ...this.challengeFields(id, plan, expiresAt, ph),
+        reissuedFrom: input.reissuedFrom ?? null,
+      });
+    } catch (e) {
+      // A concurrent turn already claimed this bill. Say it in plain words, not a 500.
+      // Reissues keep their own unique-violation handling in the callers above.
+      if (billId && !input.reissuedFrom && isUniqueViolation(e)) {
+        return { decision: 'block', reasons: [BILL_ALREADY_PENDING] };
+      }
+      throw e;
+    }
     await this.d.ledger.reserve({
       userId,
       approvalId: id,
@@ -632,7 +689,7 @@ export class ApprovalService {
       await this.d.cards.update(input.fromCard.id, {
         approvalId: id,
         state: 'ready',
-        title: cardTitleFor(plan),
+        title: cardTitle,
         amount: amountFor(plan, amountDisplay),
         lines: facts.slice(0, 4).map((f) => ({ label: f.label.slice(0, 40), value: f.value })),
         buttons: APPROVE_BUTTONS,
@@ -648,7 +705,7 @@ export class ApprovalService {
           userId,
           agent: agentFor(plan.kind, bot),
           type: cardTypeFor(plan.kind),
-          title: cardTitleFor(plan),
+          title: cardTitle,
           amount: amountFor(plan, amountDisplay),
           lines: facts.slice(0, 4),
           expiresAt,
@@ -725,10 +782,7 @@ export class ApprovalService {
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
-      return {
-        decision: 'needs_more_info',
-        reasons: ['set up approvals first: tap the setup card penny sent you, then ask again.'],
-      };
+      return this.needsSetup(userId, input.space);
     }
     const provisional: MoneyPlan = {
       kind: 'invest',
@@ -957,7 +1011,10 @@ export class ApprovalService {
     if (await this.frozen(input.userId)) return null;
     const user = await this.d.users.byId(input.userId);
     const device = user ? await this.d.users.activeDevice(input.userId) : null;
-    if (!user?.accountId || !device) return null;
+    if (!user?.accountId || !device) {
+      await this.needsSetup(input.userId, input.space);
+      return null;
+    }
     const now = this.d.now();
     const { token, hash } = issueCardToken();
     const id = newId('apr');
@@ -1030,10 +1087,7 @@ export class ApprovalService {
     const user = await this.d.users.byId(userId);
     const device = user ? await this.d.users.activeDevice(userId) : null;
     if (!user?.accountId || !device) {
-      return {
-        decision: 'needs_more_info',
-        reasons: ['set up approvals first: tap the setup card penny sent you, then ask again.'],
-      };
+      return this.needsSetup(userId, input.space);
     }
     if (!this.d.executeWrite) {
       return { decision: 'needs_more_info', reasons: ['That app is not connected yet.'] };
@@ -1239,7 +1293,7 @@ export class ApprovalService {
    */
   private async precheck(id: string, token: string | null): Promise<ApprovalRow> {
     const row = await this.load(id, token, 'mutate', 'submit');
-    if (await this.frozen(row.userId)) {
+    if (!isUnfreeze(row) && (await this.frozen(row.userId))) {
       throw new ApprovalError(423, 'frozen', FROZEN_TEXT);
     }
     if (row.status !== 'pending')
@@ -1330,6 +1384,18 @@ export class ApprovalService {
     if (!space) return null;
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
     const plan = row.plan as IntentPlan;
+    // A renewal must not mint a card for a bill that was paid or dismissed meanwhile.
+    if (plan.kind === 'pay_bill') {
+      const check = await this.d.recheckBill?.(row.userId, plan.billId);
+      if (!check || !check.ok) {
+        await this.updateCard(
+          row.id,
+          'failed',
+          `${check?.reason ?? "that bill can't be paid any more"}. nothing moved.`,
+        );
+        return null;
+      }
+    }
     if (plan.kind === 'invest') {
       this.requoted.add(row.id);
       const r = await this.createInvestApproval({
@@ -1394,7 +1460,9 @@ export class ApprovalService {
     }
     const existing = await this.d.approvals.byReissuedFrom(id);
     if (existing) return { approvalId: existing.id };
-    return { approvalId: await this.reissue(now) };
+    const fresh = await this.reissue(now);
+    // a racing renew may have won: point at its card rather than claiming none was made
+    return { approvalId: fresh ?? (await this.d.approvals.byReissuedFrom(id))?.id ?? null };
   }
 
   /**
@@ -1452,6 +1520,7 @@ export class ApprovalService {
       return new ApprovalError(status, code, msg);
     };
     const pk = await this.d.passkeys.byCredentialId(body.assertion.id);
+    const pkDevice = pk ? await this.d.users.deviceById(pk.deviceId) : null;
     if (!pk || pk.userId !== row.userId || pk.revokedAt) {
       throw await fail('unknown_passkey', 'this passkey is not linked to Penny', 403);
     }
@@ -1493,8 +1562,8 @@ export class ApprovalService {
     if (!this.hashStillMatches(row))
       throw await fail('changed', 'this action changed. check the new card.');
     // the browser key that signs the action must be the device this passkey belongs to
-    const device = await this.d.users.deviceById(pk.deviceId);
-    if (!device || device.revokedAt || device.userId !== row.userId) {
+    const device = pkDevice;
+    if (!device || device.userId !== row.userId || device.revokedAt) {
       throw await fail('unknown_device', 'this browser is not linked to Penny', 403);
     }
     return this.finish(row, body);
@@ -1764,11 +1833,15 @@ export class ApprovalService {
   ) {
     if (!('planSignature' in body))
       throw new ApprovalError(400, 'wrong_body', 'this approval needs planSignature');
-    const device = await this.d.users.activeDevice(row.userId);
-    if (!device) throw new ApprovalError(403, 'no_device', 'no enrolled device');
     const msg = new TextEncoder().encode(planApprovalMessage(row.id, row.planHash));
     const sig = Buffer.from(body.planSignature, 'base64url');
-    if (!verifyEd25519(device.publicKey, msg, sig)) {
+    // While frozen there is no active device: only a key the freeze switched off may sign.
+    const candidates = isUnfreeze(row)
+      ? await this.d.users.frozenDevices(row.userId)
+      : [await this.d.users.activeDevice(row.userId)].filter((d) => d !== null);
+    if (!candidates.length) throw new ApprovalError(403, 'no_device', 'no enrolled device');
+    const device = candidates.find((d) => verifyEd25519(d.publicKey, msg, sig));
+    if (!device) {
       throw new ApprovalError(422, 'bad_signature', 'signature does not match the enrolled device');
     }
     await this.d.approvals.transition(
@@ -1804,6 +1877,13 @@ export class ApprovalService {
       await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'bot activated');
       await this.d.mood.on(row.userId, 'bot_created');
       await this.updateCard(row.id, 'done', 'live');
+      return { status: 'settled' };
+    }
+    if (isUnfreeze(row)) {
+      await this.unfreeze(row.userId);
+      await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'unfrozen');
+      await this.d.mood.on(row.userId, 'approval_settled');
+      await this.updateCard(row.id, 'done', "unfrozen. you're back.");
       return { status: 'settled' };
     }
     // write: execute in the outside app now, exactly once, after Face ID.
@@ -1850,6 +1930,24 @@ export class ApprovalService {
     // reservation. Bot caps and recipient must be preserved: load the bot
     // that created this approval, and keep velocity from other approvals.
     const plan = row.plan as MoneyPlan;
+    // A card minted before the bill closed must not relay. Re-read the bill here,
+    // after the device signature and before any chain step, and fail closed.
+    if (plan.kind === 'pay_bill') {
+      const check = await this.d.recheckBill?.(row.userId, plan.billId);
+      if (!check || !check.ok) {
+        const reason = check?.reason ?? "i couldn't check that bill, so nothing was sent";
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'pending',
+          'cancelled',
+          `bill recheck: ${reason}`,
+        );
+        await this.d.ledger.setStatusForApproval(row.id, 'released');
+        await this.updateCard(row.id, 'failed', `${reason}. nothing moved.`);
+        throw new ApprovalError(409, 'bill_closed', reason);
+      }
+    }
     const bot = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
     const ctx = await this.guardContext(row.userId, bot);
     ctx.spentLast24hMicros =
@@ -2050,6 +2148,18 @@ export class ApprovalService {
     if (s === 'settled') {
       await this.d.approvals.transition(id, row.kind, 'relayed', 'settled', 'final on chain');
       await this.d.ledger.setStatusForApproval(id, 'settled');
+      if (row.kind === 'pay_bill') {
+        const billId = (row.plan as { billId?: string }).billId;
+        if (billId) {
+          const events = await this.d.approvals.events(id);
+          const dryRun = events.some((e) => e.reason === 'relayed (dry run)');
+          try {
+            await this.d.onBillPaid?.(row.userId, billId, { txHash: row.txHash, dryRun });
+          } catch (e) {
+            this.d.log.warn({ approvalId: id, err: (e as Error).name }, 'bill mark-paid failed');
+          }
+        }
+      }
       await this.d.mood.on(row.userId, 'approval_settled');
       const dry = (await this.d.approvals.events(id)).some((e) => e.reason === 'relayed (dry run)');
       await this.updateCard(id, 'sent', 'sent ✓', this.receiptOpts(row.txHash, dry));
@@ -2109,6 +2219,31 @@ export class ApprovalService {
     const due = await this.d.approvals.pendingExpiredBefore(this.d.now());
     for (const r of due) if (!isTerminal(r.status)) await this.expire(r);
     return due.length;
+  }
+
+  /**
+   * The user closed a bill (paid elsewhere or dismissed). Cancel its pending card
+   * and release the reservation, so an old card can no longer pay a closed bill.
+   * A `signed` row is not cancelled: its relay may already be in flight, and the
+   * submit-time bill recheck is the guard in front of that step.
+   */
+  async cancelPayBillApprovals(userId: string, billId: string): Promise<number> {
+    let cancelled = 0;
+    for (const row of await this.d.approvals.pendingForBill(userId, billId)) {
+      try {
+        await this.d.approvals.transition(row.id, row.kind, 'pending', 'cancelled', 'bill closed');
+        await this.d.ledger.setStatusForApproval(row.id, 'released');
+        await this.updateCard(row.id, 'failed', 'you closed this bill. nothing moved.');
+        cancelled += 1;
+      } catch (e) {
+        // A concurrent approve moved the row first; submitMoney's own bill recheck stops it.
+        this.d.log.warn(
+          { approvalId: row.id, err: (e as Error).name },
+          'cancel on bill close failed',
+        );
+      }
+    }
+    return cancelled;
   }
 
   /**

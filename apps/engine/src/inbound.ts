@@ -1,10 +1,10 @@
 import type { SpectrumMessagesEvent } from '@penny/shared';
 import type { ApprovalService } from './approvals/service.ts';
 import type { Crew } from './brain/crew.ts';
-import type { EnrollService } from './devices/enroll.ts';
 import type { RateLimiter } from './http/security.ts';
 import type { Logger } from './lib/logger.ts';
 import { toPlainText } from './lib/plain-text.ts';
+import type { OnboardingService } from './onboarding.ts';
 import type { MessagingPort, SpaceRef } from './ports/messaging.ts';
 import type { MessagesRepo } from './repo/bots.ts';
 import type { UsersRepo } from './repo/users.ts';
@@ -13,18 +13,15 @@ export type InboundDeps = {
   users: UsersRepo;
   messages: MessagesRepo;
   crew: Crew;
-  enroll: EnrollService;
+  onboarding: OnboardingService;
   messaging: MessagingPort;
   userLimiter: RateLimiter;
   log: Logger;
-  /** Engine public base URL; the no-install setup page lives at /setup on it. */
-  publicBaseUrl: string;
   /** Freeze / unfreeze. Absent in a few unit tests. */
   approvals?: ApprovalService;
 };
 
-export const WELCOME_TEXT =
-  "hey 👋 i'm penny. i help with the everyday stuff — inbox, bills, errands, money, the lot. just talk to me here.";
+export { WELCOME_TEXT } from './onboarding.ts';
 
 /** User copy for freeze. Plain words; checked by the jargon test. */
 export const FREEZE_REPLY =
@@ -60,7 +57,12 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     d.log.warn({ userId: user.id }, 'user rate limited');
     return;
   }
-  const conversationId = await d.users.conversationFor(user.id, evt.space.id, evt.space.platform);
+  const conversationId = await d.users.conversationFor(
+    user.id,
+    evt.space.id,
+    evt.space.platform,
+    evt.space.phone ?? null,
+  );
 
   if (m.content.type !== 'text' || typeof m.content.text !== 'string') {
     // reactions, attachments etc: ignore quietly in v0.1
@@ -85,36 +87,20 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     return;
   }
 
-  const device = await d.users.activeDevice(user.id);
-  if (!device) {
-    // No install needed to talk to Penny. The first text gets a welcome plus
-    // a separate setup link (its own message, nothing to type); after that
-    // the crew answers normally. The setup link only matters when an action
-    // needs approval.
-    const prior = await d.messages.recent(conversationId, user.id, 5);
-    const welcomed = prior.some((p) => p.direction === 'outbound');
-    if (!welcomed) {
-      const { code } = await d.enroll.issue(user.id, m.sender.id);
-      const base = d.publicBaseUrl.replace(/\/$/, '');
-      await d.messaging.sendText(space, WELCOME_TEXT);
-      // A picture link card (no app yet, so never a mini app card). iMessage
-      // draws it from /setup's Open Graph tags; the code rides in the fragment.
-      await d.messaging.sendText(space, `${base}/setup#code=${code}`);
-      await d.messages.add({
-        conversationId,
-        direction: 'outbound',
-        text: 'welcome + setup link [code]',
-      });
-      return;
-    }
-    const r = await d.crew.handle(user.id, space, text, { conversationId, enrolled: false });
-    const reply = toPlainText(r.text);
-    await d.messaging.sendText(space, reply);
-    await d.messages.add({ conversationId, direction: 'outbound', text: reply });
-    return;
+  // Everyone's first text gets a short welcome; then Penny answers what they
+  // actually said (a bare "hi" gets a first thing to try instead). No setup
+  // link up front: it goes out on its own when something needs approval.
+  const prior = await d.messages.recent(conversationId, user.id, 5);
+  if (!prior.some((p) => p.direction === 'outbound')) {
+    const answer = await d.onboarding.welcome(space, conversationId, text);
+    if (!answer) return;
   }
 
-  const r = await d.crew.handle(user.id, space, text, { conversationId, enrolled: true });
+  const device = await d.users.activeDevice(user.id);
+  const r = await d.crew.handle(user.id, space, text, {
+    conversationId,
+    enrolled: Boolean(device),
+  });
   const reply = toPlainText(r.text);
   await d.messaging.sendText(space, reply);
   await d.messages.add({ conversationId, direction: 'outbound', text: reply });

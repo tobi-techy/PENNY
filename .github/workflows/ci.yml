@@ -22,6 +22,24 @@ jobs:
         env:
           PENNY_ENV: dev
           DRY_RUN: "1"
+  contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/guard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/guard
+      - run: cargo test --workspace --locked
+      - run: cargo build --locked --target wasm32-unknown-unknown --release -p penny-guard -p mock-ft
+      - name: Wasm artifacts
+        run: sha256sum target/wasm32-unknown-unknown/release/penny_guard.wasm target/wasm32-unknown-unknown/release/mock_ft.wasm
   gitleaks:
     runs-on: ubuntu-latest
     steps:

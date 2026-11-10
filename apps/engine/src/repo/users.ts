@@ -3,6 +3,7 @@ import type { Db } from '../db/client.ts';
 import { conversations, devices, enrollCodes, guardPolicies, users } from '../db/schema.ts';
 import type { GuardPolicy } from '../guard/policy.ts';
 import { newId } from '../lib/ids.ts';
+import type { SpaceRef } from '../ports/messaging.ts';
 
 export type UserRow = typeof users.$inferSelect;
 export type DeviceRow = typeof devices.$inferSelect;
@@ -327,17 +328,26 @@ export class UsersRepo {
 
   // ---- conversations ----
 
-  async conversationFor(userId: string, spaceId: string, platform: string): Promise<string> {
+  async conversationFor(
+    userId: string,
+    spaceId: string,
+    platform: string,
+    phone?: string | null,
+  ): Promise<string> {
     const [c] = await this.db
-      .select({ id: conversations.id })
+      .select({ id: conversations.id, phone: conversations.phone })
       .from(conversations)
       .where(eq(conversations.spaceId, spaceId))
       .limit(1);
-    if (c) return c.id;
+    if (c) {
+      if (phone && c.phone !== phone)
+        await this.db.update(conversations).set({ phone }).where(eq(conversations.id, c.id));
+      return c.id;
+    }
     const id = newId('cnv');
     await this.db
       .insert(conversations)
-      .values({ id, userId, spaceId, platform })
+      .values({ id, userId, spaceId, platform, phone: phone ?? null })
       .onConflictDoNothing();
     const [again] = await this.db
       .select({ id: conversations.id })
@@ -345,5 +355,33 @@ export class UsersRepo {
       .where(eq(conversations.spaceId, spaceId))
       .limit(1);
     return again?.id ?? id;
+  }
+
+  /**
+   * Where to text a user first (reminders, new-bill notes): their most recent
+   * conversation with Penny. Null if they never texted.
+   */
+  async primarySpace(userId: string): Promise<{ conversationId: string; space: SpaceRef } | null> {
+    const [row] = await this.db
+      .select({
+        id: conversations.id,
+        spaceId: conversations.spaceId,
+        phone: conversations.phone,
+        handle: users.handle,
+      })
+      .from(conversations)
+      .innerJoin(users, eq(users.id, conversations.userId))
+      .where(eq(conversations.userId, userId))
+      .orderBy(desc(conversations.createdAt), desc(conversations.id))
+      .limit(1);
+    if (!row) return null;
+    return {
+      conversationId: row.id,
+      space: {
+        spaceId: row.spaceId,
+        userHandle: row.handle,
+        ...(row.phone ? { phone: row.phone } : {}),
+      },
+    };
   }
 }

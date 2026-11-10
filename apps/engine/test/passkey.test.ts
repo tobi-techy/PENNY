@@ -269,6 +269,13 @@ describe('link card (no app)', () => {
     await t.db.db.execute(sql`update passkeys set sign_count = 0 where id = ${pk.id}`);
   });
 
+  test('a passkey signed over the bare challenge (not bound to the approval) fails', async () => {
+    const r = await linkCard();
+    const view = await t.engine.services.approvals.getByToken(r.cardToken);
+    const res = await approve(r, { challenge: view.approval?.challenge as string });
+    expect(res.status).toBe(422);
+  });
+
   test('expired fails', async () => {
     const r = await linkCard();
     const view = await t.engine.services.approvals.getByToken(r.cardToken);

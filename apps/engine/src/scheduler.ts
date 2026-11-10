@@ -10,12 +10,16 @@ import type { Logger } from './lib/logger.ts';
 export type ScheduledJob = {
   name: string;
   everyMs: number;
+  /** Wait a full interval after boot instead of running on the first tick. */
+  anchorOnStart?: boolean;
   run: (now: Date) => Promise<void>;
 };
 
 export class Scheduler {
   private readonly lastRun = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** A slow tick must not stack a second copy on top of itself. */
+  private ticking = false;
 
   constructor(
     private readonly jobs: ScheduledJob[],
@@ -25,31 +29,37 @@ export class Scheduler {
 
   /** Run every due job once. Returns the names that ran and that failed. */
   async tick(at?: Date): Promise<{ ran: string[]; failed: string[] }> {
-    const now = at ?? this.now();
-    const ran: string[] = [];
-    const failed: string[] = [];
-    for (const job of this.jobs) {
-      const last = this.lastRun.get(job.name) ?? Number.NEGATIVE_INFINITY;
-      if (now.getTime() - last < job.everyMs) continue;
-      this.lastRun.set(job.name, now.getTime());
-      ran.push(job.name);
-      try {
-        await job.run(now);
-      } catch (e) {
-        failed.push(job.name);
-        this.log.error({ err: (e as Error).name, job: job.name }, 'scheduled job failed');
+    if (this.ticking) return { ran: [], failed: [] };
+    this.ticking = true;
+    try {
+      const now = at ?? this.now();
+      const ran: string[] = [];
+      const failed: string[] = [];
+      for (const job of this.jobs) {
+        const last = this.lastRun.get(job.name) ?? Number.NEGATIVE_INFINITY;
+        if (now.getTime() - last < job.everyMs) continue;
+        this.lastRun.set(job.name, now.getTime());
+        ran.push(job.name);
+        try {
+          await job.run(now);
+        } catch (e) {
+          failed.push(job.name);
+          this.log.error({ err: (e as Error).name, job: job.name }, 'scheduled job failed');
+        }
       }
+      return { ran, failed };
+    } finally {
+      this.ticking = false;
     }
-    return { ran, failed };
   }
 
   start(intervalMs = 15_000): void {
     if (this.timer) return;
-    // Anchor long-interval jobs (weekly reflection) to start time so they do
-    // not fire immediately on every boot. Manual tick() still runs due jobs.
+    // Anchor jobs that must not run on boot (a full inbox scan for every deploy)
+    // and long-interval jobs (weekly reflection). Manual tick() still runs due jobs.
     const nowMs = this.now().getTime();
     for (const job of this.jobs) {
-      if (job.everyMs >= 24 * 60 * 60_000 && !this.lastRun.has(job.name)) {
+      if ((job.anchorOnStart || job.everyMs >= 24 * 60 * 60_000) && !this.lastRun.has(job.name)) {
         this.lastRun.set(job.name, nowMs);
       }
     }
@@ -78,6 +88,10 @@ export type SchedulerJobDeps = {
   pruneWebhookEvents: (olderThan: Date) => Promise<void>;
   pruneIdempotency: (olderThan: Date) => Promise<void>;
   weeklyReflection?: (now: Date) => Promise<void>;
+  /** Check connected inboxes for new bills and tell the user. */
+  scanBills?: () => Promise<void>;
+  /** Notice apps the user just connected (after a connect link) and follow up. */
+  checkConnections?: () => Promise<void>;
 };
 
 /** Default Phase 1 jobs. Weekly reflection is weekly; the rest are hygiene. */
@@ -122,9 +136,26 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       run: async (now) => void (await fire(now)),
     });
   }
+  if (d.checkConnections) {
+    // One live Composio call per pending watch: minute-scale, not tick-scale.
+    jobs.push({ name: 'check_connections', everyMs: 60_000, run: d.checkConnections });
+  }
+  if (d.scanBills) {
+    jobs.push({
+      name: 'scan_bills',
+      everyMs: 6 * HOUR,
+      anchorOnStart: true,
+      run: d.scanBills,
+    });
+  }
   if (d.weeklyReflection) {
     // Checked hourly; the service itself only reflects users not reflected in 7 days.
-    jobs.push({ name: 'weekly_reflection', everyMs: HOUR, run: d.weeklyReflection });
+    jobs.push({
+      name: 'weekly_reflection',
+      everyMs: HOUR,
+      anchorOnStart: true,
+      run: d.weeklyReflection,
+    });
   }
   return jobs;
 }

@@ -67,17 +67,19 @@ function post(
 }
 
 describe('POST /v1/photon/webhook', () => {
-  test('valid delivery -> 200 fast, then a welcome text and a setup picture link card', async () => {
+  test('valid delivery -> 200 fast, then a welcome and a first step; no setup link up front', async () => {
     const before = t.messaging.cards.length;
     const res = await post(event('spc-msg-1', 'hi penny'));
     expect(res.status).toBe(200);
     await tick();
     const texts = t.messaging.texts.map((x) => x.text);
-    expect(texts.at(-2)).toContain('just talk to me here');
-    // a picture link card: no app yet, so never a mini app card
-    expect(texts.at(-1)).toMatch(/^https:\/\/penny\.test\/setup#code=[A-Z2-9]{8}$/);
+    expect(texts.at(-2)).toContain("i'm penny");
+    expect(texts.at(-1)).toContain('connect my gmail');
+    expect(texts.join('\n')).not.toContain('/setup#code=');
     expect(t.messaging.cards.length).toBe(before);
-    // iMessage draws it from /setup's Open Graph tags
+  });
+
+  test('the setup link is a picture link card drawn from /setup Open Graph tags', async () => {
     const page = await t.engine.app.request('/setup');
     const html = await page.text();
     expect(html).toContain('og:image" content="https://penny.test/setup/card.png"');
@@ -89,11 +91,15 @@ describe('POST /v1/photon/webhook', () => {
   test('links use PUBLIC_BASE_URL, never the Host the webhook arrived on', async () => {
     // Passkeys bind to PUBLIC_BASE_URL, and a crafted Host must never become a card link.
     for (const host of ['penny.live', 'evil', 'user@evil.test', '169.254.169.254', 'a..b']) {
-      await post(event(`spc-msg-host-${host}`, 'hi penny', `+1555020${host.length}${host[0]}`), {
-        host,
-        proto: 'https',
-      });
+      const from = `+1555020${host.length}${host[0]}`;
+      await post(event(`spc-msg-host-${host}`, 'hi penny', from), { host, proto: 'https' });
       await tick();
+      const user = await t.engine.repos.users.findOrCreateByHandle(from);
+      await t.engine.services.onboarding.sendSetupLink(
+        user.id,
+        { spaceId: `any;-;${from}`, userHandle: from },
+        { force: true },
+      );
       const url = t.messaging.texts.at(-1)?.text ?? '';
       expect(url).not.toContain(host);
       expect(url).toMatch(/^https:\/\/penny\.test\/setup#code=/);

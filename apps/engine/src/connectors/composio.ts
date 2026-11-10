@@ -28,8 +28,13 @@ export interface ConnectorPort {
   readonly name: string;
   /** AI SDK tools for this user + bot, already gated. */
   toolsFor(userId: string, botSlug: string): Promise<ToolSet>;
-  /** Connected already, or a Connect Link for the user to authorize. */
-  connect(userId: string, toolkit: string): Promise<ConnectResult>;
+  /**
+   * Connected already, or a Connect Link for the user to authorize. `callbackUrl`
+   * is where the browser lands after authorizing.
+   */
+  connect(userId: string, toolkit: string, opts?: { callbackUrl?: string }): Promise<ConnectResult>;
+  /** Is this app connected and active for the user right now? Never throws. */
+  isConnected(userId: string, toolkit: string): Promise<boolean>;
   /** Execute one read tool directly (deterministic Penny tools). */
   executeRead(
     userId: string,
@@ -230,47 +235,6 @@ export function gateComposioTools(tools: ToolSet): ToolSet {
   return out;
 }
 
-/** Gmail query tuned live: subject-scoped, noise senders excluded, read mail included. */
-export function billQuery(now = new Date()): string {
-  const since = new Date(now.getTime() - 90 * 24 * 60 * 60_000);
-  const ymd = `${since.getUTCFullYear()}/${String(since.getUTCMonth() + 1).padStart(2, '0')}/${String(since.getUTCDate()).padStart(2, '0')}`;
-  return `newer:${ymd} subject:(bill OR invoice OR payment OR receipt OR due OR statement) -from:notifications@github.com -from:newsletter -from:substack`;
-}
-
-export type BillEmail = {
-  subject: string;
-  sender: string;
-  date: string;
-  amount: string | null;
-  snippet: string;
-};
-
-const AMOUNT_RE = /(?:\$|₦|NGN\s?|USD\s?)(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)/;
-
-/** Deterministic bill extraction from a GMAIL_FETCH_EMAILS result (metadata fields only). */
-export function parseBillEmails(raw: unknown): BillEmail[] {
-  const data = (raw as { data?: unknown })?.data ?? raw;
-  const messages = (data as { messages?: unknown })?.messages;
-  if (!Array.isArray(messages)) return [];
-  const out: BillEmail[] = [];
-  for (const m of messages.slice(0, 20)) {
-    if (!m || typeof m !== 'object') continue;
-    const r = m as Record<string, unknown>;
-    const subject = String(r.subject ?? '').slice(0, 120);
-    if (!subject) continue;
-    const snippet = String(r.snippet ?? r.preview ?? '').slice(0, 240);
-    const amount = `${subject} ${snippet}`.match(AMOUNT_RE)?.[0] ?? null;
-    out.push({
-      subject,
-      sender: String(r.sender ?? r.from ?? '').slice(0, 80),
-      date: String(r.messageTimestamp ?? r.date ?? '').slice(0, 32),
-      amount,
-      snippet,
-    });
-  }
-  return out;
-}
-
 const FIREWALL_HOOKS = [
   {
     id: 'no_secrets_out',
@@ -298,7 +262,7 @@ const FIREWALL_HOOKS = [
 
 type SessionLike = {
   tools(): Promise<ToolSet>;
-  authorize(toolkit: string): Promise<unknown>;
+  authorize(toolkit: string, options?: { callbackUrl?: string }): Promise<unknown>;
   toolkits(
     opts?: unknown,
   ): Promise<{ items: { slug: string; connection?: { isActive?: boolean } }[] }>;
@@ -351,7 +315,11 @@ export class ComposioConnector implements ConnectorPort {
     return gateComposioTools(await (await session).tools());
   }
 
-  async connect(userId: string, toolkit: string): Promise<ConnectResult> {
+  async connect(
+    userId: string,
+    toolkit: string,
+    opts: { callbackUrl?: string } = {},
+  ): Promise<ConnectResult> {
     try {
       const session = this.sessionFor(userId, 'penny');
       if (!session) return { status: 'unavailable', toolkit, reason: 'connectors off' };
@@ -359,13 +327,27 @@ export class ComposioConnector implements ConnectorPort {
       const state = await s.toolkits();
       const existing = state.items.find((i) => i.slug === toolkit);
       if (existing?.connection?.isActive) return { status: 'connected', toolkit };
-      const req = (await s.authorize(toolkit)) as Record<string, unknown>;
+      const req = (await s.authorize(
+        toolkit,
+        opts.callbackUrl ? { callbackUrl: opts.callbackUrl } : undefined,
+      )) as Record<string, unknown>;
       const redirectUrl = String(req.redirectUrl ?? req.redirect_url ?? req.url ?? '');
       if (!redirectUrl)
         return { status: 'unavailable', toolkit, reason: 'no connect link returned' };
       return { status: 'link', toolkit, redirectUrl };
     } catch (e) {
       return { status: 'unavailable', toolkit, reason: (e as Error).name };
+    }
+  }
+
+  async isConnected(userId: string, toolkit: string): Promise<boolean> {
+    try {
+      const session = this.sessionFor(userId, 'penny');
+      if (!session) return false;
+      const state = await (await session).toolkits();
+      return Boolean(state.items.find((i) => i.slug === toolkit)?.connection?.isActive);
+    } catch {
+      return false;
     }
   }
 
@@ -420,10 +402,21 @@ export class FakeConnector implements ConnectorPort {
     } as ToolSet);
   }
 
-  async connect(_userId: string, toolkit: string): Promise<ConnectResult> {
+  readonly callbackUrls: string[] = [];
+
+  async connect(
+    _userId: string,
+    toolkit: string,
+    opts: { callbackUrl?: string } = {},
+  ): Promise<ConnectResult> {
     if (this.connected.has(toolkit)) return { status: 'connected', toolkit };
     this.connected.add(toolkit);
+    if (opts.callbackUrl) this.callbackUrls.push(opts.callbackUrl);
     return { status: 'link', toolkit, redirectUrl: `https://connect.example/${toolkit}` };
+  }
+
+  async isConnected(_userId: string, toolkit: string): Promise<boolean> {
+    return this.connected.has(toolkit);
   }
 
   async executeRead(

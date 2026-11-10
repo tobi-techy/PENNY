@@ -2,6 +2,8 @@
 
 NEAR accounts, NEP-366 delegate verification + relayer, NEAR Intents 1Click, Glider. Non-custodial: the server never holds a user key. **Dry run by default.** A broadcast needs `PENNY_ENV=mainnet` AND `DRY_RUN=0` AND a signer key AND the call-level request `{dryRun:false, env:'mainnet'}`. Dry runs never sign.
 
+On testnet the test dollar (tUSD) takes USDC's place: `NEAR_USDC_CONTRACT` names the token every dollar action moves (an override is refused on mainnet). `PENNY_GUARD_CONTRACT` names the shared Guard contract; unset means autopilot stays off.
+
 ```
 bun x tsc --noEmit -p .   # typecheck
 bun test                  # 70 tests, all mocked (no network)
