@@ -78,6 +78,8 @@ export type EngineDeps = {
   privacy?: PrivacyGate;
   /** User-facing IANA time zone for reminders and "now" (PENNY_TIMEZONE). */
   timeZone?: string;
+  /** Learn durable facts from each finished turn. Default true; tests use false. */
+  autoLearn?: boolean;
   /** Which NEAR network the chain adapter talks to. Testnet pays bills in tUSD. Default mainnet. */
   chainNetwork?: 'mainnet' | 'testnet';
   /** NEAR account of the demo biller (PENNY_DEMO_BILLER_ACCOUNT); unset = no demo biller. */
@@ -98,7 +100,7 @@ const CONNECTED_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{app}} connected · Penny</title>
 <style>body{font-family:-apple-system,system-ui,sans-serif;max-width:28rem;margin:18vh auto;padding:0 1.5rem;color:#111;line-height:1.5}h1{font-size:1.5rem;margin:0 0 .5rem}p{color:#555}</style>
-</head><body><h1>{{app}} connected ✓</h1><p>You can close this and go back to Messages. Penny will text you in a moment.</p></body></html>`;
+</head><body><h1>{{app}} connected</h1><p>You can close this and go back to Messages. Penny will text you in a moment.</p></body></html>`;
 
 export function createEngine(d: EngineDeps) {
   const now = d.now ?? (() => new Date());
@@ -234,6 +236,7 @@ export function createEngine(d: EngineDeps) {
     router: d.models.router,
     chat: d.models.chat,
     registry: d.registry,
+    autoLearn: d.autoLearn ?? true,
     ...(d.connectors ? { connectors: d.connectors } : {}),
     bots: repos.bots,
     messages: repos.messages,

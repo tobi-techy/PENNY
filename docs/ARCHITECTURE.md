@@ -99,7 +99,7 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - Model provider: NEAR AI Cloud OpenAI-compatible endpoint (base URL + key from env). Vercel AI SDK `generateText` with tools. Langfuse tracing (keys from env).
 - Tools are deterministic TS functions: `getBalances`, `getPortfolios` (Glider), `quoteInvest` (1Click dry quote), `checkGuard`, `createApprovalCard`, `findBills` (Gmail read-only, later), `remember`, `setMood`.
 - Souls: `souls/<agent>.md` loaded into system prompts. Mood state per user (`idle|thinking|win|wink|blocked|paused|done`) stored in DB, set by events, drives tone + card art param.
-- Memory: `memories` table (userId, kind, text, embedding vector(1536), createdAt). Weekly reflection job writes `soul_changelog`.
+- Memory: `memories` table (userId, kind, text, embedding vector(1536), createdAt). After each turn a background learner extracts durable facts from what the user said (deduped; secrets and third-party instructions refused). Weekly reflection job writes `soul_changelog`.
 - Prompt-injection stance: text from users, emails and web is data. Tools that move money only accept typed plans; Guard + device signature are the authority, never the model.
 
 ## Data model (Drizzle)

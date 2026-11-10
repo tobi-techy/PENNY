@@ -342,7 +342,7 @@ export class BillsService {
       if (!b) return;
       const target = await this.d.users.primarySpace(userId);
       if (!target) return;
-      const text = `paid (test run, nothing sent) ✓ ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. it's still on your list.`;
+      const text = `paid (test run, nothing sent). ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. it's still on your list.`;
       await this.d.messaging.sendText(target.space, text);
       await this.d.messages.add({
         conversationId: target.conversationId,
@@ -361,7 +361,7 @@ export class BillsService {
       receipt.txHash && this.d.explorerTxUrl
         ? `\nreceipt: ${this.d.explorerTxUrl}${receipt.txHash}`
         : '';
-    const text = `paid ✓ ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder.${link}`;
+    const text = `paid. ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder.${link}`;
     await this.d.messaging.sendText(target.space, text);
     await this.d.messages.add({
       conversationId: target.conversationId,
@@ -449,10 +449,10 @@ export function newBillsText(fresh: BillRow[], reminded: ReadonlySet<string> = n
     const b = fresh[0] as BillRow;
     // Promise only what actually exists: a late bill with no reminder gets no promise.
     const remind = b.dueOn && reminded.has(b.id) ? " i'll remind you." : '';
-    return `mail here 📬 new bill in: ${line(b)}.${remind}`;
+    return `new bill: ${line(b)}.${remind}`;
   }
   const shown = fresh.slice(0, 3).map((b) => `• ${line(b)}`);
   const more =
     fresh.length > 3 ? `\n…and ${fresh.length - 3} more. ask me "what bills do i have?"` : '';
-  return `mail here 📬 ${fresh.length} new bills:\n${shown.join('\n')}${more}`;
+  return `${fresh.length} new bills:\n${shown.join('\n')}${more}`;
 }

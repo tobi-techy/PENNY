@@ -15,3 +15,20 @@ export function toPlainText(md: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
+
+/**
+ * Drop decorative emoji and tidy the spacing. Penny keeps emoji only when the
+ * user sent one first (see HOUSE_RULES), so replies are cleaned deterministically.
+ */
+export function stripEmoji(text: string): string {
+  return text
+    .replace(/\p{Extended_Pictographic}\uFE0F?/gu, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function hasEmoji(text: string): boolean {
+  return /\p{Extended_Pictographic}/u.test(text);
+}

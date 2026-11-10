@@ -310,7 +310,7 @@ export function liveSubcaption(card: Card): string {
     case 'approving':
       return 'approving…';
     case 'sent':
-      return 'sent ✓';
+      return 'sent';
     case 'blocked':
       return card.lines[0]?.value ?? 'blocked';
     case 'expired':
