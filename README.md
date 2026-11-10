@@ -61,19 +61,27 @@ More: `apps/engine/README.md`. iOS: `ios/README.md`.
 
 `bun run prove` with no settings runs every check against an in-process engine (fake chain, no transactions). For the real proof against a deployed testnet engine, set on the engine `NEAR_NETWORK=testnet`, `DRY_RUN=0`, the testnet relayer keys and `PENNY_PROVE_SECRET`, then run locally with `PUBLIC_BASE_URL`, `PENNY_PROVE_SECRET`, `PENNY_PROVE_ACCOUNT_ID` (a funded `*.testnet` account) and `PENNY_PROVE_PRIVATE_KEY` (its test key). The proof routes are off unless the secret is set and the engine refuses to boot with it on mainnet.
 
-## Demo: pay a bill with real testnet NEAR
+## Demo: pay a bill on testnet
 
 | Do | See |
 |---|---|
 | Create a testnet account for the biller, e.g. `penny-demo-biller.testnet` | it exists on [testnet NearBlocks](https://testnet.nearblocks.io) |
-| Set `NEAR_RPC_URL=https://rpc.testnet.near.org` (plus the testnet app/relayer keys) and `PENNY_DEMO_BILLER_ACCOUNT=penny-demo-biller.testnet` | engine boots; testnet broadcasts for real |
-| Text Penny, open the setup link, then send your Penny account a few testnet NEAR from the faucet | new accounts start with 0.002 NEAR; Penny tells you the account id if it's short |
+| Set `NEAR_NETWORK=testnet`, `NEAR_RPC_URL=https://rpc.testnet.near.org`, the testnet app and relayer keys, and `PENNY_DEMO_BILLER_ACCOUNT=penny-demo-biller.testnet` | engine boots and talks to testnet |
+| Set `NEAR_USDC_CONTRACT` to your Penny test dollar (tUSD) contract id, deployed from `contracts/guard/mock-ft` | every dollar action uses that token |
+| Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: it is a test run, the card still settles, but no receipt link follows |
+| Optional: set `PENNY_GUARD_CONTRACT=<shared guard id>` (e.g. `guard.penny.testnet`) | Guard checks the shared Guard contract; unset = autopilot off |
+| Text Penny, open the setup link | your Penny account is made on testnet; its `account_id` is on your `users` row |
+| Give that account tUSD: call `mint` on the tUSD contract from its owner account with `{"account_id":"<your penny account>","amount":"10000000"}` | 6 decimals, so `10000000` is `$10.00` |
 | Text "connect my gmail" and authorize | Penny texts "gmail's connected ✓" and checks for bills |
 | Email yourself: subject `Penny Demo Utility bill: $5.00 due <date>` | Mail texts you about the new bill |
-| Text "pay it" | a card: `$5.00 · ~N NEAR (testnet)`, paying `penny-demo-biller.testnet` |
-| Approve | the card goes to done, the bill is crossed off, Penny texts a NearBlocks receipt link |
+| Text "pay it" | a card: `$5.00 in USDC`, paying `penny-demo-biller.testnet` |
+| Approve with Face ID | the card goes to done, the bill is crossed off, the reminder is cancelled, and Penny texts a NearBlocks receipt link (only when the transfer really went out, so `DRY_RUN=0`) |
 
-On testnet bills are paid in NEAR (there is no testnet USDC), converted at the live NEAR price and rounded up. Guard still sizes and caps the payment in dollars. On mainnet the same flow pays USDC.
+On both networks the bill card shows `$5.00 in USDC`; on testnet that token is tUSD, and the payment is the same token transfer (`ft_transfer`) as mainnet USDC. `PENNY_RELAYER_MAX_DEPOSIT_NEAR` caps NEAR the relayer fronts for one approval. A tUSD token transfer is not NEAR, so that cap does not block this demo. The mock token's `mint` is owner-only and never deploys to mainnet.
+
+### Deploy notes
+
+- **Migrations.** A fresh database runs `0000..0008` at boot, ending with `0008_bills_reminders_onboarding`, which is additive and idempotent. An environment that already ran an earlier shape of this branch's migrations must be dropped and recreated: the merged journal renumbers them, so drizzle skips main's `0005`/`0006`/`0007` or a later step fails on a missing column. There is no repair path; only a fresh database is supported. See `apps/engine/README.md`.
 
 ## Safety defaults
 

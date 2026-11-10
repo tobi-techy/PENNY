@@ -32,6 +32,16 @@ curl -s localhost:8787/v1/photon/webhook -H "x-spectrum-timestamp: $TS" -H "x-sp
 
 Mainnet boot is refused until the real `ChainPort` from `packages/chain` is wired in `src/main.ts`.
 
+## Migrations
+
+SQL migrations live in `drizzle/` and are applied at boot (in-memory pglite in dev, Postgres when `DATABASE_URL` is set). Run `bunx drizzle-kit generate` after editing `src/db/schema.ts`.
+
+- A fresh database runs the whole set in order: `0000..0008` at this commit, ending with `0008_bills_reminders_onboarding`. That migration only adds tables, columns and indexes (all `IF NOT EXISTS`), so a database already at main's `0007_card_status_line` can apply it.
+- A database that ran an earlier shape of this branch cannot be upgraded by the merged journal. Drizzle decides what to apply from each migration's recorded `when` timestamp, and the numbering changed when main was merged in. Two shapes were observed:
+  - last migration `0004`/`0005` from before the merge (`when` 1794169088366): main's `0005_live_cards` looks already applied and is skipped, then `0006_reissue_once` aborts because the `reissued_from` column is missing.
+  - a database from merge commit `9725f57`: the branch's `0006` was recorded with `when` 1794173982204, so main's `0006` and `0007` are skipped for good. The `reissued_from` partial index and `cards.status_line` are then missing, and the engine fails at run time.
+- For either shape, drop and recreate the database, then run `0000..0008` from empty. There is no repair path; only a fresh database is supported.
+
 ## Layout
 
 ```
