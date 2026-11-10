@@ -486,7 +486,8 @@ describe('bills + reminders (engine)', () => {
     };
     t.setModels(scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]), spy);
     await t.engine.services.crew.handle(u.userId, u.space, 'what day is it?');
-    expect(system).toContain('Now: Sun, 8 Nov 2026 at 13:00');
+    // date-independent: derived from the same helpers and the frozen test clock
+    expect(system).toContain(`Now: ${describeNow('Africa/Lagos', t.clock.now)}`);
     expect(system).toContain('Africa/Lagos');
   });
 });
