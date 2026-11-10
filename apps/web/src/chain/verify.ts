@@ -80,14 +80,6 @@ export async function verifyApproval(a: {
   return action;
 }
 
-/** Same as packages/shared passkeyChallengeFor: the passkey covers this approval's hash. */
-export async function passkeyChallengeFor(
-  approvalHash: string,
-  challenge: string,
-): Promise<string> {
-  return hashB64(`penny-passkey:v1:${approvalHash}:${challenge}`);
-}
-
 /** "Send 0.1 NEAR to amara.testnet" from the verified action. */
 export function describeAction(x: ApprovalAction): string {
   switch (x.type) {
