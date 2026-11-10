@@ -8,7 +8,6 @@ import { sha256Hex } from '../lib/crypto.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { BotsRepo } from '../repo/bots.ts';
 import type { CardRow, CardsRepo, RemindersRepo } from '../repo/cards.ts';
-import { DRAFT_VISIBLE_CHARS, draftLines } from './everyday.ts';
 import { needsApproval } from './policy.ts';
 import { type CardSender, toCardDto } from './sender.ts';
 
@@ -51,7 +50,7 @@ export class CardActions {
     return row;
   }
 
-  async press(token: string, buttonId: string): Promise<PressResult> {
+  async press(token: string, buttonId: string, confirm = false): Promise<PressResult> {
     // Not me (freeze) and Get a new card show on blocked/expired cards: allow them after expiry
     const row = await this.load(token, AFTER_EXPIRY_BUTTON_MS);
     const button = row.buttons.find((b) => b.id === buttonId);
@@ -63,7 +62,7 @@ export class CardActions {
     const payload = row.payload ?? {};
 
     // Policy decides, not the card: approve happens only through Face ID endpoints.
-    if (button.action === 'approve') {
+    if (button.action === 'approve' || button.action === 'unfreeze') {
       throw new ApprovalError(409, 'use_face_id', 'approve with Face ID');
     }
     if (needsApproval({ button: button.action })) {
@@ -76,11 +75,10 @@ export class CardActions {
       if (!(await this.d.cards.claimForApproval(row.id))) {
         throw new ApprovalError(409, 'already_sent', 'this draft is already waiting for Face ID');
       }
-      // Re-read after the claim: an edit that landed before it is what gets approved,
-      // and none can land after it (updateDraft only changes info cards).
+      // seal what is in the card now (an edit may have landed between our read and the claim)
       const claimed = await this.d.cards.get(row.id);
-      const finalPlan = WritePlan.safeParse(claimed?.payload?.writePlan);
-      if (!finalPlan.success) {
+      const sealed = WritePlan.safeParse(claimed?.payload?.writePlan);
+      if (!sealed.success) {
         await this.d.cards.update(row.id, { kind: 'info' });
         throw new ApprovalError(409, 'not_sendable', 'nothing to send here');
       }
@@ -90,7 +88,7 @@ export class CardActions {
         .createWriteApproval({
           userId: row.userId,
           bot,
-          plan: finalPlan.data,
+          plan: sealed.data,
           space: row.space,
           fromCard: { id: row.id, tokenHash: row.tokenHash },
         })
@@ -144,6 +142,8 @@ export class CardActions {
         return { card: toCardDto(row), renewedApprovalId: r.approvalId };
       }
       case 'freeze': {
+        // freezing switches off every key: ask first ("Freeze everything?"), then do it
+        if (!confirm) throw new ApprovalError(409, 'confirm_freeze', 'confirm to freeze');
         await this.d.approvals.freeze(row.userId);
         if (row.space) {
           await this.d.sender.update(row.id, { buttons: [] }).catch(() => null);
@@ -163,22 +163,15 @@ export class CardActions {
     const plan = WritePlan.safeParse(payload.writePlan);
     if (!plan.success || row.kind !== 'info')
       throw new ApprovalError(409, 'not_editable', 'nothing to edit');
-    // Anyone holding the link can edit, so an edit may never add text the card can't show.
-    if (text.length > DRAFT_VISIBLE_CHARS)
-      throw new ApprovalError(
-        400,
-        'too_long',
-        `keep it under ${DRAFT_VISIBLE_CHARS} characters so it all fits on the card`,
-      );
-    const next = { ...plan.data, arguments: { ...plan.data.arguments, body: text } };
-    const args = plan.data.arguments as { recipient_email?: unknown; subject?: unknown };
-    const lines = draftLines(String(args.recipient_email ?? ''), String(args.subject ?? ''), text);
-    const updated = await this.d.cards.updateDraft(row.id, {
-      payload: { ...payload, writePlan: next },
-      lines,
-    });
-    if (!updated) throw new ApprovalError(409, 'not_editable', 'this draft was already sent');
+    const next = { ...plan.data, arguments: { ...plan.data.arguments, body: text.slice(0, 5000) } };
+    // atomic: once Send turned the draft into an approval, the text is sealed
+    if (!(await this.d.cards.updateDraftPayload(row.id, { ...payload, writePlan: next }))) {
+      throw new ApprovalError(409, 'not_editable', 'this draft is already waiting for Face ID');
+    }
+    const lines = row.lines.map((l, i) =>
+      i === row.lines.length - 1 && !l.label ? { value: text.slice(0, 120) || '(empty)' } : l,
+    );
     const card = await this.d.sender.update(row.id, { lines });
-    return card ?? toCardDto(updated);
+    return card ?? toCardDto(row);
   }
 }

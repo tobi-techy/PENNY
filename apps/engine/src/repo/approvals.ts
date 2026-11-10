@@ -103,6 +103,35 @@ export class ApprovalsRepo {
     return r.length === 1;
   }
 
+  /**
+   * pending -> cancelled only while the challenge is unused (no Face ID approve has
+   * started). Atomic with that check, so a fresh price never races an approve.
+   */
+  async cancelIfUnused(id: string, reason: string): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(approvals)
+        .set({ status: 'cancelled', updatedAt: this.now() })
+        .where(
+          and(
+            eq(approvals.id, id),
+            eq(approvals.status, 'pending'),
+            isNull(approvals.challengeUsedAt),
+          ),
+        )
+        .returning({ id: approvals.id });
+      if (!row) return false;
+      await tx.insert(approvalEvents).values({
+        id: newId('evt'),
+        approvalId: id,
+        fromStatus: 'pending',
+        toStatus: 'cancelled',
+        reason,
+      });
+      return true;
+    });
+  }
+
   async setCardId(id: string, cardId: string): Promise<void> {
     await this.db.update(approvals).set({ cardId }).where(eq(approvals.id, id));
   }

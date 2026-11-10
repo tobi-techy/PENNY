@@ -28,7 +28,7 @@ Text Penny's number on iMessage. Everything Penny does or proposes shows up as a
 
 **2. Without the app (picture cards).** Just text Penny. Tap the setup link: your browser makes an approval key and a passkey behind Face ID. Cards arrive as picture links; tap one, then Approve with Face ID on the page. Penny checks the passkey on its server, sends the move, and sends a fresh card showing Sent or Blocked.
 
-Text **freeze** any time (or tap Not me on a Blocked card): every key Penny trusts for you is switched off and every open card is cancelled. To unfreeze, text **unfreeze** and approve the Unfreeze card on the phone or browser you set up with. A text alone never unfreezes, because whoever has your messages is who a freeze is meant to stop.
+Text **freeze** any time (or tap Not me on a Blocked card, which asks you to confirm first): every key Penny trusts for you is switched off and every open card is cancelled. Text **unfreeze** to start again: Penny sends an Unfreeze card, and only Face ID on it (with the key that was switched off) turns your keys back on. A text alone never does.
 
 Testnet only for now (`NEAR_NETWORK=testnet`). Proof of the approval path: `bun run prove`, results in `PROOF.md`.
 

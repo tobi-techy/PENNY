@@ -267,3 +267,33 @@ input {
   font: inherit;
   padding: 10px;
 }
+.pcard .approving {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #0f1a26;
+}
+.pcard .approving .what {
+  font-size: 14px;
+}
+.pcard .approving .field {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #b1c3d8;
+}
+.pcard .approving pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #f1f5fa;
+  font:
+    13px / 1.4 ui-monospace,
+    "Geist Mono",
+    monospace;
+}
+.pcard .note,
+.pcard .confirm p {
+  font-size: 13px;
+  color: #b1c3d8;
+  margin-top: 12px;
+}

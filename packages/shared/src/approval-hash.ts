@@ -67,15 +67,16 @@ export function approvalHash(a: {
  * The message the device key signs to approve: approvalHash plus the single-use
  * challenge, with a domain prefix so it can never be mistaken for a NEAR payload.
  */
-/**
- * The WebAuthn challenge for a passkey approval: the single-use challenge bound to
- * this approval's hash, so the passkey signature covers this exact approval and not
- * just a random value the server remembers. The browser computes the same bytes.
- */
-export function passkeyChallengeFor(approvalHashValue: string, challenge: string): string {
-  return sha256Base64Url(`penny-passkey:v1:${approvalHashValue}:${challenge}`);
-}
-
 export function approvalSignMessage(approvalHashValue: string, challenge: string): string {
   return `penny-approval:v2:${approvalHashValue}:${challenge}`;
+}
+
+/**
+ * The WebAuthn challenge for an approval (or unfreeze) passkey prompt:
+ * base64url(sha256(UTF-8(message))). It binds the passkey to the exact action: the
+ * browser computes it from the approval hash it checked itself, and the server
+ * recomputes it from the stored hash. The single-use challenge inside keeps it fresh.
+ */
+export function passkeyChallengeFor(message: string): string {
+  return sha256Base64Url(message);
 }

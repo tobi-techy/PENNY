@@ -45,20 +45,24 @@ export class CardsRepo {
     return r.length === 1;
   }
 
-  /**
-   * Change a draft only while it is still a draft (kind info). Once Send flips it to
-   * an approval card, edits fail, so what Face ID approves is what gets sent.
-   */
-  async updateDraft(
-    id: string,
-    patch: Pick<CardRow, 'payload' | 'lines'>,
-  ): Promise<CardRow | null> {
-    const [r] = await this.db
+  /** Change a draft's payload only while it is still a draft (never after Send). */
+  async updateDraftPayload(id: string, payload: Record<string, unknown>): Promise<boolean> {
+    const r = await this.db
       .update(cards)
-      .set({ ...patch, updatedAt: new Date() })
+      .set({ payload, updatedAt: new Date() })
       .where(and(eq(cards.id, id), eq(cards.kind, 'info')))
-      .returning();
-    return r ?? null;
+      .returning({ id: cards.id });
+    return r.length === 1;
+  }
+
+  /** Move a card from one state to another exactly once (single-use buttons). */
+  async claimState(id: string, from: string, to: string): Promise<boolean> {
+    const r = await this.db
+      .update(cards)
+      .set({ state: to, updatedAt: new Date() })
+      .where(and(eq(cards.id, id), eq(cards.state, from)))
+      .returning({ id: cards.id });
+    return r.length === 1;
   }
 
   async update(
@@ -79,6 +83,7 @@ export class CardsRepo {
         | 'expiresAt'
         | 'tokenExpiresAt'
         | 'messageRef'
+        | 'statusLine'
       >
     >,
   ): Promise<CardRow | null> {
@@ -115,6 +120,11 @@ export class PasskeysRepo {
       .select()
       .from(passkeys)
       .where(and(eq(passkeys.userId, userId), isNull(passkeys.revokedAt)));
+  }
+
+  /** Every passkey for this user, revoked or not (unfreeze checks the device). */
+  async allForUser(userId: string): Promise<PasskeyRow[]> {
+    return this.db.select().from(passkeys).where(eq(passkeys.userId, userId));
   }
 
   async byCredentialId(credentialId: string): Promise<PasskeyRow | null> {

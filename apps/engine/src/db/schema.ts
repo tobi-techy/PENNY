@@ -197,8 +197,10 @@ export const approvals = pgTable(
   (t) => [
     index('approvals_user_idx').on(t.userId, t.createdAt),
     index('approvals_card_token_idx').on(t.cardTokenHash),
-    // One replacement per approval: two racing "get a new card" calls can't both win.
-    uniqueIndex('approvals_reissued_from_uq').on(t.reissuedFrom),
+    // one replacement per approval: concurrent renews can't double-reserve the limit
+    uniqueIndex('approvals_reissued_from_uq')
+      .on(t.reissuedFrom)
+      .where(sql`${t.reissuedFrom} is not null`),
   ],
 );
 
@@ -257,6 +259,8 @@ export const cards = pgTable(
     messageRef: text('message_ref'),
     space: jsonb('space').$type<{ spaceId: string; phone?: string; userHandle: string }>(),
     receiptUrl: text('receipt_url'),
+    /** One line on what happened, as the server knows it. */
+    statusLine: text('status_line'),
     expiresAt: ts('expires_at'),
     createdAt: createdAt(),
     updatedAt: ts('updated_at').notNull().defaultNow(),

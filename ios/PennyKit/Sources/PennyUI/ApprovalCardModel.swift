@@ -15,6 +15,11 @@ public final class ApprovalCardModel: ObservableObject {
     @Published public private(set) var signingPreview: [ActionSummary] = []
     /// Set after "Get a new card": the new one arrives in the thread.
     @Published public private(set) var note: String?
+    /// Unfreeze cards: the challenge Face ID signs.
+    private var unfreezeChallenge: String?
+    /// "Not me" switches every key off: the screen asks first.
+    @Published public private(set) var confirmingFreeze: String?
+    private var askedForFreshPrice = false
 
     public let token: CardToken
     private let client: EngineClient
@@ -89,9 +94,15 @@ public final class ApprovalCardModel: ObservableObject {
             let fetched = try await client.card(token)
             card = fetched.card
             ticket = fetched.ticket
+            unfreezeChallenge = fetched.unfreezeChallenge
             signingPreview = fetched.ticket.map { ActionSummary.describe($0.detail) } ?? []
             phase = CardPhase.from(card: fetched.card, now: Date())
             if fetched.card.state == .approving { startPolling() }
+            // an invest price lasts 90 s: opening the card gets a fresh one in place, once
+            if fetched.card.type == "invest", fetched.card.state == .ready, !askedForFreshPrice {
+                askedForFreshPrice = true
+                if (try? await client.freshPrice(token)) != nil { await load() }
+            }
         } catch let error as PennyError {
             phase = .unavailable(message: error.errorDescription ?? "Couldn't load this card.")
         } catch {
@@ -110,10 +121,13 @@ public final class ApprovalCardModel: ObservableObject {
         case .renew:
             Task { await renew() }
         case .notMe:
-            Task { await press(buttonId: card?.buttons.first(where: { $0.action == "freeze" })?.id ?? "notme") }
+            confirmingFreeze = card?.buttons.first(where: { $0.action == "freeze" })?.id ?? "notme"
+            onNeedsExpandedPresentation?()
         case let .button(id):
             if let b = card?.buttons.first(where: { $0.id == id }), b.action == "open", let v = b.value, let url = URL(string: v) {
                 onOpenURL?(url)
+            } else if card?.buttons.first(where: { $0.id == id })?.action == "unfreeze" {
+                Task { await unfreeze() }
             } else {
                 Task { await press(buttonId: id) }
             }
@@ -177,11 +191,49 @@ public final class ApprovalCardModel: ObservableObject {
         }
     }
 
+    /// Unfreeze: Face ID unlocks the key the freeze switched off and signs this card's
+    /// single-use challenge. A text alone never unfreezes Penny.
+    public func unfreeze() async {
+        guard let card, let challenge = unfreezeChallenge, let deviceId else { return }
+        do {
+            let message = UnfreezeMessage.message(cardId: card.id, challenge: challenge)
+            let signature = try await signer.sign(message, reason: "Unfreeze Penny")
+            try await client.unfreeze(token, deviceId: deviceId, signature: signature, idempotencyKey: "unfreeze-\(card.id)")
+            await load()
+        } catch PennyError.userCancelled {
+            note = "Face ID was cancelled. Penny is still frozen."
+        } catch PennyError.notInteractive {
+            onNeedsExpandedPresentation?()
+        } catch {
+            note = "That didn't check out. Penny is still frozen. Text unfreeze for a new card."
+            await load()
+        }
+    }
+
+    /// "Yes, freeze everything" after Not me.
+    public func confirmFreeze() async {
+        guard let id = confirmingFreeze else { return }
+        confirmingFreeze = nil
+        do {
+            try await client.press(token, buttonId: id, confirm: true)
+            note = "Penny is frozen. Every key is off. Text unfreeze when you want it back."
+            await load()
+        } catch {
+            note = "That didn't work. Try again."
+        }
+    }
+
+    public func cancelFreeze() { confirmingFreeze = nil }
+
     /// "Get a new card": the engine checks Guard again and sends a fresh card to the thread.
     public func renew() async {
         do {
-            try await client.renew(token)
-            note = "A new card is on its way."
+            // only say a card is coming when one was actually made
+            if try await client.renew(token) != nil {
+                note = "A new card is on its way."
+            } else {
+                note = "Penny couldn't make a new card. Ask Penny again."
+            }
         } catch let error as PennyError {
             note = error.errorDescription
         } catch {
@@ -229,7 +281,18 @@ public struct ActionSummary: Identifiable, Hashable, Sendable {
     public let lines: [String]
 
     public static func describe(_ approval: Approval) -> [ActionSummary] {
-        approval.actions.enumerated().map { index, action in
+        // A write (or new bot) carries no NEAR actions: the signature seals the plan, so show
+        // every argument in full, never just what fits on the card.
+        if approval.kind.isPlanSigned {
+            let args = approval.plan["arguments"]?.objectValue ?? [:]
+            var lines = ["App: \(approval.plan["toolkit"]?.stringValue ?? "Penny")"]
+            for key in args.keys.sorted() {
+                let raw = args[key].map { $0.stringValue ?? CanonicalJSON.string($0) } ?? ""
+                lines.append("\(key): \(PlainText.safe(raw))")
+            }
+            return [ActionSummary(id: 0, title: approval.title, lines: lines)]
+        }
+        return approval.actions.enumerated().map { index, action in
             switch action {
             case let .functionCall(methodName, args, _, deposit):
                 var lines = ["App: \(approval.receiverId)", "From: \(approval.signerId)"]
@@ -245,5 +308,17 @@ public struct ActionSummary: Identifiable, Hashable, Sendable {
                 ])
             }
         }
+    }
+}
+
+/// Strips control and direction characters that could hide or reorder text.
+enum PlainText {
+    static func safe(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.unicodeScalars.map { scalar in
+            let v = scalar.value
+            let hidden = (v < 0x20 && v != 0x0A) || (0x7F...0x9F).contains(v) || (0x200B...0x200F).contains(v)
+                || (0x202A...0x202E).contains(v) || (0x2066...0x2069).contains(v)
+            return hidden ? " " : scalar
+        }))
     }
 }

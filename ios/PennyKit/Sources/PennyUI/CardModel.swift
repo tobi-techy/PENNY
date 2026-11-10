@@ -199,7 +199,7 @@ public enum CardPhase: Equatable, Sendable {
         case .blocked: return .blocked(message: card.lines.first?.value ?? "Guard said no.")
         case .expired: return .expired
         case .declined: return .declined
-        case .failed: return .failed(message: CardState.failed.closingLine ?? "", steps: [])
+        case .failed: return .failed(message: card.statusLine ?? CardState.failed.closingLine ?? "", steps: [])
         case .undone: return .closed(message: CardState.undone.closingLine ?? "Undone.")
         }
     }
@@ -253,7 +253,8 @@ extension CardContent {
             }
         } else if card.state == .done || card.state == .ready || card.state == .blocked {
             buttons = card.buttons.map { b in
-                CardButton(b.label, style: .outline, action: b.action == "freeze" ? .notMe : .button(b.id))
+                CardButton(b.label, style: b.action == "unfreeze" ? .faceID : .outline,
+                           action: b.action == "freeze" ? .notMe : .button(b.id))
             }
         }
         let rows = card.lines.map { line -> CardRow in

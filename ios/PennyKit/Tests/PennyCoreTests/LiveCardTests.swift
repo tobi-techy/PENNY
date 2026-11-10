@@ -161,6 +161,31 @@ final class SignApprovalTests: XCTestCase {
     }
 }
 
+final class UnfreezeCardTests: XCTestCase {
+    func testTheUnfreezeChallengeIsReadAndTheMessageMatchesTheEngine() throws {
+        let challenge = String(repeating: "B", count: 42) + "A"
+        let data = CanonicalJSON.data(.object([
+            "card": .object(["id": "crd_01JC0000000000000000000000", "title": "Unfreeze Penny", "type": "unfreeze",
+                             "kind": "info", "state": "ready",
+                             "buttons": .array([.object(["id": "unfreeze", "label": "Unfreeze with Face ID", "action": "unfreeze"])])]),
+            "unfreeze": .object(["challenge": .string(challenge)]),
+        ]))
+        let parsed = try CardByToken.parse(data)
+        XCTAssertEqual(parsed.unfreezeChallenge, challenge)
+        XCTAssertEqual(parsed.card.buttons.first?.action, "unfreeze")
+        XCTAssertEqual(String(decoding: UnfreezeMessage.message(cardId: parsed.card.id, challenge: challenge), as: UTF8.self),
+                       "penny-unfreeze:v1:crd_01JC0000000000000000000000:\(challenge)")
+    }
+
+    func testABadUnfreezeChallengeIsRefused() {
+        let data = CanonicalJSON.data(.object([
+            "card": .object(["title": "Unfreeze Penny"]),
+            "unfreeze": .object(["challenge": "short"]),
+        ]))
+        XCTAssertThrowsError(try CardByToken.parse(data))
+    }
+}
+
 final class CardStateTests: XCTestCase {
     func testPillsInPlainWords() {
         XCTAssertEqual(CardState.ready.pillTitle, "Approve with Face ID")
@@ -188,6 +213,15 @@ final class CardStateTests: XCTestCase {
         XCTAssertEqual(card.lines, [CardLine(label: nil, value: "Take a coat.")])
         XCTAssertEqual(card.buttons.map(\.id), ["open"])
         XCTAssertThrowsError(try PennyCard.parse(.object(["lines": .array([])])))
+    }
+
+    func testTheServersStatusLineIsShownAndFailedNeverClaimsNothingMoved() throws {
+        let card = try PennyCard.parse(.object([
+            "title": "Send 1 USDC", "state": "failed",
+            "statusLine": "couldn't confirm this went through. check your balance before trying again.",
+        ]))
+        XCTAssertEqual(card.statusLine, "couldn't confirm this went through. check your balance before trying again.")
+        XCTAssertFalse(CardState.failed.closingLine?.lowercased().contains("nothing") ?? true)
     }
 
     func testReceiptLinksMustBeHTTPS() throws {

@@ -10,9 +10,17 @@ import {
   styleFor,
 } from './cardView.ts';
 import { type ApprovalForSigning, signApproval } from './chain/sign.ts';
-import { describeAction, passkeyChallengeFor, verifyApproval } from './chain/verify.ts';
 import { loadDeviceKey } from './keys/deviceKey.ts';
 import { assertPasskey } from './keys/passkey.ts';
+import {
+  approveMessage,
+  boundChallenge,
+  type CheckedApproval,
+  checkApproval,
+  describe,
+  unfreezeMessage,
+  writeFields,
+} from './ticket.ts';
 
 /**
  * The link card page (/a/<cardToken>): the same card as the iMessage extension. Approving
@@ -26,42 +34,70 @@ export function CardPage({ token }: { token: string }) {
   const [err, setErr] = useState('');
   const [now, setNow] = useState(Date.now());
   const [editing, setEditing] = useState<string | null>(null);
+  // the approval as this browser checked it (null until checked, or when it doesn't add up)
+  const [checked, setChecked] = useState<CheckedApproval | null>(null);
+  const [unfreeze, setUnfreeze] = useState<{ challenge: string; passkeys?: string[] } | null>(null);
+  // this browser has no Penny key (another browser, a Mac): no dead-end Approve button
+  const [noKey, setNoKey] = useState(false);
+  // "Not me" switches every key off: ask first
+  const [confirmFreeze, setConfirmFreeze] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const raw = await apiJson<{ card: unknown; approval?: ByToken['approval'] }>(
-        `/v1/approvals/by-token/${token}`,
-      );
+      const raw = await apiJson<{
+        card: unknown;
+        approval?: ByToken['approval'];
+        unfreeze?: { challenge: string; passkeys?: string[] };
+      }>(`/v1/approvals/by-token/${token}`);
       const card = readCard(raw.card);
       if (!card) throw new Error('bad card');
       setView({ card, ...(raw.approval ? { approval: raw.approval } : {}) });
+      setUnfreeze(raw.unfreeze ?? null);
+      setChecked(null);
+      if (raw.approval?.challenge && card.state === 'ready') {
+        try {
+          // never sign what the server says without checking it here first
+          setChecked(await checkApproval(raw.approval));
+        } catch {
+          setErr("This card doesn't add up, so it can't be approved here. Ask Penny again.");
+        }
+      }
     } catch {
       setErr('This card is gone. Ask Penny for a fresh one.');
     }
   }, [token]);
 
   useEffect(() => {
-    void load();
+    void (async () => {
+      setNoKey(!(await loadDeviceKey()));
+      // an invest price lasts 90 s: opening the card gets a fresh one in place
+      await api(`/v1/approvals/by-token/${token}/fresh-price`, {
+        method: 'POST',
+        headers: { 'idempotency-key': idem() },
+      }).catch(() => null);
+      await load();
+    })();
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, token]);
 
-  // What the passkey will cover, derived from the verified plan (never from server text).
-  const [approving, setApproving] = useState<string | null>(null);
+  // after approving, follow the card until it settles (sent, failed or blocked)
+  const approving = view?.card.state === 'approving';
   useEffect(() => {
-    const a = view?.approval;
-    if (!a) {
-      setApproving(null);
-      return;
-    }
-    verifyApproval(a)
-      .then((x) => setApproving(describeAction(x)))
-      .catch(() => setApproving(''));
-  }, [view]);
+    if (!approving) return;
+    let tries = 0;
+    const poll = setInterval(() => {
+      tries += 1;
+      if (tries > 90) clearInterval(poll); // ~3 min
+      void load();
+    }, 2000);
+    return () => clearInterval(poll);
+  }, [approving, load]);
 
   async function approve() {
     const a = view?.approval;
-    if (!view || !a?.challenge) return;
+    const c = checked;
+    if (!view || !a || !c) return;
     setBusy(true);
     setErr('');
     try {
@@ -70,16 +106,15 @@ export function CardPage({ token }: { token: string }) {
         setErr('No approval key in this browser yet. Open the setup link Penny sent you first.');
         return;
       }
-      // 0) check the approval hangs together before anything is signed (same as iPhone)
-      await verifyApproval(a);
-      // 1) Face ID on this phone (the tap above is what lets Safari start it)
+      // 1) Face ID on this phone (the tap above is what lets Safari start it). The passkey
+      //    answers a challenge bound to the approval hash this page checked itself.
       const assertion = await assertPasskey({
-        challenge: await passkeyChallengeFor(a.approvalHash, a.challenge),
+        challenge: await boundChallenge(approveMessage(c.approvalHash, c.challenge)),
         rpId: window.location.hostname,
         passkeys: a.passkeys ?? [],
       });
-      // 2) this browser's key signs the exact action (checked byte for byte on the server)
-      const signed = await signApproval(a.detail as ApprovalForSigning, key);
+      // 2) this browser's key signs the exact action it checked (and the server checks again)
+      const signed = await signApproval(c.detail as unknown as ApprovalForSigning, key);
       const res = await api(`/v1/approvals/${a.id}/passkey`, {
         method: 'POST',
         headers: {
@@ -91,7 +126,7 @@ export function CardPage({ token }: { token: string }) {
       });
       if (res.status === 423) setErr('Penny is frozen. Text unfreeze to start again.');
       else if (res.status === 410) setErr('This card ran out of time. Tap Get a new card.');
-      else if (!res.ok) setErr("That didn't check out. Nothing moved. Penny sent you a new card.");
+      else if (!res.ok) setErr("That didn't go through. The card below says what happened.");
       await load();
     } catch (e) {
       const name = (e as Error).name;
@@ -125,8 +160,53 @@ export function CardPage({ token }: { token: string }) {
     }
   }
 
-  async function press(card: CardJson, id: string) {
+  async function doUnfreeze(card: CardJson) {
+    if (!unfreeze) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const assertion = await assertPasskey({
+        challenge: await boundChallenge(unfreezeMessage(card.id, unfreeze.challenge)),
+        rpId: window.location.hostname,
+        passkeys: unfreeze.passkeys ?? [],
+      });
+      const res = await api(`/v1/cards/by-token/${token}/unfreeze`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': idem() },
+        body: JSON.stringify({ assertion }),
+      });
+      if (!res.ok)
+        setErr("That didn't check out. Penny is still frozen. Text unfreeze for a new card.");
+      await load();
+    } catch (e) {
+      setErr(
+        (e as Error).name === 'PasskeyCancelled'
+          ? 'Face ID was cancelled. Penny is still frozen.'
+          : "That didn't go through. Penny is still frozen.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function press(card: CardJson, id: string, confirm = false) {
     const b = card.buttons.find((x) => x.id === id);
+    if (b?.action === 'freeze' && !confirm) {
+      setConfirmFreeze(id);
+      return;
+    }
+    if (b?.action === 'freeze') {
+      setConfirmFreeze(null);
+      const res = await post(`/v1/cards/by-token/${token}/press`, { buttonId: id, confirm: true });
+      if (res?.ok)
+        setMsg('Penny is frozen. Every key is off. Text unfreeze when you want it back.');
+      await load();
+      return;
+    }
+    if (b?.action === 'unfreeze') {
+      await doUnfreeze(card);
+      return;
+    }
     if (b?.action === 'open' && b.value?.startsWith('https://')) {
       window.location.href = b.value;
       return;
@@ -150,7 +230,10 @@ export function CardPage({ token }: { token: string }) {
 
   async function renew() {
     const res = await post(`/v1/approvals/by-token/${token}/renew`, {});
-    if (res?.ok) setMsg('A new card is on its way to Messages.');
+    const body = (await res?.json().catch(() => null)) as { approvalId?: string | null } | null;
+    // only say a card is coming when one was actually made
+    if (res?.ok && body?.approvalId) setMsg('A new card is on its way to Messages.');
+    else setErr("Penny couldn't make a new card. Ask Penny again in Messages.");
   }
 
   async function decline() {
@@ -187,7 +270,7 @@ export function CardPage({ token }: { token: string }) {
   const expired = live && card.expiresAt !== undefined && Date.parse(card.expiresAt) <= now;
   const state = expired ? 'expired' : card.state;
   const pill = card.kind === 'approval' ? pillFor(state) : null;
-  const closing = closingLine(state);
+  const closing = card.statusLine ?? closingLine(state);
 
   return (
     <main>
@@ -221,16 +304,26 @@ export function CardPage({ token }: { token: string }) {
             </div>
           )}
 
-          {state === 'ready' && card.kind === 'approval' && approving !== null && (
-            <p className={approving ? 'approving' : 'err'}>
-              {approving
-                ? `You're approving: ${approving}`
-                : "This card doesn't add up, so it can't be approved. Ask Penny for a new one."}
+          {state === 'ready' && card.kind === 'approval' && checked && (
+            <div className="approving">
+              <div className="what">{describe(checked)}</div>
+              {writeFields(checked).map((f) => (
+                <div className="field" key={f.key}>
+                  <span>{f.key}</span>
+                  <pre>{f.value}</pre>
+                </div>
+              ))}
+            </div>
+          )}
+          {state === 'ready' && card.kind === 'approval' && noKey && (
+            <p className="note">
+              This browser isn't the one you set up Penny on, so it can't approve. Open this card on
+              that phone (the same message is there), or ask Penny to send it again.
             </p>
           )}
-          {state === 'ready' && card.kind === 'approval' && (
+          {state === 'ready' && card.kind === 'approval' && !noKey && (
             <>
-              <button type="button" className="pill" disabled={busy} onClick={approve}>
+              <button type="button" className="pill" disabled={busy || !checked} onClick={approve}>
                 {busy ? 'Approving…' : pill}
               </button>
               <button type="button" className="pill dim" disabled={busy} onClick={decline}>
@@ -245,7 +338,23 @@ export function CardPage({ token }: { token: string }) {
               {pill}
             </button>
           )}
-          {blocked && card.buttons.length > 0 && (
+          {confirmFreeze && (
+            <div className="confirm">
+              <p>Freeze Penny? Every key is switched off and every open card is cancelled.</p>
+              <button
+                type="button"
+                className="pill red"
+                disabled={busy}
+                onClick={() => press(card, confirmFreeze, true)}
+              >
+                Yes, freeze everything
+              </button>
+              <button type="button" className="pill dim" onClick={() => setConfirmFreeze(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
+          {blocked && !confirmFreeze && card.buttons.length > 0 && (
             <button
               type="button"
               className="pill red"
