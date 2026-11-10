@@ -29,6 +29,27 @@ CI runs `cargo test --workspace`, the same wasm build, and prints both hashes
 (`.github/workflows/ci.yml`, job `contract`). Compare its output with the table
 above before deploying.
 
+## Deploy the shared Guard to testnet
+
+`packages/chain/scripts/deploy-testnet.ts` deploys the test dollar, the shared
+Guard, and the demo biller in one run, and verifies both wasm hashes against
+this README before sending anything. Testnet only; it refuses any RPC URL
+without `testnet`.
+
+```bash
+NEAR_DEPLOYER_ACCOUNT_ID=penny.testnet \
+NEAR_DEPLOYER_PRIVATE_KEY=ed25519:... \
+bun run --cwd packages/chain deploy:testnet
+```
+
+Optional: `GUARD_ACCOUNT_ID`, `TUSD_ACCOUNT_ID`, `DEMO_BILLER_ACCOUNT_ID`
+(default `guard.<deployer>`, `tusd.<deployer>`, `biller.<deployer>`),
+`PENNY_USER_ACCOUNT_ID` to also mint test dollars to a Penny account.
+
+The script creates each account with **no access key** and calls `new` in the
+same transaction from the parent account, so the deployed Guard is locked from
+birth. It prints the engine environment block to paste into the deployment.
+
 ## Contract API (v2, shared multi-tenant)
 
 Init (caller must be the contract itself or its parent): `new(tokens: Vec<AccountId>)`.
