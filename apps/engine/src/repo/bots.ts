@@ -173,6 +173,18 @@ export class MessagesRepo {
     });
   }
 
+  /** Most recent message time for this user, either direction. */
+  async lastAt(userId: string): Promise<Date | null> {
+    const [r] = await this.db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(eq(conversations.userId, userId))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(1);
+    return r?.createdAt ?? null;
+  }
+
   /** Most recent messages in a conversation, oldest first (for crew context). */
   async recent(
     conversationId: string,

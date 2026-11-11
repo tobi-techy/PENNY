@@ -115,7 +115,7 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'find_bills',
     description:
-      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail and share the link.",
+      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail; it sends the card.",
     risk: 'read',
     input: empty,
     execute: async (ctx) => {
@@ -176,7 +176,7 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'connect_app',
     description:
-      'Connect an outside app (gmail, github) for this user. If already connected, says so. Otherwise returns a link: share tellUser verbatim. Penny watches for the connection and texts the user herself when it is live (for gmail she also checks for bills), so do not ask them to say done.',
+      "Connect the user's gmail or github. If already connected, says so. Otherwise Penny sends a connect card in the thread; never put a URL in your reply. Penny watches for the connection and texts the user herself when it is live (for gmail she also checks for bills), so do not ask them to say done.",
     risk: 'read',
     input: z.object({ toolkit: z.enum(['gmail', 'github']) }).strict(),
     execute: async (ctx, i) => {
@@ -188,26 +188,23 @@ export function builtinTools(): ToolDef<never>[] {
       );
       if (r.status === 'connected') return { ok: true, connected: true, toolkit: i.toolkit };
       if (r.status === 'link') {
-        await ctx.onboarding?.watchConnect(ctx.userId, i.toolkit, {
-          link: r.redirectUrl,
-          space: ctx.space,
-        });
+        // The card is the link. If it cannot be sent, say so; never hand the raw
+        // provider URL to the model, or it will paste it into the thread.
+        const sent = Boolean(ctx.onboarding);
+        if (ctx.onboarding) {
+          await ctx.onboarding.watchConnect(ctx.userId, i.toolkit, {
+            link: r.redirectUrl,
+            space: ctx.space,
+          });
+        }
         const what =
           i.toolkit === 'gmail'
             ? "i only read, and nothing gets sent from it without your ok. i'll text you the moment it's connected."
             : "i'll text you the moment it's connected.";
-        // With onboarding wired, the link arrives as its own card; keep the raw
-        // URL out of the sentence so iMessage renders a preview instead of text.
-        const tellUser = ctx.onboarding
-          ? `i sent you a link to connect your ${i.toolkit}. tap the card above.\n${what}`
-          : `tap to connect your ${i.toolkit}: ${r.redirectUrl}\n${what}`;
-        return {
-          ok: false,
-          connected: false,
-          toolkit: i.toolkit,
-          connectUrl: r.redirectUrl,
-          tellUser,
-        };
+        const tellUser = sent
+          ? `i sent you a connect card for ${i.toolkit}. tap it and approve.\n${what}`
+          : 'i could not send the connect card just now. try again in a moment.';
+        return { ok: false, connected: false, toolkit: i.toolkit, sentCard: sent, tellUser };
       }
       return { ok: false, connected: false, error: r.reason };
     },
@@ -263,6 +260,19 @@ export function builtinTools(): ToolDef<never>[] {
     risk: 'read',
     input: z.object({ query: z.string().min(1).max(200) }).strict(),
     execute: async (ctx, i) => ctx.memory.recall(ctx.userId, i.query, 5),
+  });
+  add({
+    id: 'close_open_loop',
+    description:
+      'Close an open follow-up from your follow-up list once the user has settled it (done) or said to drop it. Use the loop id shown in your context.',
+    risk: 'read', // Penny's own memory; no outside effect
+    input: z
+      .object({ loopId: z.string().min(1).max(80), status: z.enum(['done', 'dropped']) })
+      .strict(),
+    execute: async (ctx, i) =>
+      ctx.followup
+        ? { ok: await ctx.followup.close(ctx.userId, i.loopId, i.status) }
+        : { ok: false, error: 'follow-up tracking is not set up' },
   });
   add({
     id: 'set_mood',

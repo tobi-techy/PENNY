@@ -810,7 +810,7 @@ describe('testnet: bills pay in the test dollar (tUSD), never native NEAR', () =
     expect(out.status).toBe('settled');
     expect(await t.engine.services.bills.open(u.userId)).toHaveLength(0);
     expect(t.messaging.texts.at(-1)?.text).toBe(
-      "paid. Penny Demo Utility, $5.00. i've crossed it off and cancelled the reminder.\nreceipt: https://testnet.nearblocks.io/txns/TESTNET_TX_1",
+      "paid. Penny Demo Utility, $5.00. i've crossed it off and cancelled the reminder. the card has the receipt.",
     );
   });
 

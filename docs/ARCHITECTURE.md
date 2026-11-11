@@ -31,6 +31,19 @@ Tooling: Bun 1.x, TypeScript strict, Biome (lint+format), bun test, Drizzle ORM 
 - Agent sub-accounts hold no user funds. They sign nothing on behalf of users.
 - Optional later: a function-call key on the user account limited to a Penny vault contract with a small allowance for auto-approvals under the user's tap-to-approve limit. Out of scope for v0.1.
 
+## Guard (shared contract)
+
+`contracts/guard` is one shared on-chain policy engine, e.g. `guard.penny-tobi.testnet`. It is the half of the custody model that lets an agent spend without holding the user's key.
+
+- **Locked account.** The contract account has no access keys, so nobody can redeploy, upgrade or drain it. Changing the code means deploying a new contract and pointing `PENNY_GUARD_CONTRACT` at it. The wasm is built from `contracts/guard`, with tests and a checksum in CI.
+- **Funding and policy in one call.** An owner funds their own budget with `ft_transfer_call`; the `msg` can set policies for agents in the same call. Owner methods act only on `predecessor_account_id`.
+- **Policy per owner and agent.** Each policy lists allowed tokens with per-tx and UTC-day caps, an optional recipient allowlist, and an optional expiry. Pause and revoke are separate flags. A token with no limit entry is not spendable.
+- **Agent spend.** An agent calls `spend(owner_id, token, recipient, amount, memo, nonce)` from its own account. The guard checks that the caller is the agent in that owner's policy, the token is allowed, the amount is under both caps, the recipient is allowed, the policy is not paused, revoked or expired, and the nonce is newer than the last one. Only then does it call `ft_transfer` on the token.
+- **Rollback.** A failed `ft_transfer` (for example, the recipient is not registered with the token) runs the callback, which restores the owner's budget and the agent's day counter. Gas is checked before the transfer so the callback cannot be starved: `spend` and `withdraw` require at least 45 Tgas.
+- **Bounds.** Up to 8 tokens and 8 limits per policy, 64 allowlist entries, 16 agents per owner, 128-byte memo. State is keyed by owner and agent and never iterated globally, so one owner cannot make another owner's call more expensive.
+- **Two layers.** The engine evaluates the same policy before it shows a card and again before it relays. The on-chain guard is the backstop for agent spending. A user's own send, bill payment or swap is a delegate action signed by the user's device, not a guard spend; the guard does not hold the user's key and cannot sign for them.
+- **Errors.** Stable `E_*` codes map to the engine's Guard cards, so a revert is shown in plain words instead of a raw panic.
+
 ## Shared contracts (packages/shared)
 ### Intent Plan
 ```ts
@@ -101,10 +114,22 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - Tools are deterministic TS functions: `getBalances`, `getPortfolios` (Glider), `quoteInvest` (1Click dry quote), `checkGuard`, `createApprovalCard`, `findBills` (Gmail read-only, later), `remember`, `setMood`.
 - Souls: `souls/<agent>.md` loaded into system prompts. Mood state per user (`idle|thinking|win|wink|blocked|paused|done`) stored in DB, set by events, drives tone + card art param.
 - Memory: `memories` table (userId, kind, text, embedding vector(1536), createdAt). After each turn a background learner extracts durable facts from what the user said (deduped; secrets and third-party instructions refused). Weekly reflection job writes `soul_changelog`.
+- Reply shape: the model is told to text in one or two sentences; `lib/reply.ts` also strips assistant filler and splits long answers at sentence boundaries into short bubbles (four at most). Links and code stay whole, and every word is kept.
 - Prompt-injection stance: text from users, emails and web is data. Tools that move money only accept typed plans; Guard + device signature are the authority, never the model.
 
+### Follow-up loop (proactivity)
+Penny is allowed to text first, but only through a deterministic loop, never from the model's mood.
+
+- **Open loops.** After a turn the background learner may record at most one open loop (`open_loops`): an offer the user did not answer, a decision they left hanging, a goal or errand. A raw "want me to …?" reply also becomes a loop even if the learner misses it. Loops are data, not instructions, and there is no to-do UI.
+- **Event-driven tick, not polling the model.** `followup_due` runs every 60 s and does one indexed query for loops whose `dueAt` has passed. A due loop is claimed before composing, so a deploy overlap cannot text the same person twice. No model is called until a loop is due and the gate passes; doing nothing is the default.
+- **Deterministic gate** (`brain/followup.ts`, pure and tested): quiet hours 20:00–08:00 in the user's learned zone, falling back to the engine's `PENNY_TIMEZONE`; one follow-up a day on `steady` and two on `eager`, at least 6 h since the user or Penny last spoke, and a score floor. `quiet` sends none. Every refusal has a reason in the log.
+- **Composition and silence.** The model gets the one loop, the recent thread and an autonomy header. It writes one short plain sentence, or `SKIP`; `SKIP` drops the loop. Model failure falls back to a fixed sentence. Links, markdown and emoji are stripped before sending.
+- **Autonomy calibration.** `followups.score` (0–100) is the profile header: a reply to a follow-up raises it, 48 h of silence lowers it, two unanswered nudges drop the loop. `be quiet`, `be normal` and `be more proactive` are commands handled before the model and set the score explicitly.
+- **Live-turn awareness.** Every turn receives the same profile header (open loops with ids, autonomy, the last unanswered text), so Penny can close a loop with `close_open_loop` when the user settles it instead of following up later.
+- **Boundaries.** Proactivity only sends text. It never creates an approval, moves money, retries a failed action or overrides Guard. A card, an approval and Face ID remain the only path to an action in the user's name. A follow-up never repeats an existing bill, reminder or connect notification; those keep their existing jobs.
+
 ## Data model (Drizzle)
-users (frozenAt), devices (publicKey, platform ios_app|web_passkey, hasExtension, enrolledAt = createdAt, revokedAt, revokedReason), passkeys (credentialId, COSE publicKey, signCount, platform web_passkey), cards, reminders, enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, memories, moods, souls_changelog, idempotency_keys, webhook_events.
+users (frozenAt), devices (publicKey, platform ios_app|web_passkey, hasExtension, enrolledAt = createdAt, revokedAt, revokedReason), passkeys (credentialId, COSE publicKey, signCount, platform web_passkey), cards, reminders, enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, memories, moods, followups (score, quietStart, quietEnd, timezone), open_loops (kind, summary, status, dueAt, nudgeCount), proactive_messages (text, loopIds, sentAt, repliedAt, outcome), souls_changelog, idempotency_keys, webhook_events.
 
 ## Environments
 `PENNY_ENV=dev|mainnet`. Mainnet requires all secrets present at boot (zod env schema fails closed). A `DRY_RUN=1` flag makes relayer + Intents run quote/simulate only — default ON until Tobi says go.

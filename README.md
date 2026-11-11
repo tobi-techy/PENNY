@@ -9,11 +9,42 @@ Penny is a crew of AI agents that helps run your everyday life from iMessage. Te
 - Invest via NEAR Intents 1Click: "put $50 in SOL" gets a live preview (est. out, rate, fee, min received, expiry), Guard, a firm quote on a Face ID card, then the card follows the swap (pending, processing, success / refunded / failed). ETH, SOL, NEAR; real quotes and prices, mainnet broadcast off until explicitly enabled (see `docs/INVEST.md`)
 - Guard before every card and again before relay: per-tx, daily, new-recipient and velocity rules, with mainnet launch caps on both per-tx and daily total; relayer limit per approval comes from the approved amount, bounded by an env ceiling
 - Bills and reminders: Mail checks connected Gmail for bills (known Nigerian billers, amount and due date parsed by code, receipts skipped), texts you when a new one lands, and reminds you at 09:00 the day before it's due. "remind me to call mum at 6" works too. Paying a bill only goes to a payee from the fixed biller list, never one taken from an email. Real billers aren't payable yet; the demo biller is (below)
-- Smooth first contact: the first text gets a short welcome and Penny answers what you asked (a bare "hi" gets a first step). No setup link up front: it's texted only when something needs approval, and Penny confirms in the thread once the browser is linked. "connect my gmail" sends a link; Penny notices the connection on her own, says so, and checks for bills straight away
+- Smooth first contact: the first text gets a short welcome and Penny answers what you asked (a bare "hi" gets a first step). No setup card up front: it is sent only when something needs approval, and Penny confirms in the thread once the browser is linked. "connect my gmail" sends a connect card; Penny notices the connection on her own, says so, and checks for bills straight away
 - Connected apps (Composio) with write approvals; App Attest for the iOS device
 - Private inference on NEAR AI Cloud with TEE attestation: Intel TDX + NVIDIA GPU evidence and per-response signatures verified, `private · verified in TEE` status at `GET /v1/attestation` (`NEARAI_ATTESTATION=off|warn|enforce`, see `docs/TEE.md`)
 
 Start here: `AGENT.md`, then `docs/IDEA.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/DESIGN.md`.
+
+## NEAR Hackathon
+
+Built for **NEAR HACKATHON** (1 to 14 Nov 2026). The repository was created on 5 Nov 2026, so every commit is inside the hackathon window; there is no pre-hackathon baseline to separate. The code is MIT and the repository is public.
+
+**Tracks:** `realworld`, `security`, `agents`, `privacy`.
+
+**What was built**
+
+- A crew of agents in iMessage: Penny, Mail, Finance, Invest, Guard, Errand, plus bots the user makes by text.
+- One card per action. A connect link, a bill, an email draft, a reminder, a send, a swap and a new bot all arrive as cards; links never arrive as pasted URLs.
+- Approvals with Face ID on the phone, or a WebAuthn passkey in the browser with no app to install. The server holds no user keys.
+- Bills from Gmail: known Nigerian billers, amount and due date parsed by code, a reminder the day before, and a test-dollar bill payment on NEAR testnet.
+- A Rust Guard contract with per-owner budgets and per-agent caps, deployed to testnet with no access keys.
+- Private inference on NEAR AI Cloud with TEE attestation; the deployed engine reports `mode=enforce` and `verified=true`.
+
+**How NEAR is used**
+
+- A named account per user (`<slug>.penny-tobi.testnet`) and per agent, not a shared hot wallet.
+- NEP-366 delegate actions: the phone or browser signs the action, the relayer pays gas, and the engine verifies the signed action byte for byte before relaying.
+- The Guard contract enforces per-token per-tx and UTC-day caps, allowlists, expiry, pause, revoke and nonce on agent spending. The engine also checks policy before a card and again before relay; the contract is the backstop.
+- tUSD on testnet is the demo stablecoin. The same code path uses USDC on mainnet.
+- NEAR AI Cloud for inference, with Intel TDX and NVIDIA GPU evidence checked before money or mail tools run.
+
+**Testnet and mainnet**
+
+Everything in this demo runs on NEAR testnet with test funds. `DRY_RUN=0` is set only for the testnet engine; mainnet relay stays off. The demo biller and tUSD are testnet-only; `contracts/guard/mock-ft` never deploys to mainnet. Real billers are not payable yet.
+
+**Proof and demo**
+
+`PROOF.md` is a real run against the deployed testnet engine: a settled `0.1 NEAR` transfer ([receipt](https://testnet.nearblocks.io/txns/6F6eTAyyQH9YdM82fUfDgm6cFgPZE2bC6FbV7RNy4kSD)), a reused signature refused, an over-limit send blocked by Guard, a wrong key refused, and TEE attestation verified. The walkthrough video and X post are linked from the hackathon submission.
 
 ## Try it
 
@@ -21,7 +52,7 @@ Text Penny's number on iMessage. Everything Penny does or proposes shows up as a
 
 **1. With the app (live cards).** Install Penny from TestFlight, open it once and tap the setup link Penny texted you. Your key is made on the phone, behind Face ID, and never leaves it. From then on cards are live iMessage cards that change in place. Try:
 
-- "send 0.1 NEAR to amara.testnet" → a Send card with a countdown → Approve with Face ID → the card flips to Sent with a receipt link.
+- "send 0.1 NEAR to amara.testnet" → a Send card with a countdown → Approve with Face ID → the card flips to Sent with a View receipt button.
 - "remind me to call mum at 7" → "Reminder set for 7am" with Undo. No Face ID.
 - "email Amara the invoice" → "Email to Amara ready" with Send and Edit. Send asks for Face ID.
 - "send 5000 NEAR to stranger.testnet" → a Blocked card. No approval card is ever sent for it.
@@ -30,7 +61,7 @@ Text Penny's number on iMessage. Everything Penny does or proposes shows up as a
 
 Text **freeze** any time (or tap Not me on a Blocked card, which asks you to confirm first): every key Penny trusts for you is switched off and every open card is cancelled. Text **unfreeze** to start again: Penny sends an Unfreeze card, and only Face ID on it (with the key that was switched off) turns your keys back on. A text alone never does.
 
-Testnet only for now (`NEAR_NETWORK=testnet`). Proof of the approval path: `bun run prove`, results in `PROOF.md`.
+Testnet only for now (`NEAR_NETWORK=testnet`). Proof of the approval path: `PROOF.md`, from a real run against the deployed engine on 10 Nov 2026. All checks green, including a settled `0.1 NEAR` transfer ([receipt](https://testnet.nearblocks.io/txns/6F6eTAyyQH9YdM82fUfDgm6cFgPZE2bC6FbV7RNy4kSD)) and TEE attestation `enforce` with `verified=true`.
 
 ## Repo
 
@@ -68,14 +99,14 @@ More: `apps/engine/README.md`. iOS: `ios/README.md`.
 | Create a testnet account for the biller, e.g. `penny-demo-biller.testnet` | it exists on [testnet NearBlocks](https://testnet.nearblocks.io) |
 | Set `NEAR_NETWORK=testnet`, `NEAR_RPC_URL=https://rpc.testnet.near.org`, the testnet app and relayer keys, and `PENNY_DEMO_BILLER_ACCOUNT=penny-demo-biller.testnet` | engine boots and talks to testnet |
 | Set `NEAR_USDC_CONTRACT` to your Penny test dollar (tUSD) contract id, deployed from `contracts/guard/mock-ft` | every dollar action uses that token |
-| Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: the card settles as a test run, the bill is not crossed off and its reminder stays, and Penny texts `paid (test run, nothing sent) ✓` with no receipt link |
+| Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: the card settles as a test run, the bill is not crossed off and its reminder stays, and Penny texts `paid (test run, nothing sent)` with no receipt on the card |
 | Optional: set `PENNY_GUARD_CONTRACT=<shared guard id>` (e.g. `guard.penny.testnet`) | Guard checks the shared Guard contract; unset = autopilot off |
 | Text Penny, open the setup link | your Penny account is made on testnet; its `account_id` is on your `users` row |
 | Give that account tUSD: call `mint` on the tUSD contract from its owner account with `{"account_id":"<your penny account>","amount":"10000000"}` | 6 decimals, so `10000000` is `$10.00` |
 | Text "connect my gmail" and authorize | Penny texts "gmail's connected ✓" and checks for bills |
 | Email yourself: subject `Penny Demo Utility bill: $5.00 due <date>` | Mail texts you about the new bill |
 | Text "pay it" | a card: `$5.00 in USDC`, paying `penny-demo-biller.testnet` |
-| Approve with Face ID | the card goes to done, the bill is crossed off, the reminder is cancelled, and Penny texts a NearBlocks receipt link (only when the transfer really went out, so `DRY_RUN=0`) |
+| Approve with Face ID | the card goes to done, the bill is crossed off, the reminder is cancelled, and the card carries a View receipt button (only when the transfer really went out, so `DRY_RUN=0`) |
 
 On both networks the bill card shows `$5.00 in USDC`; on testnet that token is tUSD, and the payment is the same token transfer (`ft_transfer`) as mainnet USDC. `PENNY_RELAYER_MAX_DEPOSIT_NEAR` caps NEAR the relayer fronts for one approval. A tUSD token transfer is not NEAR, so that cap does not block this demo. The mock token's `mint` is owner-only and never deploys to mainnet.
 

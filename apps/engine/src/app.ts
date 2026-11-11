@@ -12,6 +12,7 @@ import { BotService } from './brain/bots.ts';
 import { Crew } from './brain/crew.ts';
 import { type Embedder, MemoryService } from './brain/memory.ts';
 import { MoodService } from './brain/mood.ts';
+import { ProactiveService } from './brain/proactive.ts';
 import { ReflectionService } from './brain/reflection.ts';
 import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
@@ -44,6 +45,7 @@ import { BillsRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import { CardsRepo, PasskeysRepo, RemindersRepo } from './repo/cards.ts';
 import { ConnectWatchesRepo } from './repo/connect-watches.ts';
+import { FollowUpRepo } from './repo/followup.ts';
 import {
   AttestChallengesRepo,
   GuardDecisionsRepo,
@@ -121,6 +123,7 @@ export function createEngine(d: EngineDeps) {
     cards: new CardsRepo(d.db),
     passkeys: new PasskeysRepo(d.db),
     reminders: new RemindersRepo(d.db),
+    followup: new FollowUpRepo(d.db),
   };
   const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
   const cardSender = new CardSender({
@@ -135,6 +138,16 @@ export function createEngine(d: EngineDeps) {
   });
   const mood = new MoodService(repos.moods);
   const memory = new MemoryService(d.db, d.embedder);
+  const proactive = new ProactiveService({
+    followup: repos.followup,
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    model: d.models.chat,
+    timeZone,
+    now,
+    log: d.log,
+  });
 
   let approvals: ApprovalService | null = null;
   const botService = new BotService({
@@ -247,6 +260,7 @@ export function createEngine(d: EngineDeps) {
     approvals,
     memory,
     mood,
+    followup: proactive,
     market: d.market,
     botOps: {
       draft: (u, p, s) => botService.draft(u, p, s),
@@ -473,6 +487,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
     approvals,
+    proactive,
   };
   app.route(
     '/',
@@ -499,6 +514,7 @@ export function createEngine(d: EngineDeps) {
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
       fireReminders: (at: Date) => bills.sendDue(at),
+      followupTick: (at: Date) => proactive.tick(at),
       refreshRelayed: () => approvals.refreshRelayed(),
       reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
@@ -535,6 +551,7 @@ export function createEngine(d: EngineDeps) {
       enroll,
       mood,
       memory,
+      proactive,
       reflection,
       scheduler,
     },

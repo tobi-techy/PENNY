@@ -40,6 +40,10 @@ export type ToolContext = {
   onboarding?: OnboardingService;
   memory: MemoryService;
   mood: MoodService;
+  /** Open loops: the live turn can settle one so no follow-up repeats it. */
+  followup?: {
+    close(userId: string, id: string, status: 'done' | 'dropped'): Promise<boolean>;
+  };
   market: MarketPort;
   botOps: BotOps;
   /** Info-card jobs (reminders, drafts). Absent in some tests. */

@@ -412,6 +412,84 @@ export const moods = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.botSlug] })],
 );
 
+/**
+ * How proactive Penny is allowed to be with this user. A score, not a switch:
+ * a reply to a follow-up moves it up, silence moves it down, "be quiet" sets it
+ * to zero. Quiet hours are local time. See brain/followup.ts.
+ */
+export const followups = pgTable('followups', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => users.id),
+  score: integer('score').notNull().default(50),
+  quietStart: text('quiet_start').notNull().default('20:00'),
+  quietEnd: text('quiet_end').notNull().default('08:00'),
+  /** IANA zone for quiet hours; null = the engine's PENNY_TIMEZONE. */
+  timezone: text('timezone'),
+  createdAt: createdAt(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
+/**
+ * A thread the user left open: something Penny offered, a decision they did not
+ * make, a goal they mentioned, an errand in flight. The scheduler follows up at
+ * most twice, in daylight, the way an assistant would. Never a to-do app.
+ */
+export const openLoops = pgTable(
+  'open_loops',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    kind: text('kind', { enum: ['asked', 'decision', 'goal', 'errand'] }).notNull(),
+    /** Short noun phrase, e.g. "book the dentist". Shown to the model, never the user raw. */
+    summary: text('summary').notNull(),
+    source: text('source', { enum: ['turn', 'user'] })
+      .notNull()
+      .default('turn'),
+    status: text('status', { enum: ['open', 'done', 'dropped'] })
+      .notNull()
+      .default('open'),
+    dueAt: ts('due_at').notNull(),
+    nudgeCount: integer('nudge_count').notNull().default(0),
+    lastNudgedAt: ts('last_nudged_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('open_loops_user_idx').on(t.userId, t.status, t.dueAt),
+    index('open_loops_due_idx').on(t.status, t.dueAt),
+  ],
+);
+
+/**
+ * Every text Penny sent first. Outcomes are how the follow-up calibration works:
+ * replied (good), ignored (too eager), stopped (quiet).
+ */
+export const proactiveMessages = pgTable(
+  'proactive_messages',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    text: text('text').notNull(),
+    loopIds: text('loop_ids').array().notNull().default(sql`'{}'::text[]`),
+    sentAt: ts('sent_at').notNull().defaultNow(),
+    repliedAt: ts('replied_at'),
+    settledAt: ts('settled_at'),
+    outcome: text('outcome', { enum: ['pending', 'replied', 'ignored', 'stopped'] })
+      .notNull()
+      .default('pending'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('proactive_user_idx').on(t.userId, t.sentAt),
+    index('proactive_pending_idx').on(t.outcome, t.sentAt),
+  ],
+);
+
 export const soulsChangelog = pgTable('souls_changelog', {
   id: text('id').primaryKey(),
   botId: text('bot_id').notNull(),
@@ -528,6 +606,9 @@ export const schema = {
   ledgerEntries,
   memories,
   moods,
+  followups,
+  openLoops,
+  proactiveMessages,
   soulsChangelog,
   idempotencyKeys,
   webhookEvents,

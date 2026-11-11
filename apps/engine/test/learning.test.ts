@@ -59,4 +59,15 @@ describe('learning from a turn', () => {
     rows = await t.engine.services.memory.recent(u.userId);
     expect(rows.some((r) => r.text.toLowerCase().includes('hunter2'))).toBe(false);
   });
+
+  test('stores a user time zone when the learner hears one', async () => {
+    t = await makeEngine({ extra: { autoLearn: true } });
+    const u = await enrolledUser(t);
+    t.setModels(
+      scriptedModel([{ text: '' }]),
+      scriptedModel([{ text: 'zone | America/New_York' }]),
+    );
+    await t.engine.services.crew.learnFromTurn(u.userId, "i'm in new york this month");
+    expect((await t.engine.repos.followup.settings(u.userId)).timezone).toBe('America/New_York');
+  });
 });

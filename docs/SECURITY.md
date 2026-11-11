@@ -9,6 +9,7 @@ User funds on `<slug>.penny.near`; relayer/app account keys; agent sub-account k
 | Threat | Control |
 |---|---|
 | Model hallucinates or is prompt-injected into moving money | LLM only fills typed IntentPlan; deterministic builder creates actions; Guard policy; device signature required; delegate action verified byte-for-byte against approved planHash |
+| Agent key stolen or an agent misbehaves | The shared Guard contract caps every spend per token (per tx and per UTC day), checks the recipient allowlist, expiry and a monotonic nonce, and can be paused or revoked by the owner. The agent account holds no user funds and cannot sign for the user |
 | Server compromise steals user funds | Server holds no user keys. User full-access key lives in iPhone Keychain behind biometryCurrentSet. Attacker can at most send fake cards; device shows decoded actions from the delegate action it signs, not server prose |
 | Card spoofing / replay | cardToken random 256-bit, hashed at rest, TTL ≤ quote expiry, single approval; delegate action carries nonce + maxBlockHeight; approvals single-use; status machine rejects re-submit |
 | Duplicate replacement cards | One replacement per approval, enforced by a unique index on `approvals.reissued_from`; a concurrent renew gets the same replacement, so the daily limit is held once |
@@ -26,6 +27,18 @@ User funds on `<slug>.penny.near`; relayer/app account keys; agent sub-account k
 | Secrets leak | Env via zod schema; never logged (pino redact paths); no secrets in repo (gitleaks in CI); Glider key backend only |
 | Data leak | Memories private per user; Gmail scope read-only; PII minimised; inference via NEAR AI Cloud, TEE attestation verified when `NEARAI_ATTESTATION` is on (docs/TEE.md) |
 | Supply chain | Lockfile committed; pinned versions; `bun audit`/osv-scanner in CI |
+
+## Guard contract (the on-chain half)
+
+`contracts/guard` is the part of "give an agent money without giving it the keys" that runs on NEAR. It is one shared deployment with no access keys, so it cannot be redeployed, upgraded or drained by Penny or anyone else.
+
+- **Isolation.** Every budget and policy is keyed by owner account. An agent can only spend an owner's budget through that owner's policy for that exact agent. The guard never iterates all owners.
+- **Limits.** Per-token per-tx cap, UTC-day cap, recipient allowlist, allowed-token list, expiry, pause, revoke and a monotonic nonce. A token without a limit entry is not spendable.
+- **No replay.** The nonce is kept across revoke and re-add, so an old signed spend cannot be replayed.
+- **No stuck budget.** A failed `ft_transfer` restores the owner's budget and the day counter in the callback. `spend` and `withdraw` require 45 Tgas so the callback cannot be starved.
+- **Bounded work.** At most 8 tokens, 8 limits, 64 allowlist entries, 16 agents and a 128-byte memo. Storage is per key, never a global scan.
+- **Trust boundary.** The engine can only ask. It cannot move a budget without a spend from the agent account, and it cannot make the guard sign for the user. A user's own money move is a separate delegate action signed by the user's device.
+- **Residual risks.** The contract is tested but not audited; it is testnet-only for this build. The token contract and the owner's key remain trust assumptions. A bug in the guard could mis-account a budget, which is why mainnet caps also exist in the engine. There is no upgrade path: a fix is a new deployment, a new `PENNY_GUARD_CONTRACT`, and a fresh set of policies.
 
 ## TEE attestation (NEAR AI Cloud)
 Inference runs on NEAR AI Cloud in Intel TDX + NVIDIA confidential-computing GPUs. With `NEARAI_ATTESTATION=warn|enforce` the engine verifies, with a fresh nonce, the gateway and model TDX quotes (Intel DCAP via dcap-qvl), nonce and signer binding, MRCONFIGID and RTMR3, the model id, and the GPUs (NVIDIA NRAS), then checks each money/mail turn's response signature against the attested key. `enforce` refuses money and mail tools when any of that fails. Default `off` changes nothing. Only the nonce, model id and vendor evidence go to verifiers. Limits and sources: `docs/TEE.md`.
