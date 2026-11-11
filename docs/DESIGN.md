@@ -43,6 +43,17 @@ Penny is **iMessage-first**. There is no feed, no dashboard, no tab bar to learn
 4. The card.
 5. After approval, the card edits itself. A short closing line only when there is something to say ("done. it's in. I'll tell you sunday how it's doing.").
 
+### When Penny texts first
+
+Penny can start a thread, but only about something real and still open. The rules are part of the product, not the model's mood.
+
+- **One thing, once.** A follow-up names one open thread in the user's words ("still want me to book the dentist?"), gives an easy out ("no rush"), and never says "just following up".
+- **Daylight only.** Nothing proactive between 20:00 and 08:00 local. One follow-up a day by default, two at most. Never while the user is actively talking.
+- **Let it go.** No answer means the loop goes quiet. Two unanswered nudges and Penny drops it. A reply raises her autonomy; silence lowers it.
+- **The user is in charge.** "be quiet" stops proactive texts, "be normal" restores the default, "be more proactive" allows up to two a day. These are commands, handled without the model.
+- **Never on money.** A follow-up may remind the user that a card is waiting, but it never claims a move happened, never retries a failed action, and never replaces Guard or Face ID.
+- **Quiet evidence.** The text says what is known ("the quote's still open") and nothing more. If Penny does not know whether something worked, she says so or stays quiet.
+
 ### Tapbacks and moods
 Moods come from events, never from the model's whims.
 

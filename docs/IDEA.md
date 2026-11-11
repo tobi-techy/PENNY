@@ -85,6 +85,7 @@ Penny should feel like someone, not a form. Each agent has:
 - **Moods**: idle, thinking, win, wink, blocked, paused, done. They are set by events, not invented. They change the wording, the tapbacks and the card art.
 - **Memory**: private memory of your preferences, people and patterns, stored on our backend, with inference on NEAR AI Cloud.
 - **Reflection**: every Sunday Penny reviews the week, tells you what it learned and logs any change to its soul in a changelog you can read.
+- **Instinct**: Penny remembers the one thing you left open and texts you about it once, in daylight, with an easy out. Reply and she moves on; silence makes her quieter; "be quiet" stops it completely.
 
 Two hard rules:
 
