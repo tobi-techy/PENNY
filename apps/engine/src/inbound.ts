@@ -176,9 +176,25 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
   // One thought per bubble. Long answers become a few short texts, not a wall.
   const parts = shapeReply(reply);
   if (!parts.length) parts.push('on it.');
+  let sentAny = false;
   for (const part of parts) {
-    await d.messaging.sendText(space, part);
-    await d.messages.add({ conversationId, direction: 'outbound', text: part });
+    try {
+      await d.messaging.sendText(space, part);
+    } catch (e) {
+      // If the first bubble failed, let the webhook redeliver and retry the
+      // turn. Once one bubble is out, a redelivery would repeat it, so keep
+      // the partial delivery and log the rest.
+      if (!sentAny) throw e;
+      d.log.warn({ userId: user.id, err: (e as Error).name }, 'later reply bubble failed');
+      continue;
+    }
+    sentAny = true;
+    try {
+      await d.messages.add({ conversationId, direction: 'outbound', text: part });
+    } catch (e) {
+      // The text is already out; never resend it only because history failed.
+      d.log.warn({ userId: user.id, err: (e as Error).name }, 'reply history write failed');
+    }
   }
   // Background: remember durable facts and note what is still open. Never delays
   // the reply.

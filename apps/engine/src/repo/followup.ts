@@ -76,6 +76,14 @@ export class FollowUpRepo {
       });
   }
 
+  /** The user's IANA zone, once the learner hears it. Null = engine default. */
+  async setTimezone(userId: string, timezone: string | null, now = new Date()): Promise<void> {
+    await this.db
+      .insert(followups)
+      .values({ userId, timezone, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: followups.userId, set: { timezone, updatedAt: now } });
+  }
+
   /** Add a loop unless the same thing is already open for this user. */
   async addLoop(input: AddLoopInput, now = new Date()): Promise<LoopRow | null> {
     const open = await this.openFor(input.userId, 50);

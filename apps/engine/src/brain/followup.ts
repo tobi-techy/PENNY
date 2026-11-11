@@ -69,7 +69,7 @@ export type LearnedLoop = { when: LearnedWhen; kind: LoopKind; text: string };
  * Parse the learner's proactive lines:
  *   loop | tomorrow | book the dentist
  *   loop | in 2 days | goal | save for a bike
- * Anything malformed is ignored. At most two lines are kept.
+ * Anything malformed is ignored. Only the first well-formed line is kept.
  */
 export function parseLearnedLoops(text: string): LearnedLoop[] {
   const out: LearnedLoop[] = [];
@@ -83,9 +83,26 @@ export function parseLearnedLoops(text: string): LearnedLoop[] {
     if (!when) continue;
     const kind = (m[2]?.toLowerCase() ?? 'asked') as LoopKind;
     out.push({ when, kind, text: m[3].trim() });
-    if (out.length >= 2) break;
+    break;
   }
   return out;
+}
+
+/** True when the runtime accepts this as an IANA time zone. */
+export function isTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The learner's optional `zone | America/New_York` line, validated. */
+export function parseLearnedZone(text: string): string | null {
+  const m = /^\s*zone\s*\|\s*([A-Za-z0-9_+./-]{2,64})\s*$/im.exec(text);
+  const zone = m?.[1]?.trim();
+  return zone && isTimeZone(zone) ? zone : null;
 }
 
 function normalizeWhen(raw: string): LearnedWhen | null {

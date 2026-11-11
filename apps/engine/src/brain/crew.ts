@@ -15,7 +15,7 @@ import {
   type PrivacyGate,
   unverifiedStatus,
 } from './attestation.ts';
-import { parseLearnedLoops } from './followup.ts';
+import { parseLearnedLoops, parseLearnedZone } from './followup.ts';
 import type { MemoryService } from './memory.ts';
 import type { MoodService } from './mood.ts';
 import type { BotOps, MarketPort, ToolContext, ToolRegistry } from './registry.ts';
@@ -55,7 +55,11 @@ kind is preference, fact or goal. At most 3 lines. If nothing is durable, answer
 
 Then, only if the user left one thing genuinely unfinished that a good assistant would quietly follow up on, add one line:
 loop | when | short noun phrase
-when is today, tomorrow, in 2 days or next week. Use the user's own next step, or a question Penny asked that they did not answer. Never add a loop for bills, reminders, or money that is already handled. At most 1 loop line.`;
+when is today, tomorrow, in 2 days or next week. Use the user's own next step, or a question Penny asked that they did not answer. Never add a loop for bills, reminders, or money that is already handled. At most 1 loop line.
+
+If the user says where they are or what their time zone is, add one line:
+zone | IANA name
+For example, America/New_York. Only when they actually said it. At most 1 zone line.`;
 
 export type LearnedFact = { kind: 'preference' | 'fact' | 'goal'; text: string };
 
@@ -64,6 +68,7 @@ export type FollowUpOps = {
   addLoop(userId: string, learned: import('./followup.ts').LearnedLoop): Promise<unknown>;
   contextFor(userId: string): Promise<string>;
   close(userId: string, id: string, status: 'done' | 'dropped'): Promise<boolean>;
+  setTimezone(userId: string, zone: string): Promise<boolean>;
 };
 
 /** Parse the learner's `kind | text` lines; ignore anything malformed. */
@@ -210,6 +215,8 @@ export class Crew {
         await this.d.memory.remember(userId, fact.kind, fact.text);
       }
       if (!this.d.followup) return;
+      const zone = parseLearnedZone(r.text);
+      if (zone) await this.d.followup.setTimezone(userId, zone);
       let looped = false;
       for (const loop of parseLearnedLoops(r.text)) {
         if (LEARN_SECRET_RE.test(loop.text)) continue;

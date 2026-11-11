@@ -4,12 +4,15 @@ import {
   adjustScore,
   cleanProactiveText,
   FOLLOWUP_COMMAND_REPLY,
+  fallbackFollowUp,
   followupCommand,
   formatFollowUpContext,
   isQuietTime,
+  isTimeZone,
   loopDueAt,
   modeForScore,
   parseLearnedLoops,
+  parseLearnedZone,
   shouldSend,
 } from '../src/brain/followup.ts';
 import { signSpectrum } from '../src/photon/verify.ts';
@@ -58,10 +61,18 @@ describe('follow-up loops', () => {
           'nonsense',
         ].join('\n'),
       ),
-    ).toEqual([
-      { when: 'tomorrow', kind: 'asked', text: 'book the dentist' },
-      { when: 'in_2_days', kind: 'goal', text: 'save for a bike' },
-    ]);
+    ).toEqual([{ when: 'tomorrow', kind: 'asked', text: 'book the dentist' }]);
+  });
+
+  test('the learner can name the user time zone, and only a real one', () => {
+    expect(parseLearnedZone('preference | likes tea\nzone | America/New_York')).toBe(
+      'America/New_York',
+    );
+    expect(parseLearnedZone('zone | Africa/Lagos')).toBe('Africa/Lagos');
+    expect(parseLearnedZone('zone | Not/AZone')).toBeNull();
+    expect(parseLearnedZone('zone | new york')).toBeNull();
+    expect(isTimeZone('Europe/London')).toBe(true);
+    expect(isTimeZone('Europe/Nowhere')).toBe(false);
   });
 
   test('due times land at 09:00 local', () => {
@@ -79,6 +90,27 @@ describe('follow-up loops', () => {
     });
     expect(offerLoop('guard says no.')).toBeNull();
     expect(offerLoop('what can i do?')).toBeNull();
+  });
+
+  test('a learned time zone drives the follow-up clock', async () => {
+    const t = await makeEngine();
+    try {
+      const u = await enrolledUser(t);
+      expect(await t.engine.services.proactive.setTimezone(u.userId, 'America/New_York')).toBe(
+        true,
+      );
+      expect((await t.engine.repos.followup.settings(u.userId)).timezone).toBe('America/New_York');
+      const loop = await t.engine.services.proactive.addLoop(u.userId, {
+        when: 'tomorrow',
+        kind: 'asked',
+        text: 'book the dentist',
+      });
+      // 09:00 in New York (EST) is 14:00 UTC.
+      expect(loop?.dueAt.toISOString()).toBe('2026-11-06T14:00:00.000Z');
+      expect(await t.engine.services.proactive.setTimezone(u.userId, 'Not/AZone')).toBe(false);
+    } finally {
+      await t.db.close();
+    }
   });
 
   test('a duplicate open loop is not added twice', async () => {
@@ -185,6 +217,23 @@ describe('follow-up copy', () => {
     expect(cleanProactiveText('a'.repeat(400))?.length).toBeLessThanOrEqual(240);
   });
 
+  test('the fallback is cleaned like any other proactive text', () => {
+    const text = cleanProactiveText(
+      fallbackFollowUp(
+        {
+          id: 'loop_1',
+          kind: 'asked',
+          summary: 'reply to ada 🎉 at https://bad.test/x',
+          dueAt: new Date('2026-11-06T08:00:00Z'),
+        },
+        50,
+      ),
+    );
+    expect(text).toContain('reply to ada');
+    expect(text).not.toContain('🎉');
+    expect(text).not.toContain('https://');
+  });
+
   test('the live prompt gets loops, ids, and autonomy as data', () => {
     const text = formatFollowUpContext({
       score: 50,
@@ -277,7 +326,7 @@ describe('follow-up in the engine', () => {
     expect(t.messaging.texts).toHaveLength(1);
   });
 
-  test('a failed send releases the loop for the next tick', async () => {
+  test('a failed send backs off instead of retrying every minute', async () => {
     t = await makeEngine({ chat: scriptedModel([{ text: 'hey, still want me to book it?' }]) });
     const u = await enrolledUser(t);
     await t.engine.repos.users.conversationFor(u.userId, u.space.spaceId, 'iMessage', null);
@@ -287,15 +336,26 @@ describe('follow-up in the engine', () => {
       summary: 'book the dentist',
       dueAt: new Date('2026-11-05T09:00:00Z'),
     });
-    t.clock.now = new Date('2026-11-05T10:00:00Z');
+    const now = new Date('2026-11-05T10:00:00Z');
+    t.clock.now = now;
+    const original = t.messaging.sendText.bind(t.messaging);
     t.messaging.sendText = async () => {
       throw new Error('messaging down');
     };
+    expect((await t.engine.services.proactive.tick(now)).sent).toBe(0);
+    const [held] = await t.engine.repos.followup.openFor(u.userId);
+    expect(held?.id).toBe(loop?.id);
+    expect(held?.nudgeCount).toBe(0);
+    expect(held?.lastNudgedAt).toBeNull();
+    expect(held?.dueAt.getTime()).toBe(now.getTime() + 15 * 60_000);
+
+    // Before the backoff expires the loop is not due, so no model call.
+    t.clock.now = new Date(now.getTime() + 14 * 60_000);
     expect((await t.engine.services.proactive.tick(t.clock.now)).sent).toBe(0);
-    const [stillOpen] = await t.engine.repos.followup.openFor(u.userId);
-    expect(stillOpen?.id).toBe(loop?.id);
-    expect(stillOpen?.nudgeCount).toBe(0);
-    expect(stillOpen?.lastNudgedAt).toBeNull();
+
+    t.messaging.sendText = original;
+    t.clock.now = new Date(now.getTime() + 16 * 60_000);
+    expect((await t.engine.services.proactive.tick(t.clock.now)).sent).toBe(1);
   });
 
   test('quiet mode and quiet hours both hold the message back', async () => {

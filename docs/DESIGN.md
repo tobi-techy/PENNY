@@ -57,7 +57,7 @@ Penny texts like a person, not a help desk.
 Penny can start a thread, but only about something real and still open. The rules are part of the product, not the model's mood.
 
 - **One thing, once.** A follow-up names one open thread in the user's words ("still want me to book the dentist?"), gives an easy out ("no rush"), and never says "just following up".
-- **Daylight only.** Nothing proactive between 20:00 and 08:00 local. One follow-up a day by default, two at most. Never while the user is actively talking.
+- **Daylight only.** Nothing proactive between 20:00 and 08:00 in the user's time zone. Penny learns the zone when the user says where they are; until then she uses `PENNY_TIMEZONE` (Africa/Lagos by default). One follow-up a day by default, two at most. Never while the user is actively talking.
 - **Let it go.** No answer means the loop goes quiet. Two unanswered nudges and Penny drops it. A reply raises her autonomy; silence lowers it.
 - **The user is in charge.** "be quiet" stops proactive texts, "be normal" restores the default, "be more proactive" allows up to two a day. These are commands, handled without the model.
 - **Never on money.** A follow-up may remind the user that a card is waiting, but it never claims a move happened, never retries a failed action, and never replaces Guard or Face ID.

@@ -13,6 +13,7 @@ import {
   type FollowUpMode,
   fallbackFollowUp,
   formatFollowUpContext,
+  isTimeZone,
   type LearnedLoop,
   loopDueAt,
   modeForScore,
@@ -27,6 +28,7 @@ const REPLY_SCORE_DELTA = 4;
 const IGNORE_SCORE_DELTA = -8;
 const DEFER_AFTER_REPLY_MS = 3 * 24 * 60 * 60_000;
 const STALE_LOOP_MS = 30 * 24 * 60 * 60_000;
+const SEND_RETRY_MS = 15 * 60_000;
 
 export type ProactiveDeps = {
   followup: FollowUpRepo;
@@ -122,6 +124,13 @@ export class ProactiveService {
     await this.d.followup.setScore(userId, scoreForMode(mode), this.d.now());
   }
 
+  /** Remember the user's zone when they say where they are. */
+  async setTimezone(userId: string, zone: string): Promise<boolean> {
+    if (!isTimeZone(zone)) return false;
+    await this.d.followup.setTimezone(userId, zone, this.d.now());
+    return true;
+  }
+
   /** The live turn settles an open thread, so no follow-up should repeat it. */
   async close(userId: string, id: string, status: 'done' | 'dropped'): Promise<boolean> {
     return this.d.followup.close(userId, id, status, this.d.now());
@@ -213,8 +222,24 @@ export class ProactiveService {
     try {
       await this.d.messaging.sendText(space.space, text);
     } catch (e) {
-      this.d.log.warn({ err: (e as Error).name, userId }, 'proactive text failed; will retry');
-      await this.d.followup.release(chosen.id, now);
+      this.d.log.warn({ err: (e as Error).name, userId }, 'proactive text failed; backing off');
+      // Do not let a dead messaging port trigger a model call every minute.
+      // Push the loop out and release it; the next tick after the backoff
+      // can claim it again.
+      try {
+        await this.d.followup.defer(
+          userId,
+          [chosen.id],
+          new Date(now.getTime() + SEND_RETRY_MS),
+          now,
+        );
+        await this.d.followup.release(chosen.id, now);
+      } catch (backoffError) {
+        this.d.log.warn(
+          { err: (backoffError as Error).name, userId, loopId: chosen.id },
+          'proactive backoff write failed',
+        );
+      }
       return false;
     }
     try {
@@ -278,14 +303,16 @@ export class ProactiveService {
       return cleanProactiveText(r.text);
     } catch (e) {
       this.d.log.warn({ err: (e as Error).name }, 'proactive composition failed; using fallback');
-      return fallbackFollowUp(
-        {
-          id: input.chosen.id,
-          kind: input.chosen.kind,
-          summary: input.chosen.summary,
-          dueAt: input.chosen.dueAt,
-        },
-        input.score,
+      return cleanProactiveText(
+        fallbackFollowUp(
+          {
+            id: input.chosen.id,
+            kind: input.chosen.kind,
+            summary: input.chosen.summary,
+            dueAt: input.chosen.dueAt,
+          },
+          input.score,
+        ),
       );
     }
   }
