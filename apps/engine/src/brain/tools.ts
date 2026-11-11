@@ -291,6 +291,19 @@ export function builtinTools(): ToolDef<never>[] {
     execute: async (ctx, i) => ctx.memory.recall(ctx.userId, i.query, 5),
   });
   add({
+    id: 'close_open_loop',
+    description:
+      'Close an open follow-up from your follow-up list once the user has settled it (done) or said to drop it. Use the loop id shown in your context.',
+    risk: 'read', // Penny's own memory; no outside effect
+    input: z
+      .object({ loopId: z.string().min(1).max(80), status: z.enum(['done', 'dropped']) })
+      .strict(),
+    execute: async (ctx, i) =>
+      ctx.followup
+        ? { ok: await ctx.followup.close(ctx.userId, i.loopId, i.status) }
+        : { ok: false, error: 'follow-up tracking is not set up' },
+  });
+  add({
     id: 'set_mood',
     description: 'Show a playful wink. Mood never changes money rules.',
     risk: 'read',

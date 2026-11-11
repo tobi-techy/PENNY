@@ -1,5 +1,5 @@
 {
-  "id": "ca5b6217-fea6-4e44-8515-b323593a353e",
+  "id": "3449791c-bc48-4e05-b6c1-aa285a3282af",
   "prevId": "1d07e604-c49c-4361-98d8-48218c86f4a9",
   "version": "7",
   "dialect": "postgresql",
@@ -526,12 +526,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "commitment_id": {
-          "name": "commitment_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -582,21 +576,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "bills_commitment_idx": {
-          "name": "bills_commitment_idx",
-          "columns": [
-            {
-              "expression": "commitment_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -606,19 +585,6 @@
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "bills_commitment_id_commitments_id_fk": {
-          "name": "bills_commitment_id_commitments_id_fk",
-          "tableFrom": "bills",
-          "tableTo": "commitments",
-          "columnsFrom": [
-            "commitment_id"
           ],
           "columnsTo": [
             "id"
@@ -962,345 +928,6 @@
         "cards_user_id_users_id_fk": {
           "name": "cards_user_id_users_id_fk",
           "tableFrom": "cards",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.commitment_events": {
-      "name": "commitment_events",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "commitment_id": {
-          "name": "commitment_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "detail": {
-          "name": "detail",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "commitment_events_idx": {
-          "name": "commitment_events_idx",
-          "columns": [
-            {
-              "expression": "commitment_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "commitment_events_commitment_id_commitments_id_fk": {
-          "name": "commitment_events_commitment_id_commitments_id_fk",
-          "tableFrom": "commitment_events",
-          "tableTo": "commitments",
-          "columnsFrom": [
-            "commitment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "commitment_events_user_id_users_id_fk": {
-          "name": "commitment_events_user_id_users_id_fk",
-          "tableFrom": "commitment_events",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.commitments": {
-      "name": "commitments",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "biller_id": {
-          "name": "biller_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "payee_name": {
-          "name": "payee_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "currency": {
-          "name": "currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cadence": {
-          "name": "cadence",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cadence_days": {
-          "name": "cadence_days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_bill_id": {
-          "name": "last_bill_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_amount": {
-          "name": "last_amount",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_due_on": {
-          "name": "last_due_on",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_received_on": {
-          "name": "last_received_on",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "next_expected_on": {
-          "name": "next_expected_on",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "seen_count": {
-          "name": "seen_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "paid_count": {
-          "name": "paid_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "last_paid_at": {
-          "name": "last_paid_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_paid_amount": {
-          "name": "last_paid_amount",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_receipt_tx": {
-          "name": "last_receipt_tx",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "last_expected_for": {
-          "name": "last_expected_for",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_missing_for": {
-          "name": "last_missing_for",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_follow_up_at": {
-          "name": "last_follow_up_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "commitments_user_key_uq": {
-          "name": "commitments_user_key_uq",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "commitments_user_status_idx": {
-          "name": "commitments_user_status_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "commitments_followup_idx": {
-          "name": "commitments_followup_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "next_expected_on",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "commitments_user_id_users_id_fk": {
-          "name": "commitments_user_id_users_id_fk",
-          "tableFrom": "commitments",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
@@ -1938,6 +1565,80 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.followups": {
+      "name": "followups",
+      "schema": "",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "score": {
+          "name": "score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 50
+        },
+        "quiet_start": {
+          "name": "quiet_start",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'20:00'"
+        },
+        "quiet_end": {
+          "name": "quiet_end",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'08:00'"
+        },
+        "timezone": {
+          "name": "timezone",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "followups_user_id_users_id_fk": {
+          "name": "followups_user_id_users_id_fk",
+          "tableFrom": "followups",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.ledger_entries": {
       "name": "ledger_entries",
       "schema": "",
@@ -2294,6 +1995,153 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.open_loops": {
+      "name": "open_loops",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'turn'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "due_at": {
+          "name": "due_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nudge_count": {
+          "name": "nudge_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_nudged_at": {
+          "name": "last_nudged_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "open_loops_user_idx": {
+          "name": "open_loops_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "due_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "open_loops_due_idx": {
+          "name": "open_loops_due_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "due_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "open_loops_user_id_users_id_fk": {
+          "name": "open_loops_user_id_users_id_fk",
+          "tableFrom": "open_loops",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.passkeys": {
       "name": "passkeys",
       "schema": "",
@@ -2415,6 +2263,134 @@
           "tableTo": "devices",
           "columnsFrom": [
             "device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.proactive_messages": {
+      "name": "proactive_messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "loop_ids": {
+          "name": "loop_ids",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "replied_at": {
+          "name": "replied_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settled_at": {
+          "name": "settled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "proactive_user_idx": {
+          "name": "proactive_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sent_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proactive_pending_idx": {
+          "name": "proactive_pending_idx",
+          "columns": [
+            {
+              "expression": "outcome",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sent_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "proactive_messages_user_id_users_id_fk": {
+          "name": "proactive_messages_user_id_users_id_fk",
+          "tableFrom": "proactive_messages",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
           ],
           "columnsTo": [
             "id"

@@ -21,6 +21,7 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   connect_app: false, // sends the user a link to connect; acts only after they do it themselves
   remember: false,
   recall: false,
+  close_open_loop: false, // settles Penny's own follow-up list
   set_mood: false,
   read_github: false,
   read_x: false,

@@ -1,9 +1,11 @@
 import type { SpectrumMessagesEvent } from '@penny/shared';
 import type { ApprovalService } from './approvals/service.ts';
 import type { Crew } from './brain/crew.ts';
+import { FOLLOWUP_COMMAND_REPLY, type FollowUpMode, followupCommand } from './brain/followup.ts';
 import type { RateLimiter } from './http/security.ts';
 import type { Logger } from './lib/logger.ts';
 import { hasEmoji, stripEmoji, stripExternalLinks, toPlainText, urlsIn } from './lib/plain-text.ts';
+import { shapeReply } from './lib/reply.ts';
 import type { OnboardingService } from './onboarding.ts';
 import type { MessagingPort, SpaceRef } from './ports/messaging.ts';
 import type { MessagesRepo } from './repo/bots.ts';
@@ -19,6 +21,11 @@ export type InboundDeps = {
   log: Logger;
   /** Freeze / unfreeze. Absent in a few unit tests. */
   approvals?: ApprovalService;
+  /** Open-loop tracking and quiet/normal/eager commands. Absent in unit tests. */
+  proactive?: {
+    setMode(userId: string, mode: FollowUpMode): Promise<void>;
+    onInbound(userId: string): Promise<void>;
+  };
 };
 
 export { WELCOME_TEXT } from './onboarding.ts';
@@ -96,6 +103,25 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     return;
   }
 
+  // A reply to a nudge counts before anything else happens: it calibrates how
+  // often Penny texts first and pushes that open loop out of the way.
+  if (d.proactive) {
+    try {
+      await d.proactive.onInbound(user.id);
+    } catch {
+      d.log.warn({ userId: user.id }, 'follow-up reply tracking failed');
+    }
+  }
+
+  const followup = d.proactive ? followupCommand(text) : null;
+  if (followup && d.proactive) {
+    await d.proactive.setMode(user.id, followup);
+    const reply = FOLLOWUP_COMMAND_REPLY[followup];
+    await d.messaging.sendText(space, reply);
+    await d.messages.add({ conversationId, direction: 'outbound', text: reply });
+    return;
+  }
+
   // Everyone's first text gets a short welcome; then Penny answers what they
   // actually said (a bare "hi" gets a first thing to try instead). No setup
   // link up front: it goes out on its own when something needs approval.
@@ -147,8 +173,30 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
   // Penny mirrors emoji only when the user used one first; otherwise drop them.
   const styled = hasEmoji(text) ? linked : stripEmoji(linked);
   const reply = connectLine || styled;
-  await d.messaging.sendText(space, reply);
-  await d.messages.add({ conversationId, direction: 'outbound', text: reply });
-  // Background: remember durable facts from this turn. Never delays the reply.
-  void d.crew.learnFromTurn(user.id, text);
+  // One thought per bubble. Long answers become a few short texts, not a wall.
+  const parts = shapeReply(reply);
+  if (!parts.length) parts.push('on it.');
+  let sentAny = false;
+  for (const part of parts) {
+    try {
+      await d.messaging.sendText(space, part);
+    } catch (e) {
+      // If the first bubble failed, let the webhook redeliver and retry the
+      // turn. Once one bubble is out, a redelivery would repeat it, so keep
+      // the partial delivery and log the rest.
+      if (!sentAny) throw e;
+      d.log.warn({ userId: user.id, err: (e as Error).name }, 'later reply bubble failed');
+      continue;
+    }
+    sentAny = true;
+    try {
+      await d.messages.add({ conversationId, direction: 'outbound', text: part });
+    } catch (e) {
+      // The text is already out; never resend it only because history failed.
+      d.log.warn({ userId: user.id, err: (e as Error).name }, 'reply history write failed');
+    }
+  }
+  // Background: remember durable facts and note what is still open. Never delays
+  // the reply.
+  void d.crew.learnFromTurn(user.id, text, parts.join(' '));
 }

@@ -112,7 +112,7 @@ On both networks the bill card shows `$5.00 in USDC`; on testnet that token is t
 
 ### Deploy notes
 
-- **Migrations.** A fresh database runs `0000..0010` at boot, ending with the last migration (`0010`), which is additive. An environment that already ran an earlier shape of this branch's migrations must be dropped and recreated: the merged journal renumbers them, so drizzle skips main's `0005`/`0006`/`0007` or a later step fails on a missing column. There is no repair path; only a fresh database is supported. See `apps/engine/README.md`.
+- **Migrations.** A fresh database runs `0000..0011` at boot, ending with `0011` (recurring commitments); `0010` adds the follow-up loop. Both are additive. An environment that already ran an earlier shape of this branch's migrations must be dropped and recreated: the merged journal renumbers them, so drizzle skips main's `0005`/`0006`/`0007` or a later step fails on a missing column. There is no repair path; only a fresh database is supported. See `apps/engine/README.md`.
 
 ## Safety defaults
 
