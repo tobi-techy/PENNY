@@ -158,6 +158,13 @@ Rules:
 ### Invest
 Pick a portfolio card → tap one → Invest card → Face ID → steps → done. If the quote expires, the pill becomes "Get a new quote".
 
+### Recurring bills
+1. First bill: "new bill: DStv: ₦18,400, due sat 14 nov. i'll remind you, and watch for the next one."
+2. Next month: "DStv again: ₦18,400, due sat 14 nov. same as last month. i'll remind you." A price change replaces the middle sentence with "that's ₦3,000 more than last month."
+3. After face ID: "paid. DStv, ₦18,400. i've crossed it off and cancelled the reminder. next one expected around tue 8 dec."
+4. If the next bill never arrives, one check at 09:00: "i expected your DStv bill around tue 8 dec. nothing in your inbox yet. if it's gone for good, say stop watching DStv." A few days later, one quieter line: "still no DStv bill. i'll leave it here in case it's late."
+5. "stop watching DStv" pauses it. The receipt and the list stay; nothing is deleted.
+
 ### Guard block
 Guard card replaces the money card. "Not me" freezes the agent and asks you to review. "Allow once" needs Face ID and logs it.
 

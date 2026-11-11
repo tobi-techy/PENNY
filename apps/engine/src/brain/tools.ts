@@ -49,6 +49,11 @@ async function propose(ctx: ToolContext, plan: MoneyPlan) {
 
 const empty = z.object({}).strict();
 const InvestInput = z.object({ portfolioId: z.enum(INVEST_ASSETS), amountUsd: Decimal }).strict();
+const ManageCommitmentsInput = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('list') }).strict(),
+  z.object({ action: z.literal('pause'), name: z.string().min(1).max(80) }).strict(),
+  z.object({ action: z.literal('resume'), name: z.string().min(1).max(80) }).strict(),
+]);
 /** Accepts both `2026-11-14T18:00:00+01:00` and minute precision `2026-11-14T18:00+01:00`. */
 const ReminderAt = z
   .string()
@@ -115,7 +120,7 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'find_bills',
     description:
-      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail; it sends the card.",
+      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. A bill with repeat true is the same obligation as before: say so and use its comparison instead of calling it new. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail; it sends the card.",
     risk: 'read',
     input: empty,
     execute: async (ctx) => {
@@ -127,18 +132,42 @@ export function builtinTools(): ToolDef<never>[] {
       return {
         ok: true,
         newCount: r.newBills.length,
-        bills: open.map((b) => ({ ...b, isNew: fresh.has(b.billId) })),
+        bills: open.map((b) => {
+          const c = r.contexts[b.billId];
+          return {
+            ...b,
+            isNew: fresh.has(b.billId),
+            ...(c?.repeat
+              ? { repeat: true, ...(c.repeatLine ? { comparison: c.repeatLine } : {}) }
+              : {}),
+          };
+        }),
       };
     },
   });
   add({
     id: 'list_bills',
     description:
-      'List open bills Penny already knows about (no inbox read). Soonest due first. Use find_bills to check the inbox for new ones.',
+      'List open bills Penny already knows about (no inbox read). Soonest due first. Use find_bills to check the inbox for new ones, and manage_commitments for the recurring obligations behind them.',
     risk: 'read',
     input: empty,
     execute: async (ctx) =>
       ctx.bills ? { ok: true, bills: await ctx.bills.open(ctx.userId) } : { ok: false },
+  });
+  add({
+    id: 'manage_commitments',
+    description:
+      "See and control the recurring bills Penny watches between emails (DStv, rent, power). list names every obligation with the last amount, rhythm and next expected date. pause stops all unprompted follow-ups for one; resume starts them again. This only changes Penny's own watching: no money moves, and the user does not need Face ID.",
+    risk: 'read',
+    input: ManageCommitmentsInput,
+    execute: async (ctx, i) => {
+      if (!ctx.commitments) return { ok: false, text: 'commitments are not set up' };
+      if (i.action === 'list')
+        return { ok: true, text: await ctx.commitments.describe(ctx.userId) };
+      return i.action === 'pause'
+        ? ctx.commitments.pause(ctx.userId, i.name)
+        : ctx.commitments.resume(ctx.userId, i.name);
+    },
   });
   add({
     id: 'close_bill',

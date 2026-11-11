@@ -106,6 +106,7 @@ export type CrewDeps = {
   /** NEAR AI TEE attestation gate (NEARAI_ATTESTATION); absent or mode off = no change. */
   privacy?: PrivacyGate;
   bills?: BillsService;
+  commitments?: import('../commitments/service.ts').CommitmentsService;
   onboarding?: OnboardingService;
   /** User-facing time zone for "now" and reminders (default Africa/Lagos). */
   timeZone?: string;
@@ -123,7 +124,13 @@ export type CrewReply = {
 };
 
 /** Read tools that still touch mail content, so they are gated like money and mail tools. */
-const UNGATED_READ_EXCEPTIONS = new Set(['find_bills', 'list_bills', 'close_bill', 'draft_email']);
+const UNGATED_READ_EXCEPTIONS = new Set([
+  'find_bills',
+  'list_bills',
+  'manage_commitments',
+  'close_bill',
+  'draft_email',
+]);
 
 export type HistoryMessage = { direction: 'inbound' | 'outbound'; text: string };
 
@@ -332,6 +339,7 @@ export class Crew {
       approvals: this.d.approvals,
       ...(this.d.connectors ? { connectors: this.d.connectors } : {}),
       ...(this.d.bills ? { bills: this.d.bills } : {}),
+      ...(this.d.commitments ? { commitments: this.d.commitments } : {}),
       ...(this.d.onboarding ? { onboarding: this.d.onboarding } : {}),
       memory: this.d.memory,
       mood: this.d.mood,

@@ -1,4 +1,4 @@
-import type { GuardContract, TxSigner } from '@penny/chain';
+import type { GuardContract, GuardPolicyView, TxSigner } from '@penny/chain';
 import { type Approval, type MoneyPlan, type NearAction, toBaseUnits } from '@penny/shared';
 
 /**
@@ -6,6 +6,15 @@ import { type Approval, type MoneyPlan, type NearAction, toBaseUnits } from '@pe
  * packages/chain. Engine code depends on this interface, never on near-js.
  */
 export type VerifyResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * The read side of the shared Guard contract the engine needs to check a spend.
+ * A real GuardContract satisfies it; tests use FakeGuard.
+ */
+export type GuardView = Pick<
+  GuardContract,
+  'contractId' | 'getTokens' | 'getPolicy' | 'getSpentToday' | 'isPausedAll'
+>;
 
 export type RelayResult =
   | { ok: true; txHash: string; dryRun: boolean }
@@ -53,10 +62,59 @@ export interface ChainPort {
   ): Promise<{ nonce: string; maxBlockHeight: string }>;
   /**
    * Client for the configured shared Guard contract. Undefined when
-   * PENNY_GUARD_CONTRACT is unset (on-chain autopilot off). The owner account is
-   * passed to each owner-scoped call, not derived per user.
+   * PENNY_GUARD_CONTRACT is unset (the shared Guard check is off). The owner
+   * account is passed to each owner-scoped call, not derived per user.
    */
-  guardFor?(ownerAccountId: string, ownerSigner?: TxSigner): GuardContract | undefined;
+  guardFor?(ownerAccountId: string, ownerSigner?: TxSigner): GuardView | undefined;
+}
+
+/** In-memory shared Guard for tests and DRY_RUN dev. Never touches a network. */
+export class FakeGuard implements GuardView {
+  contractId = 'guard.penny.testnet';
+  pausedAll = false;
+  /** dollar token the fake shared Guard was initialised with */
+  tokens: string[] = ['tusd.penny.testnet'];
+  /** "owner|agent" -> policy, unset = no policy */
+  policies = new Map<string, GuardPolicyView | null>();
+  /** "owner|agent|token" -> base units spent today */
+  spentToday = new Map<string, string>();
+  /** Method name to make throw (a flaky or unavailable RPC), or null. */
+  fail: string | null = null;
+
+  private maybeFail(method: string) {
+    if (this.fail === method) throw new Error(`${method} unavailable`);
+  }
+
+  setPolicy(owner: string, agent: string, policy: GuardPolicyView | null) {
+    this.policies.set(`${owner}|${agent}`, policy);
+    return this;
+  }
+
+  setSpentToday(owner: string, agent: string, token: string, amount: string) {
+    this.spentToday.set(`${owner}|${agent}|${token}`, amount);
+    return this;
+  }
+
+  async getTokens(): Promise<string[]> {
+    this.maybeFail('getTokens');
+    return this.tokens;
+  }
+
+  async getPolicy(ownerAccountId: string, agentId: string): Promise<GuardPolicyView | null> {
+    this.maybeFail('getPolicy');
+    return this.policies.get(`${ownerAccountId}|${agentId}`) ?? null;
+  }
+
+  async getSpentToday(ownerAccountId: string, agentId: string, token: string): Promise<string> {
+    this.maybeFail('getSpentToday');
+    return this.spentToday.get(`${ownerAccountId}|${agentId}|${token}`) ?? '0';
+  }
+
+  async isPausedAll(ownerAccountId: string): Promise<boolean> {
+    this.maybeFail('isPausedAll');
+    void ownerAccountId;
+    return this.pausedAll;
+  }
 }
 
 /** Deterministic fake for tests and DRY_RUN dev. Never touches a network. */
@@ -68,6 +126,12 @@ export class FakeChain implements ChainPort {
   nextRelay: RelayResult | null = null;
   statuses = new Map<string, TxStatus>();
   accounts = new Map<string, string>();
+  /** Set to exercise the shared Guard gate; unset keeps on-chain checks off. */
+  guard: FakeGuard | null = null;
+
+  guardFor(_ownerAccountId: string): GuardView | undefined {
+    return this.guard ?? undefined;
+  }
 
   async verifyDelegateAction(approval: Approval, b64: string): Promise<VerifyResult> {
     this.verifyCalls.push(approval.id);

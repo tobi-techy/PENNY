@@ -6,7 +6,10 @@ import { newId } from '../lib/ids.ts';
 export type BillRow = typeof bills.$inferSelect;
 export type BillStatus = BillRow['status'];
 
-export type NewBill = Omit<BillRow, 'id' | 'userId' | 'status' | 'notifiedAt' | 'createdAt'>;
+export type NewBill = Omit<
+  BillRow,
+  'id' | 'userId' | 'status' | 'notifiedAt' | 'commitmentId' | 'createdAt'
+>;
 
 export class BillsRepo {
   constructor(private readonly db: Db) {}
@@ -54,6 +57,14 @@ export class BillsRepo {
   async markNotified(ids: string[], at: Date): Promise<void> {
     if (!ids.length) return;
     await this.db.update(bills).set({ notifiedAt: at }).where(inArray(bills.id, ids));
+  }
+
+  /** Attach a bill to its recurring commitment once; never re-points a linked bill. */
+  async linkCommitment(userId: string, id: string, commitmentId: string): Promise<void> {
+    await this.db
+      .update(bills)
+      .set({ commitmentId })
+      .where(and(eq(bills.id, id), eq(bills.userId, userId), isNull(bills.commitmentId)));
   }
 
   /** Open bills the user has not been told about yet (a failed text is retried). */

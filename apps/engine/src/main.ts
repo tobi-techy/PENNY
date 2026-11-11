@@ -180,6 +180,7 @@ const engine = createEngine({
   ...(env.PENNY_PROVE_SECRET ? { proveSecret: env.PENNY_PROVE_SECRET } : {}),
   explorerBaseUrl:
     env.NEAR_NETWORK === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io',
+  appAccountId: env.NEAR_APP_ACCOUNT_ID,
   ...(env.PENNY_ENV === 'mainnet'
     ? {
         mainnetMaxPerTxUsd: env.PENNY_MAINNET_MAX_PER_TX_USD,

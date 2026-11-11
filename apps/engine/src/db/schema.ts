@@ -555,12 +555,95 @@ export const bills = pgTable(
       .notNull()
       .default('open'),
     notifiedAt: ts('notified_at'),
+    /** The recurring obligation this bill belongs to, when Penny has seen one before. */
+    commitmentId: text('commitment_id').references(() => commitments.id),
     createdAt: createdAt(),
   },
   (t) => [
     uniqueIndex('bills_user_source_uq').on(t.userId, t.sourceKey),
     index('bills_user_status_idx').on(t.userId, t.status),
+    index('bills_commitment_idx').on(t.commitmentId),
   ],
+);
+
+/**
+ * One recurring obligation per biller (or payee when the biller is unknown):
+ * the thing that survives from the first email to the next bill, the receipt,
+ * and the month after. Penny follows up on it unprompted. It moves no money.
+ */
+export const commitments = pgTable(
+  'commitments',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    /** Stable identity: biller:<id> or payee:<normalized name>:<currency>. */
+    key: text('key').notNull(),
+    billerId: text('biller_id'),
+    payeeName: text('payee_name').notNull(),
+    currency: text('currency', { enum: ['NGN', 'USD'] }),
+    /** Inferred from the gap between bill emails: weekly, monthly or yearly. */
+    cadence: text('cadence', { enum: ['weekly', 'monthly', 'yearly'] }),
+    /** The observed gap in days, for "last month" wording and diagnostics. */
+    cadenceDays: integer('cadence_days'),
+    lastBillId: text('last_bill_id'),
+    lastAmount: text('last_amount'),
+    lastDueOn: text('last_due_on'),
+    /** YYYY-MM-DD of the latest bill email, used to predict the next one. */
+    lastReceivedOn: text('last_received_on'),
+    /** The date the next bill email is expected, YYYY-MM-DD. */
+    nextExpectedOn: text('next_expected_on'),
+    seenCount: integer('seen_count').notNull().default(1),
+    paidCount: integer('paid_count').notNull().default(0),
+    lastPaidAt: ts('last_paid_at'),
+    lastPaidAmount: text('last_paid_amount'),
+    lastReceiptTx: text('last_receipt_tx'),
+    status: text('status', { enum: ['active', 'paused'] })
+      .notNull()
+      .default('active'),
+    /** The expected date already texted about, so one cycle never repeats. */
+    lastExpectedFor: text('last_expected_for'),
+    /** The expected date already marked late, so the nudge is sent once. */
+    lastMissingFor: text('last_missing_for'),
+    lastFollowUpAt: ts('last_follow_up_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('commitments_user_key_uq').on(t.userId, t.key),
+    index('commitments_user_status_idx').on(t.userId, t.status),
+    index('commitments_followup_idx').on(t.status, t.nextExpectedOn),
+  ],
+);
+
+/** Append-only history of what Penny noticed and did for each commitment. */
+export const commitmentEvents = pgTable(
+  'commitment_events',
+  {
+    id: text('id').primaryKey(),
+    commitmentId: text('commitment_id')
+      .notNull()
+      .references(() => commitments.id),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    kind: text('kind', {
+      enum: [
+        'opened',
+        'bill',
+        'amount_changed',
+        'paid',
+        'expected',
+        'missing',
+        'paused',
+        'resumed',
+      ],
+    }).notNull(),
+    detail: jsonb('detail').$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('commitment_events_idx').on(t.commitmentId, t.createdAt)],
 );
 
 /**
@@ -613,5 +696,7 @@ export const schema = {
   idempotencyKeys,
   webhookEvents,
   bills,
+  commitments,
+  commitmentEvents,
   connectWatches,
 };

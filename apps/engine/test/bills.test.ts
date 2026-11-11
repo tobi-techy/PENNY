@@ -353,7 +353,11 @@ describe('bills + reminders (engine)', () => {
       (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(sent[0]?.card.url)),
     );
     expect(card?.type).toBe('found');
-    expect(card?.lines.map((l) => l.value)).toEqual(['sat 14 nov', 'scheduled']);
+    expect(card?.lines.map((l) => l.value)).toEqual([
+      'sat 14 nov',
+      'scheduled',
+      "i'll remind you, and watch for the next one.",
+    ]);
     expect(sent[0]?.card.caption).not.toContain('IKEDC');
     await t.engine.services.bills.scanAll();
     expect(found()).toHaveLength(1);

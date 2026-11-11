@@ -31,6 +31,12 @@ import type { MoodService } from '../brain/mood.ts';
 import type { CardSender } from '../cards/sender.ts';
 import { writeTargetProblem } from '../connectors/composio.ts';
 import {
+  evaluateOnChainGuard,
+  GUARD_UNREADABLE,
+  guardAgentId,
+  OnChainPolicyView,
+} from '../guard/onchain.ts';
+import {
   evaluate,
   type GuardContext,
   type GuardPolicy,
@@ -165,6 +171,11 @@ export type ApprovalDeps = {
   ) => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** A new-bot card was replaced by a fresh one: the bot follows the new approval. */
   onBotReissued?: (fromApprovalId: string, toApprovalId: string) => Promise<void>;
+  /**
+   * App account the crew's agent sub-accounts hang off (NEAR_APP_ACCOUNT_ID).
+   * Used to name the agent whose on-chain Guard allowance is checked.
+   */
+  appAccountId?: string;
 };
 
 export function toApprovalDto(r: ApprovalRow): Approval {
@@ -523,7 +534,78 @@ export class ApprovalService {
     extra: Partial<GuardContext> = {},
   ): Promise<GuardResult> {
     const policy = await this.effectivePolicy(userId);
-    return evaluate(plan, policy, await this.guardContext(userId, bot, extra));
+    const g = evaluate(plan, policy, await this.guardContext(userId, bot, extra));
+    if (g.decision === 'block') return g;
+    // The shared Guard contract is a second gate: the owner's on-chain allowance
+    // for the agent handling this move must let it through too. Unset = no check.
+    const onChain = await this.onChainGuardBlock(userId, plan, bot);
+    if (onChain.length > 0)
+      return { decision: 'block', reasons: onChain, amountMicrosUsd: g.amountMicrosUsd };
+    return g;
+  }
+
+  /**
+   * Read the shared Guard contract and return why it would refuse this move.
+   * Empty when the contract is unset (the shared Guard check is off) or allows
+   * the move. Any read or parse failure blocks: the claim is that Guard checks
+   * the contract, so "couldn't check" must never mean "went ahead".
+   */
+  private async onChainGuardBlock(
+    userId: string,
+    plan: MoneyPlan,
+    bot: BotRow | null,
+    ownerAccountId?: string,
+  ): Promise<string[]> {
+    const guardFor = this.d.chain.guardFor;
+    if (!guardFor) return [];
+    const owner = ownerAccountId ?? (await this.d.users.byId(userId))?.accountId;
+    if (!owner) return [];
+    try {
+      const guard = guardFor.call(this.d.chain, owner);
+      if (!guard) return [];
+      const agentAccountId = guardAgentId(bot?.slug, this.d.appAccountId ?? 'penny.near');
+      if (!agentAccountId) return [GUARD_UNREADABLE];
+      const [tokens, pausedAll, rawPolicy] = await Promise.all([
+        guard.getTokens(),
+        guard.isPausedAll(owner),
+        guard.getPolicy(owner, agentAccountId),
+      ]);
+      // contracts/guard initialises a single shared dollar token for life. More
+      // than one would leave the engine guessing which one this plan uses.
+      const token = Array.isArray(tokens) && tokens.length === 1 ? tokens[0] : null;
+      if (typeof token !== 'string' || token.length === 0) return [GUARD_UNREADABLE];
+      if (rawPolicy === null) {
+        return evaluateOnChainGuard({
+          now: this.d.now(),
+          contractId: guard.contractId,
+          agentAccountId,
+          agentName: bot?.name ?? 'Penny',
+          token,
+          pausedAll,
+          policy: null,
+          spentToday: '0',
+          plan,
+        });
+      }
+      const parsed = OnChainPolicyView.safeParse(rawPolicy);
+      if (!parsed.success) return [GUARD_UNREADABLE];
+      const spentToday = await guard.getSpentToday(owner, agentAccountId, token);
+      if (typeof spentToday !== 'string' || !/^\d+$/.test(spentToday)) return [GUARD_UNREADABLE];
+      return evaluateOnChainGuard({
+        now: this.d.now(),
+        contractId: guard.contractId,
+        agentAccountId,
+        agentName: bot?.name ?? 'Penny',
+        token,
+        pausedAll,
+        policy: parsed.data,
+        spentToday,
+        plan,
+      });
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).name }, 'shared guard check failed');
+      return [GUARD_UNREADABLE];
+    }
   }
 
   /**
@@ -1968,25 +2050,32 @@ export class ApprovalService {
         ? { kind: 'send', asset: 'USDC', amount: fromMicros(row.amountMicros), to: plan.to }
         : plan;
     const g = evaluate(recheckPlan, policy, ctx);
-    if (g.decision === 'block') {
+    // The shared Guard is checked again against the plan as stored (never the
+    // NEAR->USDC re-check shape): its allowance is the second gate on relay.
+    const onChain =
+      g.decision === 'block'
+        ? []
+        : await this.onChainGuardBlock(row.userId, plan, bot, row.signerId);
+    const blockReasons = g.decision === 'block' ? g.reasons : onChain;
+    if (blockReasons.length > 0) {
       await this.d.guardDecisions.record({
         userId: row.userId,
         approvalId: row.id,
         plan,
         decision: 'block',
-        reasons: g.reasons,
+        reasons: blockReasons,
       });
       await this.d.approvals.transition(
         row.id,
         row.kind,
         'pending',
         'cancelled',
-        `guard re-check: ${g.reasons.join(' ')}`,
+        `guard re-check: ${blockReasons.join(' ')}`,
       );
       await this.d.ledger.setStatusForApproval(row.id, 'released');
       await this.d.mood.on(row.userId, 'guard_blocked', 'guard');
-      await this.updateCard(row.id, 'blocked', g.reasons[0] ?? 'Guard said no.');
-      throw new ApprovalError(409, 'guard_blocked', g.reasons.join(' '));
+      await this.updateCard(row.id, 'blocked', blockReasons[0] ?? 'Guard said no.');
+      throw new ApprovalError(409, 'guard_blocked', blockReasons.join(' '));
     }
     // 1b) invest: the quote must still be live and the price inside slippage, else re-card
     if (plan.kind === 'invest') await this.investPreflight(row, plan.quoteId);

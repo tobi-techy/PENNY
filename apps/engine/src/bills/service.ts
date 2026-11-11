@@ -1,4 +1,7 @@
 import { type CardButton, type MoneyPlan, toMicros } from '@penny/shared';
+import { watchSuffix } from '../commitments/copy.ts';
+import type { CommitmentsService } from '../commitments/service.ts';
+import type { BillContext } from '../commitments/types.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { MessagingPort, SpaceRef } from '../ports/messaging.ts';
@@ -91,6 +94,8 @@ export type BillsDeps = {
   approvals?: ApprovalsRepo;
   /** Every notice goes through the one card sender (found bills are cards, not bullets). */
   cards?: import('../cards/sender.ts').CardSender;
+  /** Recurring obligations behind bills. Absent in narrow unit tests. */
+  commitments?: CommitmentsService;
   /** Biller registry in force (resolveBillers); defaults to the built-in list. */
   billers?: readonly Biller[];
   /** Explorer prefix for receipts, e.g. https://testnet.nearblocks.io/txns/ */
@@ -103,7 +108,14 @@ export type BillsDeps = {
 };
 
 export type ScanResult =
-  | { ok: true; newBills: BillRow[]; reminded: string[]; open: BillRow[] }
+  | {
+      ok: true;
+      newBills: BillRow[];
+      reminded: string[];
+      open: BillRow[];
+      /** Per-bill obligation context for the text, when commitments are on. */
+      contexts: Record<string, BillContext>;
+    }
   | { ok: false; error: string };
 
 /**
@@ -161,7 +173,13 @@ export class BillsService {
     );
     const reminded: string[] = [];
     for (const b of newBills) if (await this.scheduleBillReminder(b)) reminded.push(b.id);
-    return { ok: true, newBills, reminded, open: await this.d.bills.open(userId) };
+    // Every stored bill joins (or opens) its obligation. This is local state and
+    // sends nothing; the single new-bill text below carries the recognition.
+    const contexts: Record<string, BillContext> = {};
+    if (this.d.commitments) {
+      for (const b of newBills) contexts[b.id] = await this.d.commitments.recordBill(b);
+    }
+    return { ok: true, newBills, reminded, open: await this.d.bills.open(userId), contexts };
   }
 
   private async hasBillReminder(billId: string): Promise<boolean> {
@@ -250,7 +268,8 @@ export class BillsService {
           );
           // A found bill is a card: the same anatomy as every other result. Only a
           // successful card counts as notified, so an outage retries on the next scan.
-          if (!(await this.sendNewBillsCard(userId, target, toText, reminded))) continue;
+          if (!(await this.sendNewBillsCard(userId, target, toText, reminded, r.contexts)))
+            continue;
           await this.d.bills.markNotified(
             toText.map((b) => b.id),
             now,
@@ -276,13 +295,14 @@ export class BillsService {
     target: { conversationId: string; space: SpaceRef },
     bills: BillRow[],
     reminded: ReadonlySet<string>,
+    contexts: Readonly<Record<string, BillContext | undefined>> = {},
   ): Promise<boolean> {
-    const card = newBillsCard(bills, reminded);
+    const card = newBillsCard(bills, reminded, contexts);
     return this.deliverBillsCard(
       userId,
       target,
       card,
-      newBillsText(bills, reminded),
+      newBillsText(bills, reminded, contexts),
       billButtons(bills, this.billers),
       bills.length === 1 ? bills[0]?.id : undefined,
       'found',
@@ -438,9 +458,15 @@ export class BillsService {
     if (!b) return;
     await this.d.reminders.undoForBill(b.id);
     await this.d.onBillClosed?.(userId, b.id);
+    // The obligation outlives the bill: record the payment even when there is
+    // no conversation to text, so the next cycle's copy is already right.
+    const paid = this.d.commitments
+      ? await this.d.commitments.markPaid(b, { txHash: receipt.txHash })
+      : null;
+    const nextLine = this.d.commitments?.receiptLine(paid) ?? '';
     const target = await this.d.users.primarySpace(userId);
     if (!target) return;
-    const text = `paid. ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder. the card has the receipt.`;
+    const text = `paid. ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder.${nextLine ? ` ${nextLine}` : ''} the card has the receipt.`;
     await this.d.messaging.sendText(target.space, text);
     await this.d.messages.add({
       conversationId: target.conversationId,
@@ -455,6 +481,7 @@ export class BillsService {
     await this.d.reminders.undoForBill(b.id);
     // A closed bill must not still have a card that can pay it.
     await this.d.onBillClosed?.(userId, b.id);
+    if (to === 'dismissed') await this.d.commitments?.dismiss(b);
     return { ok: true as const, bill: billView(b, this.today(), this.billers) };
   }
 
@@ -525,12 +552,14 @@ export class BillsService {
 export function newBillsCard(
   fresh: BillRow[],
   reminded: ReadonlySet<string> = new Set(),
+  contexts: Readonly<Record<string, BillContext | undefined>> = {},
 ): { title: string; amount?: string; lines: { label?: string; value: string }[] } {
   const one = fresh.length === 1 ? fresh[0] : undefined;
   if (one) {
+    const ctx = contexts[one.id];
     const amount = one.amount ? formatMoney(one.amount, one.currency) : undefined;
     return {
-      title: `New bill · ${one.payeeName}`.slice(0, 80),
+      title: `${ctx?.repeat ? 'Bill again' : 'New bill'} · ${one.payeeName}`.slice(0, 80),
       ...(amount ? { amount } : {}),
       lines: [
         { label: 'Due', value: one.dueOn ? formatDay(one.dueOn) : 'no due date' },
@@ -538,36 +567,67 @@ export function newBillsCard(
           label: 'Reminder',
           value: reminded.has(one.id) ? 'scheduled' : 'none',
         },
+        ...(ctx
+          ? [
+              {
+                label: 'Watch',
+                value: watchSuffix(Boolean(one.dueOn) && reminded.has(one.id)),
+              },
+            ]
+          : []),
+        ...(ctx?.repeat && ctx.repeatLine
+          ? [{ label: 'Change', value: ctx.repeatLine.slice(0, 120) }]
+          : []),
       ],
     };
   }
   return {
-    title: `${fresh.length} new bills`,
+    title: `${fresh.length} ${fresh.some((b) => contexts[b.id]?.repeat) ? 'bills' : 'new bills'}`,
     lines: [
-      ...fresh.slice(0, 3).map((b) => ({
-        label: b.payeeName.slice(0, 40),
-        value: `${formatMoney(b.amount, b.currency)}${
-          b.dueOn ? `, due ${formatDay(b.dueOn)}` : ''
-        }`.slice(0, 120),
-      })),
+      ...fresh.slice(0, 3).map((b) => {
+        const ctx = contexts[b.id];
+        const repeat = ctx?.repeat && ctx.repeatLine ? ` · ${ctx.repeatLine}` : '';
+        return {
+          label: `${b.payeeName}${ctx?.repeat ? ' again' : ''}`.slice(0, 40),
+          value: `${formatMoney(b.amount, b.currency)}${
+            b.dueOn ? `, due ${formatDay(b.dueOn)}` : ''
+          }${repeat}`.slice(0, 120),
+        };
+      }),
       ...(fresh.length > 3 ? [{ value: `…and ${fresh.length - 3} more` }] : []),
     ],
   };
 }
 
-export function newBillsText(fresh: BillRow[], reminded: ReadonlySet<string> = new Set()): string {
-  const line = (b: BillRow) =>
-    `${b.payeeName}: ${formatMoney(b.amount, b.currency)}${b.dueOn ? `, due ${formatDay(b.dueOn)}` : ''}`;
+export function newBillsText(
+  fresh: BillRow[],
+  reminded: ReadonlySet<string> = new Set(),
+  contexts: Readonly<Record<string, BillContext | undefined>> = {},
+): string {
+  const line = (b: BillRow) => {
+    const ctx = contexts[b.id];
+    const base = `${b.payeeName}${ctx?.repeat ? ' again' : ''}: ${formatMoney(b.amount, b.currency)}${b.dueOn ? `, due ${formatDay(b.dueOn)}` : ''}`;
+    const compare = ctx?.repeat && ctx.repeatLine ? ` ${ctx.repeatLine}` : '';
+    return `${base}.${compare}`;
+  };
   if (fresh.length === 1) {
     const b = fresh[0] as BillRow;
-    // Promise only what actually exists: a late bill with no reminder gets no promise.
-    const remind = b.dueOn && reminded.has(b.id) ? " i'll remind you." : '';
-    return `new bill: ${line(b)}.${remind}`;
+    const ctx = contexts[b.id];
+    const hasReminder = Boolean(b.dueOn) && reminded.has(b.id);
+    if (ctx?.repeat) {
+      // A repeat already has a watch; only promise the reminder this time.
+      return `${line(b)}${hasReminder ? " i'll remind you." : ''}`;
+    }
+    // Promise only what actually exists: a late bill with no reminder gets no
+    // reminder promise, and without commitments there is no watch to promise.
+    const tail = ctx ? ` ${watchSuffix(hasReminder)}` : hasReminder ? " i'll remind you." : '';
+    return `new bill: ${line(b)}${tail}`;
   }
+  const anyRepeat = fresh.some((b) => contexts[b.id]?.repeat);
   const shown = fresh.slice(0, 3).map((b) => `• ${line(b)}`);
   const more =
     fresh.length > 3 ? `\n…and ${fresh.length - 3} more. ask me "what bills do i have?"` : '';
-  return `${fresh.length} new bills:\n${shown.join('\n')}${more}`;
+  return `${fresh.length} ${anyRepeat ? 'bills' : 'new bills'}:\n${shown.join('\n')}${more}`;
 }
 
 export type OpenBill = ReturnType<typeof billView>;
@@ -622,7 +682,7 @@ export function bills0Text(open: OpenBill[]): string {
     );
   const more = open.length > 4 ? `\n…and ${open.length - 4} more.` : '';
   const head = open.length === 1 ? 'found 1 open bill:' : `found ${open.length} open bills:`;
-  return `${head}\n${shown.join('\n')}${more}\ni'll remind you before each one's due. paid one already? just tell me.`;
+  return `${head}\n${shown.join('\n')}${more}\ni'll remind you before each one's due, and watch for the next one from each biller. paid one already? just tell me.`;
 }
 
 /** One bill gets actions; a summary of several stays read-only. */

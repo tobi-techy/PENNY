@@ -251,7 +251,13 @@ export class OnboardingService {
     }
     if (this.d.cards) {
       const sent = r.newBills.length
-        ? await this.d.bills.sendNewBillsCard(userId, target, r.newBills, new Set(r.reminded))
+        ? await this.d.bills.sendNewBillsCard(
+            userId,
+            target,
+            r.newBills,
+            new Set(r.reminded),
+            r.contexts,
+          )
         : await this.d.bills.sendOpenBillsCard(userId, target, await this.d.bills.open(userId));
       if (sent) return;
     }
