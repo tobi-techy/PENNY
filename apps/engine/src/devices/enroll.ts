@@ -52,6 +52,14 @@ export type AttestConfig = {
 /** WebAuthn algorithms we accept: EdDSA, ES256, RS256. */
 const PASSKEY_ALGS = [-8, -7, -257];
 
+/** What the server keeps after verifying a passkey registration. */
+type VerifiedPasskey = {
+  credentialId: string;
+  publicKey: string;
+  signCount: number;
+  transports: string[];
+};
+
 export class EnrollService {
   constructor(
     private readonly users: UsersRepo,
@@ -290,5 +298,65 @@ export class EnrollService {
       deviceId: device.id,
       status: created.dryRun ? 'dry_run' : 'created',
     };
+  }
+
+  /**
+   * Demo enrollment (/demo): everything enroll() does except creating a NEAR account.
+   * The device key and the passkey are real, the Guard and approval code treat the
+   * user like any other, and the account id is a throwaway that the key is never
+   * added to (ports/demo-chain.ts refuses to broadcast for it).
+   *
+   * A passkey is optional here: a desktop browser without one still enrolls and
+   * signs with its device key, so the demo never dead-ends at the best moment.
+   */
+  async enrollDemo(body: EnrollBody, accountId: string): Promise<EnrollResult> {
+    const pk = Buffer.from(body.publicKeyEd25519, 'base64url');
+    if (pk.length !== 32) throw new EnrollError(400, 'bad_public_key');
+    // Mainnet needs a genuine App Attest build; a demo must never be a way around it.
+    if (this.attest.require) throw new EnrollError(401, 'demo_off');
+    const codeHash = sha256Hex(body.enrollCode);
+    const passkey =
+      body.passkey && body.passkeyChallengeId ? await this.verifyPasskey(body, codeHash) : null;
+    const claim = await this.users.enrollCodeUser(codeHash, this.now());
+    if (!claim) throw new EnrollError(401, 'invalid_code');
+
+    const existing = await this.users.activeDevice(claim.userId);
+    if (existing) {
+      if (!samePublicKey(existing.publicKey, body.publicKeyEd25519)) {
+        throw new EnrollError(409, 'already_enrolled');
+      }
+      if (passkey) await this.registerPasskey(claim.userId, existing.id, passkey);
+      await this.users.consumeEnrollCode(codeHash, this.now());
+      return { userId: claim.userId, accountId, deviceId: existing.id, status: 'dry_run' };
+    }
+
+    const consumed = await this.users.consumeEnrollCode(codeHash, this.now());
+    if (!consumed) throw new EnrollError(401, 'invalid_code');
+    await this.users.markDemo(claim.userId);
+    // web_passkey keeps the demo on the link channel: no iMessage extension exists
+    // in a browser, so cards must arrive as the same /a/<token> the phone unfurls.
+    const device = await this.users.enrollDeviceAndAccount(
+      claim.userId,
+      body.publicKeyEd25519,
+      newSlug(),
+      accountId,
+      true,
+      undefined,
+      'web_passkey',
+    );
+    if (passkey) await this.registerPasskey(claim.userId, device.id, passkey);
+    return { userId: claim.userId, accountId, deviceId: device.id, status: 'dry_run' };
+  }
+
+  /** Store a verified passkey for a device, keeping an existing identical one. */
+  private async registerPasskey(
+    userId: string,
+    deviceId: string,
+    passkey: VerifiedPasskey,
+  ): Promise<void> {
+    if (!this.attest.passkeys) throw new EnrollError(502, 'passkey_unconfigured');
+    const have = await this.attest.passkeys.activeForUser(userId);
+    if (have.some((p) => p.credentialId === passkey.credentialId)) return;
+    await this.attest.passkeys.create({ userId, deviceId, ...passkey });
   }
 }

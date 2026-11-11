@@ -72,7 +72,9 @@ export const WEB_PAGE_CSP =
 
 /** True for the two routes that serve the built web app (setup + approval pages). */
 export function isWebPagePath(path: string): boolean {
-  return path === '/setup' || path.startsWith('/a/');
+  return (
+    path === '/setup' || path.startsWith('/a/') || path === '/demo' || path.startsWith('/demo/')
+  );
 }
 
 /** Applies the SPA policy to the routes that serve the built web app. */

@@ -1,0 +1,343 @@
+/*
+ * The /demo thread, styled as the thing Penny actually lives in: an iOS dark-mode
+ * message thread. Same rhythm as Messages (incoming grey bubbles on the left, your
+ * own on the right, a typing indicator, a composer at the bottom), so a judge reads
+ * the cards the way they would on a phone.
+ */
+.im {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  color: #fff;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- header ---- */
+.im-head {
+  flex: none;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  text-align: center;
+  padding: 12px 16px 10px;
+  background: rgba(28, 28, 30, 0.86);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 0.5px solid #2c2c2e;
+}
+.im-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+.im-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ff6b2c;
+  box-shadow: 0 0 0 3px rgba(255, 107, 44, 0.16);
+}
+.im-sub {
+  font-size: 11px;
+  color: #8e8e93;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- honesty strip ---- */
+.im-strip {
+  flex: none;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #9a9aa0;
+  background: #141416;
+  border-bottom: 0.5px solid #2c2c2e;
+  padding: 8px 16px;
+}
+.im-strip a {
+  color: #5ac8fa;
+  text-decoration: none;
+}
+
+/* the policy a judge just watched say no */
+.im-limits {
+  flex: none;
+  font-size: 11.5px;
+  color: #c7c7cc;
+  background: #0f1a26;
+  border-bottom: 0.5px solid #1f2c3a;
+  padding: 7px 16px;
+  font-variant-numeric: tabular-nums;
+}
+.im-limits b {
+  color: #8fe4cc;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.im-film {
+  font-size: 13px;
+  color: #5ac8fa;
+  text-decoration: none;
+}
+
+/* ---- thread ---- */
+.im-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  scroll-behavior: smooth;
+}
+.im-intro {
+  justify-content: center;
+  gap: 14px;
+  padding: 0 22px;
+}
+.im-stamp {
+  align-self: center;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #8e8e93;
+  margin: 2px 0 10px;
+}
+.im-hint {
+  align-self: center;
+  max-width: 30ch;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #8e8e93;
+  margin-bottom: 6px;
+}
+
+.im-row {
+  display: flex;
+  margin-top: 2px;
+}
+.im-row.in {
+  justify-content: flex-start;
+}
+.im-row.out {
+  justify-content: flex-end;
+}
+.im-bubble {
+  max-width: 78%;
+  padding: 8px 13px;
+  font-size: 16.5px;
+  line-height: 1.32;
+  border-radius: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+}
+.im-row.in .im-bubble {
+  background: #26252a;
+  color: #fff;
+  border-bottom-left-radius: 5px;
+}
+.im-row.out .im-bubble {
+  background: #0a84ff;
+  color: #fff;
+  border-bottom-right-radius: 5px;
+}
+
+/* three dots, the way Messages shows a recipient typing */
+.im-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px;
+}
+.im-typing i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #8e8e93;
+  animation: im-blink 1.2s infinite ease-in-out;
+}
+.im-typing i:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.im-typing i:nth-child(3) {
+  animation-delay: 0.36s;
+}
+@keyframes im-blink {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ---- cards: the engine's own render, the same picture iMessage unfurls ---- */
+.im-card {
+  align-self: flex-start;
+  margin: 6px 0 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  width: min(330px, 84%);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.im-card img {
+  width: 100%;
+  display: block;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  transition: transform 120ms ease;
+}
+.im-card:active img {
+  transform: scale(0.985);
+}
+.im-card-tap {
+  font-size: 12px;
+  color: #5ac8fa;
+  padding-left: 4px;
+}
+
+/* ---- quick prompts ---- */
+.im-chips {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 14px;
+  scrollbar-width: none;
+  background: #000;
+  border-top: 0.5px solid #1f1f22;
+}
+.im-chips::-webkit-scrollbar {
+  display: none;
+}
+.im-chip {
+  flex: none;
+  font-size: 13px;
+  font-family: inherit;
+  color: #fff;
+  background: #1c1c1e;
+  border: 0.5px solid #3a3a3c;
+  border-radius: 999px;
+  padding: 7px 13px;
+  cursor: pointer;
+}
+.im-chip:disabled {
+  opacity: 0.45;
+}
+
+/* ---- composer ---- */
+.im-composer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+  background: #000;
+  border-top: 0.5px solid #1f1f22;
+}
+.im-composer input {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 16px;
+  color: #fff;
+  background: #1c1c1e;
+  border: 0.5px solid #3a3a3c;
+  border-radius: 999px;
+  padding: 9px 15px;
+  outline: none;
+}
+.im-composer input::placeholder {
+  color: #8e8e93;
+}
+.im-composer button {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 0;
+  background: #0a84ff;
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.im-composer button:disabled {
+  background: #2c2c2e;
+  color: #6b6b70;
+}
+
+/* ---- intro screen ---- */
+.im-lead {
+  font-size: 17px;
+  line-height: 1.45;
+  color: #f2f2f7;
+  margin: 0;
+}
+.im-cta {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: #0a84ff;
+  border: 0;
+  border-radius: 999px;
+  padding: 13px 22px;
+  cursor: pointer;
+}
+.im-cta:disabled {
+  opacity: 0.6;
+}
+.im-fine {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8e8e93;
+  margin: 0;
+}
+.im-note {
+  font-size: 12.5px;
+  color: #ff9c9c;
+  text-align: center;
+  padding: 0 18px 10px;
+}
+
+/* ---- card sheet: the real card page, over the thread ---- */
+.im-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow-y: auto;
+  background: #0b0e11;
+  padding: 54px 0 40px;
+}
+.im-close {
+  position: fixed;
+  top: 12px;
+  right: 14px;
+  z-index: 60;
+  font-family: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: #2c2c2e;
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
