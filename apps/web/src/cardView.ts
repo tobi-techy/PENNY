@@ -48,29 +48,29 @@ export type ApprovalView = {
 export type ByToken = { card: CardJson; approval?: ApprovalView };
 
 const STYLE: Record<string, { color: string; tag: string }> = {
-  invest: { color: '#6EA1D6', tag: 'INVEST' },
-  pick: { color: '#6EA1D6', tag: 'PICK ONE' },
-  send: { color: '#4FD57F', tag: 'SEND' },
-  pay_bill: { color: '#FEA247', tag: 'BILL' },
-  request: { color: '#B77DF8', tag: 'SPLIT' },
-  errand: { color: '#FA78B2', tag: 'ERRAND' },
-  guard_block: { color: '#FC5855', tag: 'BLOCKED' },
-  checkin: { color: '#8FE4CC', tag: 'THIS WEEK' },
-  write: { color: '#8B8CF0', tag: 'WRITE' },
-  new_bot: { color: '#E8C766', tag: 'NEW BOT' },
-  reminder: { color: '#8FE4CC', tag: 'REMINDER' },
-  email_draft: { color: '#8B8CF0', tag: 'DRAFT' },
-  plan: { color: '#B77DF8', tag: 'PLAN' },
-  found: { color: '#FEA247', tag: 'FOUND IT' },
-  done: { color: '#4FD57F', tag: 'DONE' },
-  unfreeze: { color: '#F6A8F0', tag: 'UNFREEZE' },
-  connect: { color: '#6EA1D6', tag: 'CONNECT' },
-  setup: { color: '#6EA1D6', tag: 'SET UP' },
+  invest: { color: '#6EA1D6', tag: '↗ INVEST' },
+  pick: { color: '#6EA1D6', tag: '◇ PICK ONE' },
+  send: { color: '#4FD57F', tag: '→ SEND' },
+  pay_bill: { color: '#FEA247', tag: '✉ BILL' },
+  request: { color: '#B77DF8', tag: '⇄ SPLIT' },
+  errand: { color: '#FA78B2', tag: '✦ ERRAND' },
+  guard_block: { color: '#FC5855', tag: '■ BLOCKED' },
+  checkin: { color: '#8FE4CC', tag: '◎ THIS WEEK' },
+  write: { color: '#8B8CF0', tag: '✎ WRITE' },
+  new_bot: { color: '#E8C766', tag: '✳ NEW BOT' },
+  reminder: { color: '#8FE4CC', tag: '◷ REMINDER' },
+  email_draft: { color: '#8B8CF0', tag: '✉ DRAFT' },
+  plan: { color: '#B77DF8', tag: '☰ PLAN' },
+  found: { color: '#FEA247', tag: '◉ FOUND IT' },
+  done: { color: '#4FD57F', tag: '✓ DONE' },
+  unfreeze: { color: '#F6A8F0', tag: '◆ UNFREEZE' },
+  connect: { color: '#6EA1D6', tag: '⇢ CONNECT' },
+  setup: { color: '#6EA1D6', tag: '◈ SET UP' },
 };
 
 export function styleFor(type: string): { color: string; tag: string; known: boolean } {
   const s = STYLE[type];
-  return s ? { ...s, known: true } : { color: '#B1C3D8', tag: 'PENNY', known: false };
+  return s ? { ...s, known: true } : { color: '#B1C3D8', tag: '● PENNY', known: false };
 }
 
 /** The outcome a finished card announces ("Sent", "Paid", "Created"). */

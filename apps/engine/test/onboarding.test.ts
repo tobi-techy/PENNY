@@ -9,7 +9,7 @@ import {
   WELCOME_TEXT,
 } from '../src/onboarding.ts';
 import type { SpaceRef } from '../src/ports/messaging.ts';
-import { deviceKeys, makeEngine, scriptedModel, type TestEngine } from './helpers.ts';
+import { deviceKeys, makeEngine, scriptedModel, type TestEngine, tokenFromUrl } from './helpers.ts';
 
 class InboxConnector extends FakeConnector {
   inbox: Record<string, unknown>[] = [];
@@ -101,7 +101,11 @@ describe('onboarding', () => {
       enrollCode: code,
       publicKeyEd25519: deviceKeys().publicKeyB64Url,
     });
-    expect(t.messaging.texts.at(-1)).toEqual({ space, text: ENROLLED_TEXT });
+    // setup closes as a card, not a paragraph
+    const setup = t.messaging.cards.at(-1)?.card;
+    expect(setup?.caption).toBe('Penny is set up');
+    expect(setup?.subcaption).toBe('Approvals are on.');
+    expect(texts()).not.toContain(ENROLLED_TEXT);
 
     // and once set up, no more links
     expect(
@@ -140,14 +144,19 @@ describe('onboarding', () => {
       },
     ];
     expect(await t.engine.services.onboarding.checkConnections()).toBe(1);
-    expect(texts().slice(-2)).toEqual([
-      "gmail's connected. give me a sec, checking for bills…",
-      "found 1 open bill:\n• DStv: ₦18,400, due sat 14 nov\ni'll remind you the day before each one's due. paid one already? just tell me.",
-    ]);
-    // announced once; the bill is not texted again by the background scan
+    // the connect card closes itself, then the bill arrives as an actionable card
+    expect(texts().some((x) => x.includes("gmail's connected"))).toBe(false);
+    const cardUrls = texts().filter((x) => x.includes('/a/'));
+    expect(cardUrls.length).toBe(2);
+    expect(cardUrls[0]).toContain('?v=done-');
+    const found = await t.engine.services.approvals.getByToken(tokenFromUrl(cardUrls.at(-1)));
+    expect(found.card?.type).toBe('found');
+    expect(found.card?.title).toContain('DStv');
+    expect(found.card?.buttons.map((b) => b.action)).toEqual(['dismiss']);
+    // announced once; the bill card is not sent again by the background scan
     expect(await t.engine.services.onboarding.checkConnections()).toBe(0);
     await t.engine.services.bills.scanAll();
-    expect(texts().filter((x) => x.includes('DStv')).length).toBe(1);
+    expect(texts().filter((x) => x.includes('/a/')).length).toBe(2);
   });
 
   test('connect watches expire quietly after 30 minutes', async () => {

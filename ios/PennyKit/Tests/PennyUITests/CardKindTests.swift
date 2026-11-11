@@ -52,4 +52,21 @@ final class CardKindTests: XCTestCase {
         XCTAssertEqual(CardKind.unfreeze.settledLabel, "Unfrozen")
         XCTAssertEqual(CardKind.found.settledLabel, "Found")
     }
+
+    func testTheCheckedInContractFixtureMatchesTheCards() throws {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { root.deleteLastPathComponent() }
+        let url = root.appendingPathComponent("packages/shared/contracts/card-contract.json")
+        let fixture = try JSONParser.parse(Data(contentsOf: url))
+        for item in fixture["types"]?.arrayValue ?? [] {
+            let type = try XCTUnwrap(item["type"]?.stringValue)
+            let kind = CardKind(cardType: type)
+            XCTAssertNotEqual(kind, .plain, type)
+            XCTAssertEqual(kind.tag, item["tag"]?.stringValue, type)
+            XCTAssertEqual(kind.settledLabel, item["settled"]?.stringValue, type)
+        }
+        for (state, pill) in fixture["pills"]?.objectValue ?? [:] {
+            XCTAssertEqual(CardState(rawValue: state)?.pillTitle, pill.stringValue, state)
+        }
+    }
 }

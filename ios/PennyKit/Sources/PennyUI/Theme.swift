@@ -90,4 +90,10 @@ extension Font {
         _ = PennyFonts.register()
         return .custom(medium ? "Geist-Medium" : "Geist-Regular", size: size, relativeTo: style)
     }
+
+    /// Geist Mono that scales with Dynamic Type (accessibility sizes only).
+    public static func geistMonoScaled(_ size: CGFloat, medium: Bool = false, relativeTo style: Font.TextStyle = .caption) -> Font {
+        _ = PennyFonts.register()
+        return .custom(medium ? "GeistMono-Medium" : "GeistMono-Regular", size: size, relativeTo: style)
+    }
 }

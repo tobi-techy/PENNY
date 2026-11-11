@@ -2,6 +2,47 @@ import Foundation
 import PennyCore
 import SwiftUI
 
+/// The handful of engine calls one card makes. The app uses `EngineClient`; tests inject a
+/// fake so the whole load → Face ID → sign → post path can run without a network.
+public protocol ApprovalCardClient: Sendable {
+    func card(_ token: CardToken) async throws -> CardByToken
+    func freshPrice(_ token: CardToken) async throws
+    func sign(_ link: CardLink, deviceId: String, signatures: ApprovalSignatures) async throws -> ApprovalStatus
+    func decline(_ link: CardLink, reason: String?) async throws -> ApprovalStatus
+    func unfreeze(_ token: CardToken, deviceId: String, signature: Data) async throws
+    func press(_ token: CardToken, buttonId: String, confirm: Bool) async throws
+    func renew(_ token: CardToken) async throws -> String?
+    func status(_ link: CardLink) async throws -> ApprovalStatusResponse
+}
+
+/// Wraps the HTTP client and supplies one idempotency key per call.
+public struct ApprovalCardClientAdapter: ApprovalCardClient {
+    private let client: EngineClient
+
+    public init(client: EngineClient) { self.client = client }
+
+    public func card(_ token: CardToken) async throws -> CardByToken { try await client.card(token) }
+    public func freshPrice(_ token: CardToken) async throws { try await client.freshPrice(token) }
+    public func sign(_ link: CardLink, deviceId: String, signatures: ApprovalSignatures) async throws -> ApprovalStatus {
+        try await client.sign(link, deviceId: deviceId, signatures: signatures, idempotencyKey: UUID().uuidString)
+    }
+    public func decline(_ link: CardLink, reason: String?) async throws -> ApprovalStatus {
+        try await client.decline(link, reason: reason, idempotencyKey: UUID().uuidString)
+    }
+    public func unfreeze(_ token: CardToken, deviceId: String, signature: Data) async throws {
+        try await client.unfreeze(token, deviceId: deviceId, signature: signature, idempotencyKey: UUID().uuidString)
+    }
+    public func press(_ token: CardToken, buttonId: String, confirm: Bool) async throws {
+        try await client.press(token, buttonId: buttonId, confirm: confirm, idempotencyKey: UUID().uuidString)
+    }
+    public func renew(_ token: CardToken) async throws -> String? {
+        try await client.renew(token, idempotencyKey: UUID().uuidString)
+    }
+    public func status(_ link: CardLink) async throws -> ApprovalStatusResponse {
+        try await client.status(link)
+    }
+}
+
 /// Drives one live card in the thread: load by card token → Ready → Face ID → sign → Approving
 /// → Sent (with a receipt link) or Blocked. Info cards (reminder set, draft ready) show their
 /// buttons; Undo / Edit need no Face ID, Send turns the card into an approval card first.
@@ -23,7 +64,7 @@ public final class ApprovalCardModel: ObservableObject {
     private static let refreshNote = "couldn't refresh this card. it will catch up in a moment."
 
     public let token: CardToken
-    private let client: EngineClient
+    private let client: any ApprovalCardClient
     private let signer: MessageSigner
     private let expectedAccountId: String?
     private let deviceId: String?
@@ -35,7 +76,7 @@ public final class ApprovalCardModel: ObservableObject {
     /// Open a URL (receipt link) from the extension.
     public var onOpenURL: ((URL) -> Void)?
 
-    public init(token: CardToken, client: EngineClient, signer: MessageSigner, expectedAccountId: String?, deviceId: String?) {
+    public init(token: CardToken, client: any ApprovalCardClient, signer: MessageSigner, expectedAccountId: String?, deviceId: String?) {
         self.token = token
         self.client = client
         self.signer = signer
@@ -165,7 +206,7 @@ public final class ApprovalCardModel: ObservableObject {
         phase = .approving
         do {
             let signatures = try await ApprovalSigning.signForApproval(ticket, with: signer, expectedAccountId: expectedAccountId)
-            _ = try await client.sign(link, deviceId: deviceId, signatures: signatures, idempotencyKey: "sign-\(ticket.id)")
+            _ = try await client.sign(link, deviceId: deviceId, signatures: signatures)
             await load()
             if self.card?.state == .approving { startPolling() }
         } catch let error as PennyError {
@@ -195,7 +236,7 @@ public final class ApprovalCardModel: ObservableObject {
     public func decline() async {
         guard let link, phase == .ask else { return }
         do {
-            _ = try await client.decline(link, reason: nil, idempotencyKey: "decline-\(link.approvalId)")
+            _ = try await client.decline(link, reason: nil)
             await load()
         } catch let error as PennyError {
             phase = .failed(message: error.errorDescription ?? "Couldn't say no just now.", steps: [])
@@ -211,7 +252,7 @@ public final class ApprovalCardModel: ObservableObject {
         do {
             let message = UnfreezeMessage.message(cardId: card.id, challenge: challenge)
             let signature = try await signer.sign(message, reason: "Unfreeze Penny")
-            try await client.unfreeze(token, deviceId: deviceId, signature: signature, idempotencyKey: "unfreeze-\(card.id)")
+            try await client.unfreeze(token, deviceId: deviceId, signature: signature)
             await load()
         } catch PennyError.userCancelled {
             note = "Face ID was cancelled. Penny is still frozen."
@@ -258,7 +299,7 @@ public final class ApprovalCardModel: ObservableObject {
     /// into an approval card, the Face ID happens on that card.
     public func press(buttonId: String) async {
         do {
-            try await client.press(token, buttonId: buttonId)
+            try await client.press(token, buttonId: buttonId, confirm: false)
             await load()
         } catch let error as PennyError {
             note = error.errorDescription

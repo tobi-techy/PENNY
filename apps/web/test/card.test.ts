@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   countdown,
   pillFor,
@@ -27,7 +28,7 @@ describe('link card page', () => {
     });
     expect(c?.lines).toEqual([{ value: 'Take a coat' }]);
     expect(c?.state).toBe('done');
-    expect(styleFor('weather')).toEqual({ color: '#B1C3D8', tag: 'PENNY', known: false });
+    expect(styleFor('weather')).toEqual({ color: '#B1C3D8', tag: '● PENNY', known: false });
     expect(readCard({ lines: [] })).toBeNull();
   });
 
@@ -42,9 +43,30 @@ describe('link card page', () => {
     for (const type of ['connect', 'setup', 'unfreeze', 'found', 'new_bot', 'email_draft']) {
       expect(styleFor(type).known).toBe(true);
     }
-    expect(styleFor('connect').tag).toBe('CONNECT');
-    expect(styleFor('setup').tag).toBe('SET UP');
-    expect(styleFor('unfreeze').tag).toBe('UNFREEZE');
+    expect(styleFor('connect').tag).toBe('⇢ CONNECT');
+    expect(styleFor('setup').tag).toBe('◈ SET UP');
+    expect(styleFor('unfreeze').tag).toBe('◆ UNFREEZE');
+  });
+
+  test('the checked-in contract fixture matches this page', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL('../../../packages/shared/contracts/card-contract.json', import.meta.url),
+        'utf8',
+      ),
+    ) as {
+      plain: { color: string; tag: string };
+      types: { type: string; color: string; tag: string; settled: string }[];
+      pills: Record<string, string>;
+    };
+    for (const t of fixture.types) {
+      expect(styleFor(t.type)).toEqual({ color: t.color, tag: t.tag, known: true });
+      expect(settledFor(t.type)).toBe(t.settled);
+    }
+    expect(styleFor('weather')).toEqual({ ...fixture.plain, known: false });
+    for (const [state, pill] of Object.entries(fixture.pills)) {
+      expect(pillFor(state as Parameters<typeof pillFor>[0])).toBe(pill);
+    }
   });
 
   test('finished cards name their own outcome', () => {

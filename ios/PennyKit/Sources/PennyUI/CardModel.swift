@@ -50,7 +50,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .errand: return "✦ ERRAND"
         case .guardBlock: return "■ BLOCKED"
         case .pick: return "◇ PICK ONE"
-        case .weekly: return "● YOUR WEEK"
+        case .weekly: return "◎ THIS WEEK"
         case .write: return "✎ WRITE"
         case .bot: return "✳ NEW BOT"
         case .reminder: return "◷ REMINDER"
@@ -199,6 +199,8 @@ public enum CardPhase: Equatable, Sendable {
     case blocked(message: String)
     /// An info card (reminder set, draft ready, found it): rows and its buttons.
     case info
+    /// An info card that finished (connected, set up, dismissed): rows, then its outcome.
+    case infoDone
     /// An info card that is finished (e.g. undone).
     case closed(message: String)
 
@@ -206,7 +208,7 @@ public enum CardPhase: Equatable, Sendable {
         switch self {
         case .loading, .approving, .approved: return .working
         case .ask, .info: return .ask
-        case .done: return .calm
+        case .done, .infoDone: return .calm
         case .expired, .declined, .unavailable, .closed: return .quiet
         case .failed, .blocked: return .alarm
         }
@@ -223,7 +225,7 @@ public enum CardPhase: Equatable, Sendable {
                                                   StatusStep(label: "Sending", state: .active)])
         case .sent: return .done(steps: [StatusStep(label: "Approved with Face ID", state: .done),
                                          StatusStep(label: "Sent", state: .done)], at: now)
-        case .done: return card.isApproval ? .done(steps: [], at: now) : .info
+        case .done: return card.isApproval ? .done(steps: [], at: now) : .infoDone
         case .blocked: return .blocked(message: card.lines.first?.value ?? "Guard said no.")
         case .expired: return .expired
         case .declined: return .declined

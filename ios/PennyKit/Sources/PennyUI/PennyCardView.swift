@@ -4,6 +4,7 @@ import SwiftUI
 /// One card, shared anatomy: art, tag, what it is, the number, one or two facts, one action.
 /// design/card/family.html (types) + card.html (ask → Face ID → approved → done).
 public struct PennyCardView: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     let content: CardContent
     let phase: CardPhase
     let onAction: (CardActionID) -> Void
@@ -19,27 +20,28 @@ public struct PennyCardView: View {
             ZStack(alignment: .topLeading) {
                 DitherArt(color: artColor, mood: phase.mood, center: content.kind.artCenter, phase: content.kind.artPhase)
                     .frame(height: 88)
+                    .accessibilityHidden(true)
                 CrewChip(content.crew).padding(10)
             }
             VStack(alignment: .leading, spacing: 0) {
                 tagRow
                 Text(content.meta)
-                    .font(.geist(11.5))
+                    .cardFont(11.5)
                     .foregroundStyle(PennyColor.meta)
                     .lineLimit(1)
                     .padding(.top, 12)
                 Text(content.headline)
-                    .font(.geist(content.headlineIsText ? 21 : 30))
+                    .cardFont(content.headlineIsText ? 21 : 30)
                     .tracking(content.headlineIsText ? -0.6 : -1.2)
                     .foregroundStyle(PennyColor.text)
-                    .lineLimit(1)
+                    .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                     .minimumScaleFactor(0.6)
                     .padding(.top, 2)
                 phaseBody
                 if let foot = footText {
                     Button { onAction(isDone ? .openReceipt : .details) } label: {
                         Text(foot)
-                            .font(.geist(11))
+                            .cardFont(11)
                             .foregroundStyle(PennyColor.meta)
                             .frame(maxWidth: .infinity)
                     }
@@ -59,6 +61,7 @@ public struct PennyCardView: View {
 
     private var isDone: Bool {
         if case .done = phase { return true }
+        if case .infoDone = phase { return true }
         return false
     }
 
@@ -69,7 +72,7 @@ public struct PennyCardView: View {
             Tag(text: tagText, palette: tagPalette)
             Spacer(minLength: 8)
             Text(trailingText)
-                .font(.geistMono(11))
+                .cardMonoFont(11)
                 .foregroundStyle(PennyColor.meta)
                 .monospacedDigit()
         }
@@ -133,7 +136,7 @@ public struct PennyCardView: View {
         case .loading:
             HStack(spacing: 8) {
                 ProgressView().tint(PennyColor.meta)
-                Text("Loading").font(.geist(11.5)).foregroundStyle(PennyColor.meta)
+                Text("Loading").cardFont(11.5).foregroundStyle(PennyColor.meta)
             }
             .padding(.top, 14)
         case .ask:
@@ -161,12 +164,20 @@ public struct PennyCardView: View {
         case .info:
             rows
             buttons(enabled: true)
+        case .infoDone:
+            rows
+            buttons(enabled: true)
+            if content.buttons.isEmpty {
+                Pill(title: "✓ \(content.kind.settledLabel)", faceID: false,
+                     fill: PennyColor.okBackground, text: PennyColor.okText)
+                    .padding(.top, 12)
+            }
         case let .closed(message):
             rows.opacity(0.5)
-            Text(message).font(.geist(11.5)).foregroundStyle(PennyColor.meta).padding(.top, 12)
+            Text(message).cardFont(11.5).foregroundStyle(PennyColor.meta).padding(.top, 12)
         case let .blocked(message):
             Text(message)
-                .font(.geist(12))
+                .cardFont(12)
                 .foregroundStyle(PennyColor.text)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 12)
@@ -183,13 +194,13 @@ public struct PennyCardView: View {
         case let .failed(message, steps):
             if !steps.isEmpty { StepsList(steps: steps).padding(.top, 12) }
             Text(message)
-                .font(.geist(11.5))
+                .cardFont(11.5)
                 .foregroundStyle(PennyColor.errorText)
                 .padding(.top, 12)
             buttons(enabled: true)
         case let .unavailable(message):
             Text(message)
-                .font(.geist(11.5))
+                .cardFont(11.5)
                 .foregroundStyle(PennyColor.meta)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 12)
@@ -243,13 +254,46 @@ public struct PennyCardView: View {
 
 // MARK: - Pieces
 
+/// Cards keep their designed type at normal sizes; at accessibility sizes every
+/// label grows with Dynamic Type so nothing is locked at 9–11 pt.
+private struct DynamicCardFont: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let size: CGFloat
+    let medium: Bool
+    let mono: Bool
+
+    func body(content: Content) -> some View {
+        content.font(font)
+    }
+
+    private var font: Font {
+        guard typeSize.isAccessibilitySize else {
+            return mono ? .geistMono(size, medium: medium) : .geist(size, medium: medium)
+        }
+        let style: Font.TextStyle = size >= 20 ? .title3 : (size <= 11 ? .caption : .body)
+        return mono
+            ? .geistMonoScaled(size, medium: medium, relativeTo: style)
+            : .geistScaled(size, medium: medium, relativeTo: style)
+    }
+}
+
+extension View {
+    func cardFont(_ size: CGFloat, medium: Bool = false) -> some View {
+        modifier(DynamicCardFont(size: size, medium: medium, mono: false))
+    }
+
+    func cardMonoFont(_ size: CGFloat, medium: Bool = false) -> some View {
+        modifier(DynamicCardFont(size: size, medium: medium, mono: true))
+    }
+}
+
 struct Tag: View {
     let text: String
     let palette: CardPalette
 
     var body: some View {
         Text(text)
-            .font(.geistMono(9.5))
+            .cardMonoFont(9.5)
             .tracking(0.8)
             .foregroundStyle(palette.tagText)
             .padding(.vertical, 5)
@@ -261,6 +305,7 @@ struct Tag: View {
 
 /// 38pt pill. White with a Face ID glyph for money actions, outlined for everything else.
 struct Pill: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     let title: String
     let faceID: Bool
     let fill: Color
@@ -272,11 +317,16 @@ struct Pill: View {
             if faceID {
                 Image(systemName: "faceid").font(.system(size: 14, weight: .regular))
             }
-            Text(title).font(.geist(12.5, medium: true)).lineLimit(1).minimumScaleFactor(0.8)
+            Text(title)
+                .cardFont(12.5, medium: true)
+                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.center)
         }
         .foregroundStyle(text)
         .frame(maxWidth: .infinity)
-        .frame(height: 38)
+        .frame(minHeight: 38)
+        .padding(.vertical, typeSize.isAccessibilitySize ? 10 : 0)
         .background(Capsule().fill(fill))
         .overlay {
             if let stroke { Capsule().strokeBorder(stroke, lineWidth: 1) }
@@ -311,7 +361,7 @@ struct RowView: View {
                 Spacer(minLength: 8)
                 Text(value).foregroundStyle(PennyColor.text).multilineTextAlignment(.trailing)
             }
-            .font(.geist(11))
+            .cardFont(11)
             .padding(.vertical, 7)
         case let .meter(label, value, fraction):
             VStack(spacing: 6) {
@@ -320,7 +370,7 @@ struct RowView: View {
                     Spacer(minLength: 8)
                     Text(value).foregroundStyle(PennyColor.text)
                 }
-                .font(.geist(11))
+                .cardFont(11)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(PennyColor.track)
@@ -338,7 +388,7 @@ struct RowView: View {
                 if let value { Text(value).foregroundStyle(PennyColor.text) }
                 if let pill {
                     Text(pill)
-                        .font(.geistMono(9))
+                        .cardMonoFont(9)
                         .tracking(0.6)
                         .foregroundStyle(palette.tagText)
                         .padding(.vertical, 3)
@@ -346,7 +396,7 @@ struct RowView: View {
                         .background(Capsule().fill(palette.tagBackground))
                 }
             }
-            .font(.geist(11))
+            .cardFont(11)
             .padding(.vertical, 7)
         case .option:
             EmptyView()
@@ -363,9 +413,9 @@ struct OptionRow: View {
     var body: some View {
         Button(action: tap) {
             HStack {
-                Text(title).font(.geist(12)).foregroundStyle(PennyColor.text)
+                Text(title).cardFont(12).foregroundStyle(PennyColor.text)
                 Spacer(minLength: 8)
-                Text(detail).font(.geistMono(11)).foregroundStyle(PennyColor.meta)
+                Text(detail).cardMonoFont(11).foregroundStyle(PennyColor.meta)
             }
             .padding(.vertical, 9)
             .padding(.horizontal, 10)
@@ -386,7 +436,7 @@ struct StepsList: View {
                 HStack(spacing: 8) {
                     StepDot(state: step.state)
                     Text(step.label)
-                        .font(.geist(11.5))
+                        .cardFont(11.5)
                         .foregroundStyle(step.state == .active ? PennyColor.text : PennyColor.meta)
                         .lineLimit(2)
                 }

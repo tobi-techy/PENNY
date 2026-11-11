@@ -496,6 +496,8 @@ export const connectWatches = pgTable(
       .notNull()
       .references(() => users.id),
     toolkit: text('toolkit').notNull(),
+    /** The card that carried the link, so its state can change when the app connects. */
+    cardId: text('card_id'),
     status: text('status', { enum: ['waiting', 'connected', 'expired'] })
       .notNull()
       .default('waiting'),

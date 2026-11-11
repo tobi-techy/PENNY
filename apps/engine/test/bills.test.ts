@@ -616,6 +616,70 @@ describe('paying a bill in USDC (demo biller)', () => {
     );
   });
 
+  test('a found bill card pays through Face ID, or dismisses without moving money', async () => {
+    const target = await t.engine.repos.users.primarySpace(u.userId);
+    if (!target) throw new Error('no primary space');
+    const demo = await t.engine.repos.bills.get(
+      u.userId,
+      (await billFor('Penny Demo Utility')).billId,
+    );
+    const dstv = await t.engine.repos.bills.get(u.userId, (await billFor('DStv')).billId);
+    if (!demo || !dstv) throw new Error('missing bills');
+
+    expect(
+      await t.engine.services.bills.sendNewBillsCard(u.userId, target, [demo], new Set()),
+    ).toBe(true);
+    const payCard = t.messaging.cards.at(-1)?.card;
+    expect(payCard).toMatchObject({
+      caption: 'New bill · Penny Demo Utility',
+      subcaption: 'due sat 14 nov',
+    });
+    expect(payCard?.url).toMatch(/^https:\/\/penny\.test\/a\/[A-Za-z0-9_-]{43}$/);
+    const payRow = await t.engine.repos.cards.byTokenHash(
+      (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(payCard?.url)),
+    );
+    expect(payRow?.buttons.map((b) => b.action)).toEqual(['pay', 'dismiss']);
+
+    // Pay is not money yet: the same card turns into a pay_bill Face ID approval.
+    const press = (token: string, buttonId: string) =>
+      t.engine.app.request(`/v1/cards/by-token/${token}/press`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+        body: JSON.stringify({ buttonId }),
+      });
+    const token = tokenFromUrl(payCard?.url);
+    const paid = await press(token, 'pay');
+    expect(paid.status).toBe(200);
+    const paidBody = (await paid.json()) as { card: { id: string; kind: string; state: string } };
+    expect(paidBody.card.id).toBe(payRow?.id ?? '');
+    expect(paidBody.card.kind).toBe('approval');
+    expect(paidBody.card.state).toBe('ready');
+    const approvals = await t.engine.repos.approvals.listForUser(u.userId, 5);
+    expect(approvals.some((a) => a.kind === 'pay_bill' && a.billId === demo.id)).toBe(true);
+
+    expect(
+      await t.engine.services.bills.sendNewBillsCard(u.userId, target, [dstv], new Set()),
+    ).toBe(true);
+    const dismissCard = t.messaging.cards.at(-1)?.card;
+    const dismissRow = await t.engine.repos.cards.byTokenHash(
+      (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(dismissCard?.url)),
+    );
+    expect(dismissRow?.buttons.map((b) => b.action)).toEqual(['dismiss']);
+    const dismissed = await press(tokenFromUrl(dismissCard?.url), 'dismiss');
+    expect(dismissed.status).toBe(200);
+    const dismissedBody = (await dismissed.json()) as {
+      card: { state: string; title: string; buttons: unknown[] };
+    };
+    expect(dismissedBody.card).toMatchObject({
+      state: 'done',
+      title: 'Bill dismissed',
+      buttons: [],
+    });
+    expect((await t.engine.services.bills.open(u.userId)).map((b) => b.payee)).not.toContain(
+      'DStv',
+    );
+  });
+
   test('two concurrent turns cannot both put a card out for the same bill', async () => {
     const bill = await billFor('Penny Demo Utility');
     const plan = {

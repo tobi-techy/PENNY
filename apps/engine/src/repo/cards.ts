@@ -81,6 +81,7 @@ export class CardsRepo {
         | 'payload'
         | 'receiptUrl'
         | 'expiresAt'
+        | 'tokenHash'
         | 'tokenExpiresAt'
         | 'messageRef'
         | 'statusLine'

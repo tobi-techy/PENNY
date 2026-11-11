@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   approvalActionOf,
   approvalHash,
+  approvalPill,
   approvalSignMessage,
   Card,
   cardStyle,
@@ -33,6 +35,24 @@ describe('Card', () => {
     // one tag, one meaning: no two types share a label
     const tags = KNOWN_CARD_TYPES.map((t) => cardStyle(t).tag);
     expect(new Set(tags).size).toBe(tags.length);
+  });
+  test('the checked-in contract fixture matches the shared mapping', () => {
+    const fixture = JSON.parse(
+      readFileSync(new URL('../contracts/card-contract.json', import.meta.url), 'utf8'),
+    ) as {
+      plain: { color: string; tag: string };
+      types: { type: string; color: string; tag: string; settled: string }[];
+      pills: Record<string, string>;
+    };
+    expect(fixture.types.map((t) => t.type)).toEqual([...KNOWN_CARD_TYPES]);
+    for (const t of fixture.types) {
+      expect(cardStyle(t.type)).toEqual({ color: t.color, tag: t.tag, known: true });
+      expect(settledPill(t.type)).toBe(t.settled);
+    }
+    expect(cardStyle('weather_report')).toEqual({ ...fixture.plain, known: false });
+    for (const [state, pill] of Object.entries(fixture.pills)) {
+      expect(approvalPill(state as Parameters<typeof approvalPill>[0])).toBe(pill);
+    }
   });
   test('a finished card is named by what it did', () => {
     expect(settledPill('send')).toBe('Sent');

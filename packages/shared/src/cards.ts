@@ -50,6 +50,8 @@ export const CardButtonAction = z.enum([
   'renew',
   'freeze',
   'unfreeze',
+  'pay',
+  'dismiss',
 ]);
 export type CardButtonAction = z.infer<typeof CardButtonAction>;
 

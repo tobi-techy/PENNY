@@ -194,6 +194,8 @@ export function buildCardSvg(card: Card, now: Date): string {
       pill = { label: 'You said no. Nothing moved.', bg: '#FFFFFF14', fg: C.meta };
     else if (card.state === 'failed')
       pill = { label: "Didn't go through. Nothing moved.", bg: '#FFFFFF14', fg: C.meta };
+  } else if (card.state === 'done' && card.buttons.length === 0) {
+    pill = { label: settledPill(card.type), bg: C.okBg, fg: C.ok };
   } else if (card.buttons.length) {
     // A Face ID action is the one white pill, exactly as on the live card.
     const faceId = card.buttons.some((b) => b.action === 'unfreeze');

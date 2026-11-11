@@ -11,7 +11,7 @@ export const INFO_CARD_TTL_MS = 24 * 60 * 60_000;
 export const EDIT_BACKOFF_MS = [200, 800, 2_000] as const;
 /** Link cards can't change in place; Penny sends a fresh one for these states only. */
 /** Only the outcome of something the user did; an unanswered card expiring sends nothing. */
-const LINK_RESEND_STATES: ReadonlySet<CardState> = new Set(['sent', 'blocked', 'failed']);
+const LINK_RESEND_STATES: ReadonlySet<CardState> = new Set(['done', 'sent', 'blocked', 'failed']);
 
 export type Channel = 'live' | 'link';
 
@@ -122,7 +122,7 @@ export class CardSender {
     space: SpaceRef;
     toolkit: string;
     connectUrl: string;
-  }): Promise<{ token: string; url: string }> {
+  }): Promise<{ token: string; url: string; cardId: string }> {
     const token = randomToken(32);
     const now = this.d.now();
     const name = input.toolkit === 'gmail' ? 'Gmail' : input.toolkit;
@@ -148,7 +148,7 @@ export class CardSender {
       expiresAt: null,
     });
     this.remember(row.id, token);
-    return { token, url: `${this.d.publicBaseUrl.replace(/\/$/, '')}/c/${token}` };
+    return { token, url: `${this.d.publicBaseUrl.replace(/\/$/, '')}/c/${token}`, cardId: row.id };
   }
 
   async send(
@@ -217,7 +217,17 @@ export class CardSender {
     if (!row) return null;
     const card = toCardDto(row);
     const stateChanged = before.state !== row.state;
-    const token = opts.token ?? this.tokens.get(cardId);
+    let token = opts.token ?? this.tokens.get(cardId);
+    // A link card's token is memory-only. After a restart (or cache eviction) mint
+    // a fresh one and replace the hash, so the update still arrives as a card.
+    if (row.channel === 'link' && stateChanged && LINK_RESEND_STATES.has(card.state)) {
+      if (!token && row.space) {
+        token = randomToken(32);
+        const rotated = await this.d.cards.update(cardId, { tokenHash: sha256Hex(token) });
+        if (rotated) this.remember(cardId, token);
+        else token = undefined;
+      }
+    }
     if (row.channel === 'link') {
       if (stateChanged && LINK_RESEND_STATES.has(card.state) && row.space && token) {
         await this.deliver(row, card, this.url(token), opts.subcaption, false);
@@ -297,7 +307,9 @@ export class CardSender {
   private async editLive(row: CardRow, card: Card, subcaption?: string, token?: string) {
     const handle =
       this.handles.get(row.id) ??
-      (row.messageRef ? { cardId: row.id, ref: row.messageRef } : undefined);
+      (row.messageRef
+        ? { cardId: row.id, ref: row.messageRef, ...(row.space ? { space: row.space } : {}) }
+        : undefined);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     // The edit keeps the original URL; the url field here is only used for a resend.
     const url = token ? this.url(token) : '';
