@@ -9,11 +9,42 @@ Penny is a crew of AI agents that helps run your everyday life from iMessage. Te
 - Invest via NEAR Intents 1Click: "put $50 in SOL" gets a live preview (est. out, rate, fee, min received, expiry), Guard, a firm quote on a Face ID card, then the card follows the swap (pending, processing, success / refunded / failed). ETH, SOL, NEAR; real quotes and prices, mainnet broadcast off until explicitly enabled (see `docs/INVEST.md`)
 - Guard before every card and again before relay: per-tx, daily, new-recipient and velocity rules, with mainnet launch caps on both per-tx and daily total; relayer limit per approval comes from the approved amount, bounded by an env ceiling
 - Bills and reminders: Mail checks connected Gmail for bills (known Nigerian billers, amount and due date parsed by code, receipts skipped), texts you when a new one lands, and reminds you at 09:00 the day before it's due. "remind me to call mum at 6" works too. Paying a bill only goes to a payee from the fixed biller list, never one taken from an email. Real billers aren't payable yet; the demo biller is (below)
-- Smooth first contact: the first text gets a short welcome and Penny answers what you asked (a bare "hi" gets a first step). No setup link up front: it's texted only when something needs approval, and Penny confirms in the thread once the browser is linked. "connect my gmail" sends a link; Penny notices the connection on her own, says so, and checks for bills straight away
+- Smooth first contact: the first text gets a short welcome and Penny answers what you asked (a bare "hi" gets a first step). No setup card up front: it is sent only when something needs approval, and Penny confirms in the thread once the browser is linked. "connect my gmail" sends a connect card; Penny notices the connection on her own, says so, and checks for bills straight away
 - Connected apps (Composio) with write approvals; App Attest for the iOS device
 - Private inference on NEAR AI Cloud with TEE attestation: Intel TDX + NVIDIA GPU evidence and per-response signatures verified, `private · verified in TEE` status at `GET /v1/attestation` (`NEARAI_ATTESTATION=off|warn|enforce`, see `docs/TEE.md`)
 
 Start here: `AGENT.md`, then `docs/IDEA.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/DESIGN.md`.
+
+## NEAR Hackathon
+
+Built for **NEAR HACKATHON** (1 to 14 Nov 2026). The repository was created on 5 Nov 2026, so every commit is inside the hackathon window; there is no pre-hackathon baseline to separate. The code is MIT and the repository is public.
+
+**Tracks:** `realworld`, `security`, `agents`, `privacy`.
+
+**What was built**
+
+- A crew of agents in iMessage: Penny, Mail, Finance, Invest, Guard, Errand, plus bots the user makes by text.
+- One card per action. A connect link, a bill, an email draft, a reminder, a send, a swap and a new bot all arrive as cards; links never arrive as pasted URLs.
+- Approvals with Face ID on the phone, or a WebAuthn passkey in the browser with no app to install. The server holds no user keys.
+- Bills from Gmail: known Nigerian billers, amount and due date parsed by code, a reminder the day before, and a test-dollar bill payment on NEAR testnet.
+- A Rust Guard contract with per-owner budgets and per-agent caps, deployed to testnet with no access keys.
+- Private inference on NEAR AI Cloud with TEE attestation; the deployed engine reports `mode=enforce` and `verified=true`.
+
+**How NEAR is used**
+
+- A named account per user (`<slug>.penny-tobi.testnet`) and per agent, not a shared hot wallet.
+- NEP-366 delegate actions: the phone or browser signs the action, the relayer pays gas, and the engine verifies the signed action byte for byte before relaying.
+- The Guard contract enforces per-token per-tx and UTC-day caps, allowlists, expiry, pause, revoke and nonce on agent spending. The engine also checks policy before a card and again before relay; the contract is the backstop.
+- tUSD on testnet is the demo stablecoin. The same code path uses USDC on mainnet.
+- NEAR AI Cloud for inference, with Intel TDX and NVIDIA GPU evidence checked before money or mail tools run.
+
+**Testnet and mainnet**
+
+Everything in this demo runs on NEAR testnet with test funds. `DRY_RUN=0` is set only for the testnet engine; mainnet relay stays off. The demo biller and tUSD are testnet-only; `contracts/guard/mock-ft` never deploys to mainnet. Real billers are not payable yet.
+
+**Proof and demo**
+
+`PROOF.md` is a real run against the deployed testnet engine: a settled `0.1 NEAR` transfer ([receipt](https://testnet.nearblocks.io/txns/6F6eTAyyQH9YdM82fUfDgm6cFgPZE2bC6FbV7RNy4kSD)), a reused signature refused, an over-limit send blocked by Guard, a wrong key refused, and TEE attestation verified. The walkthrough video and X post are linked from the hackathon submission.
 
 ## Try it
 
