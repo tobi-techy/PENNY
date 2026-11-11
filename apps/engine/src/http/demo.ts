@@ -91,8 +91,9 @@ export function buildDemoRoutes(d: DemoDeps): Hono<{ Variables: AppVars }> {
   const sessionLimiter = new RateLimiter(d.sessionsPerHour, 60 * 60_000);
   const sayLimiter = new RateLimiter(30, 60_000);
 
+  // Only opening a session is expensive; the thread is polled while a card is open.
   r.use(
-    '/v1/demo/*',
+    '/v1/demo/start',
     rateLimit(sessionLimiter, (c) => `demo:${clientIp(c)}`),
   );
 
@@ -213,6 +214,9 @@ export function buildDemoRoutes(d: DemoDeps): Hono<{ Variables: AppVars }> {
   r.get('/v1/demo/thread', async (c) => {
     const session = await d.demo.get(c.req.query('session') ?? '', d.now());
     if (!session) return c.json({ error: 'session_expired' }, 410);
+    // Approving a card does not come back through /say, so closing the card happens
+    // here too: the page polls this while the card sheet is open.
+    await settleDemoCards(d, session.id);
     return c.json({ messages: await d.demo.thread(session.id) });
   });
 

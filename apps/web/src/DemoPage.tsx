@@ -92,6 +92,14 @@ export function DemoPage() {
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [messages, busy]);
 
+  // Approving happens inside the card sheet, not by sending a message, so keep the
+  // thread fresh while it is open: the server closes the card on each read.
+  useEffect(() => {
+    if (!open || !start) return;
+    const t = setInterval(() => void load(start.sessionId), 2_000);
+    return () => clearInterval(t);
+  }, [open, start, load]);
+
   /** Start a session: a throwaway user, this browser's key, and Face ID if it has one. */
   async function begin() {
     setBusy('start');

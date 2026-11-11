@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import type { Approval } from '@penny/shared';
 import { createPgliteDb, type DbHandle } from '../src/db/client.ts';
+import { sha256Hex } from '../src/lib/crypto.ts';
 import { FakeChain } from '../src/ports/chain.ts';
 import { DemoChain } from '../src/ports/demo-chain.ts';
 import {
@@ -307,6 +308,52 @@ describe('/demo routes', () => {
     expect(png.status).toBe(200);
     expect(png.headers.get('content-type')).toBe('image/png');
     expect((await png.arrayBuffer()).byteLength).toBeGreaterThan(1_000);
+  }, 60_000);
+
+  test('reading the thread closes a card approved in the sheet', async () => {
+    const s = (await (await start()).json()) as { sessionId: string; enrollCode: string };
+    const key = Buffer.from(ed25519.getPublicKey(new Uint8Array(32).fill(5))).toString('base64url');
+    await t.engine.app.request('/v1/demo/enroll', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: s.sessionId,
+        enrollCode: s.enrollCode,
+        publicKeyEd25519: key,
+      }),
+    });
+    const user = await t.engine.repos.users.byAccountId(
+      `demo-${s.sessionId.slice(0, 20).toLowerCase()}.testnet`,
+    );
+    if (!user) throw new Error('demo user missing');
+    await t.engine.services.approvals.createMoneyApproval({
+      userId: user.id,
+      bot: null,
+      plan: { kind: 'send', asset: 'USDC', amount: '400', to: 'new-wallet.testnet' },
+      space: { spaceId: demoSpaceId(s.sessionId), userHandle: `demo:${s.sessionId}` },
+    });
+
+    // Approving a card never comes back through /say: move a card to the state the
+    // real sign path leaves it in, then read the thread the way the page polls it.
+    const thread = (await (
+      await t.engine.app.request(`/v1/demo/thread?session=${s.sessionId}`)
+    ).json()) as { messages: { kind: string; url: string | null }[] };
+    const token = tokenFromUrl(thread.messages.find((m) => m.kind === 'card')?.url ?? undefined);
+    const row = await t.engine.repos.cards.byTokenHash(sha256Hex(token));
+    if (!row) throw new Error('card missing');
+    await t.engine.repos.cards.update(row.id, { state: 'approving' });
+
+    const after = (await (
+      await t.engine.app.request(`/v1/demo/thread?session=${s.sessionId}`)
+    ).json()) as { messages: { kind: string; url: string | null }[] };
+    const settled = await t.engine.repos.cards.get(row.id);
+    expect(settled?.state).toBe('sent');
+    expect(settled?.statusLine).toContain('nothing was sent in this demo');
+    // the closed card is re-sent so the page paints the new state on the same token
+    expect(
+      after.messages.filter((m) => m.kind === 'card' && tokenFromUrl(m.url ?? undefined) === token)
+        .length,
+    ).toBe(2);
   }, 60_000);
 
   test('the demo is off unless the engine was started with it', async () => {

@@ -70,7 +70,7 @@ export const WEB_PAGE_CSP =
   "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; " +
   "frame-ancestors 'none'";
 
-/** True for the two routes that serve the built web app (setup + approval pages). */
+/** True for the routes that serve the built web app (setup, cards and the demo). */
 export function isWebPagePath(path: string): boolean {
   return (
     path === '/setup' || path.startsWith('/a/') || path === '/demo' || path.startsWith('/demo/')
