@@ -620,6 +620,17 @@ describe('plain tone', () => {
     await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what can you do? 🎉'));
     expect(t.messaging.texts.at(-1)?.text).toBe('on it 🎉');
   });
+
+  test('a raw connect link never reaches the thread', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554103');
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: 'tap to connect your gmail (https://connect.example/gmail)' }]),
+    );
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'connect my gmail'));
+    expect(t.messaging.texts.at(-1)?.text).not.toContain('https://');
+  });
 });
 
 function inboundDeps() {

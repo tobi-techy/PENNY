@@ -191,7 +191,8 @@ describe('POST /v1/photon/webhook', () => {
     const out = t.messaging.texts.at(-1)?.text ?? '';
     expect(out).toContain('done — I moved it');
     expect(out).toContain('one\ntwo');
-    expect(out).toContain('receipt (https://penny.test/a/apr_1)');
+    expect(out).toContain('receipt');
+    expect(out).not.toContain('https://');
     expect(out).not.toContain('**');
     expect(out).not.toContain('`');
     expect(out).not.toMatch(/^- /m);
