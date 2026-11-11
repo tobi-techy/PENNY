@@ -89,6 +89,8 @@ export type EngineDeps = {
   renderCardImage?: (card: import('@penny/shared').Card) => Promise<Uint8Array>;
   /** Explorer base for receipts, e.g. https://testnet.nearblocks.io */
   explorerBaseUrl?: string;
+  /** App account the crew's agent sub-accounts hang off (NEAR_APP_ACCOUNT_ID). */
+  appAccountId?: string;
   /** Testnet proof routes (scripts/prove.ts). Only set from env on testnet. */
   proveSecret?: string;
   /** Test hook: no real waits between live-card edit retries. */
@@ -163,6 +165,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
     ...(d.explorerBaseUrl ? { explorerBaseUrl: d.explorerBaseUrl } : {}),
+    ...(d.appAccountId ? { appAccountId: d.appAccountId } : {}),
     ...(d.mainnetMaxPerTxUsd ? { mainnetMaxPerTxUsd: d.mainnetMaxPerTxUsd } : {}),
     ...(d.mainnetMaxDailyUsd ? { mainnetMaxDailyUsd: d.mainnetMaxDailyUsd } : {}),
     ...(d.relayerMaxDepositYocto !== undefined

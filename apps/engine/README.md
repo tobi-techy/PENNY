@@ -49,6 +49,7 @@ src/env.ts                 zod env, fails closed; relayLive = mainnet && DRY_RUN
 src/db/                    Drizzle schema (all contract tables + bots), pglite/postgres clients
 drizzle/                   SQL migrations (pgvector ext, append-only trigger on approval_events)
 src/guard/policy.ts        pure Guard: per-tx, rolling daily, allowlist, new-recipient, assets, quote freshness, velocity, bot caps
+src/guard/onchain.ts       shared Guard contract gate: owner allowance, paused/revoked/expired, allowlist, caps (pure)
 src/guard/bot-policy.ts    pure rules for create_bot (risk -> plain confirm | Face ID)
 src/approvals/             state machine, cardToken, ApprovalService (create, submit, decline, status, expiry)
 src/brain/registry.ts      tool registry: id, description, zod input, risk read|write|money; per-bot enforcement

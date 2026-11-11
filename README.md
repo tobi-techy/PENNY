@@ -69,7 +69,7 @@ More: `apps/engine/README.md`. iOS: `ios/README.md`.
 | Set `NEAR_NETWORK=testnet`, `NEAR_RPC_URL=https://rpc.testnet.near.org`, the testnet app and relayer keys, and `PENNY_DEMO_BILLER_ACCOUNT=penny-demo-biller.testnet` | engine boots and talks to testnet |
 | Set `NEAR_USDC_CONTRACT` to your Penny test dollar (tUSD) contract id, deployed from `contracts/guard/mock-ft` | every dollar action uses that token |
 | Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: the card settles as a test run, the bill is not crossed off and its reminder stays, and Penny texts `paid (test run, nothing sent) ✓` with no receipt link |
-| Optional: set `PENNY_GUARD_CONTRACT=<shared guard id>` (e.g. `guard.penny.testnet`) | Guard checks the shared Guard contract; unset = autopilot off |
+| Optional: set `PENNY_GUARD_CONTRACT=<shared guard id>` (e.g. `guard.penny.testnet`) | Guard also checks that user's allowance for the handling agent in the shared Guard contract, before the card and again before relay: paused/revoked/expired, allowlist for direct recipients, and the per-payment and daily caps. A failed read blocks. The agent is `<bot>.<NEAR_APP_ACCOUNT_ID>` (e.g. `invest.penny.near`), or `NEAR_APP_ACCOUNT_ID` for Penny. Unset = no contract check |
 | Text Penny, open the setup link | your Penny account is made on testnet; its `account_id` is on your `users` row |
 | Give that account tUSD: call `mint` on the tUSD contract from its owner account with `{"account_id":"<your penny account>","amount":"10000000"}` | 6 decimals, so `10000000` is `$10.00` |
 | Text "connect my gmail" and authorize | Penny texts "gmail's connected ✓" and checks for bills |
