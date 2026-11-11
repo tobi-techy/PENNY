@@ -16,6 +16,7 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   propose_split: false, // a nudge card only; no money moves
   find_bills: false,
   list_bills: false,
+  manage_commitments: false, // watch/pause local commitments; no money moves
   list_reminders: false,
   connect_app: false, // sends the user a link to connect; acts only after they do it themselves
   remember: false,

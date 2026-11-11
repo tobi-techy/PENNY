@@ -28,6 +28,11 @@ export function localDate(tz: string, at: Date): string {
   return new Date(at.getTime() + tzOffsetMinutes(tz, at) * 60_000).toISOString().slice(0, 10);
 }
 
+/** Hour 0-23 of `at` in `tz`. */
+export function localHour(tz: string, at: Date): number {
+  return new Date(at.getTime() + tzOffsetMinutes(tz, at) * 60_000).getUTCHours();
+}
+
 /** The instant of `hh:00` local time on `ymd` in `tz`. */
 export function localTimeOn(tz: string, ymd: string, hour: number): Date {
   const guess = new Date(`${ymd}T${String(hour).padStart(2, '0')}:00:00Z`);

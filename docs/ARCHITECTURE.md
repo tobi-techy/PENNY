@@ -102,8 +102,17 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - Memory: `memories` table (userId, kind, text, embedding vector(1536), createdAt). After each turn a background learner extracts durable facts from what the user said (deduped; secrets and third-party instructions refused). Weekly reflection job writes `soul_changelog`.
 - Prompt-injection stance: text from users, emails and web is data. Tools that move money only accept typed plans; Guard + device signature are the authority, never the model.
 
+## Commitments (recurring bills)
+A bill email is an event; the obligation is the thing that persists. `commitments` holds one row per biller (`biller:<id>`), or per normalized payee and currency when the biller is unknown, so DStv is one obligation every month rather than a new bill each time.
+- **Opened** by the first stored bill. It records the payee, amount, due date and received date, and adds an `opened` event. No cadence is claimed yet, so no next date is promised.
+- **Recognised** on the next bill from the same obligation: the gap between emails sets `cadence` (`weekly` 5-9 days, `monthly` 25-35, `yearly` 350-380; anything else stays unknown) and `nextExpectedOn`. The single new-bill text says "DStv again", compares the amount with last month, and never sends a second message.
+- **Paid** updates `paidCount`, `lastPaidAt`, `lastReceiptTx`, and keeps `nextExpectedOn` from the latest bill. The receipt names the next expected date. A dry run changes nothing.
+- **Followed up once** per cycle: at 09:00 local on `nextExpectedOn`, Penny sends one "i expected…" text. If the bill is already three days late, she sends only the quieter "still no…" nudge. `lastExpectedFor` / `lastMissingFor` are claimed before sending, so a second tick or a second replica cannot duplicate it. Paused commitments never appear in the follow-up query.
+- **Reversible**: `manage_commitments` (list/pause/resume) changes only Penny's watching. Dismissing the latest bill as "not mine" also pauses the obligation. It moves no money and needs no Face ID. `commitment_events` is the append-only history behind the row.
+Every record is per user; a bill belongs to its commitment through `bills.commitment_id`. Backfilled older bills link without rewinding the latest state.
+
 ## Data model (Drizzle)
-users (frozenAt), devices (publicKey, platform ios_app|web_passkey, hasExtension, enrolledAt = createdAt, revokedAt, revokedReason), passkeys (credentialId, COSE publicKey, signCount, platform web_passkey), cards, reminders, enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, memories, moods, souls_changelog, idempotency_keys, webhook_events.
+users (frozenAt), devices (publicKey, platform ios_app|web_passkey, hasExtension, enrolledAt = createdAt, revokedAt, revokedReason), passkeys (credentialId, COSE publicKey, signCount, platform web_passkey), cards, reminders, enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, memories, moods, souls_changelog, idempotency_keys, webhook_events, bills (sourceKey, billerId, amount, dueOn, commitmentId), commitments (key, cadence, nextExpectedOn, seen/paid counts, paused), commitment_events (append-only obligation history).
 
 ## Environments
 `PENNY_ENV=dev|mainnet`. Mainnet requires all secrets present at boot (zod env schema fails closed). A `DRY_RUN=1` flag makes relayer + Intents run quote/simulate only — default ON until Tobi says go.

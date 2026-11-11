@@ -71,6 +71,13 @@
       "when": 1794312926464,
       "tag": "0009_bill_payment_claim",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794408429988,
+      "tag": "0010_commitments",
+      "breakpoints": true
     }
   ]
 }

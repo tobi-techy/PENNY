@@ -8,7 +8,7 @@ Penny is a crew of AI agents that helps run your everyday life from iMessage. Te
 - NEAR accounts per user and agent, delegate actions + relayer, NEAR Intents across chains
 - Invest via NEAR Intents 1Click: "put $50 in SOL" gets a live preview (est. out, rate, fee, min received, expiry), Guard, a firm quote on a Face ID card, then the card follows the swap (pending, processing, success / refunded / failed). ETH, SOL, NEAR; real quotes and prices, mainnet broadcast off until explicitly enabled (see `docs/INVEST.md`)
 - Guard before every card and again before relay: per-tx, daily, new-recipient and velocity rules, with mainnet launch caps on both per-tx and daily total; relayer limit per approval comes from the approved amount, bounded by an env ceiling
-- Bills and reminders: Mail checks connected Gmail for bills (known Nigerian billers, amount and due date parsed by code, receipts skipped), texts you when a new one lands, and reminds you at 09:00 the day before it's due. "remind me to call mum at 6" works too. Paying a bill only goes to a payee from the fixed biller list, never one taken from an email. Real billers aren't payable yet; the demo biller is (below)
+- Bills and reminders: Mail checks connected Gmail for bills (known Nigerian billers, amount and due date parsed by code, receipts skipped), texts you when a new one lands, and reminds you at 09:00 the day before it's due. Penny keeps one commitment per biller, so a repeat bill is named as a repeat ("DStv again… same as last month"), a paid bill closes with the next expected date, and if the next one never arrives she checks once, quietly. "remind me to call mum at 6" works too. Paying a bill only goes to a payee from the fixed biller list, never one taken from an email. Real billers aren't payable yet; the demo biller is (below)
 - Smooth first contact: the first text gets a short welcome and Penny answers what you asked (a bare "hi" gets a first step). No setup link up front: it's texted only when something needs approval, and Penny confirms in the thread once the browser is linked. "connect my gmail" sends a link; Penny notices the connection on her own, says so, and checks for bills straight away
 - Connected apps (Composio) with write approvals; App Attest for the iOS device
 - Private inference on NEAR AI Cloud with TEE attestation: Intel TDX + NVIDIA GPU evidence and per-response signatures verified, `private · verified in TEE` status at `GET /v1/attestation` (`NEARAI_ATTESTATION=off|warn|enforce`, see `docs/TEE.md`)
@@ -81,7 +81,7 @@ On both networks the bill card shows `$5.00 in USDC`; on testnet that token is t
 
 ### Deploy notes
 
-- **Migrations.** A fresh database runs `0000..0009` at boot, ending with the last migration (`0009`), which is additive. An environment that already ran an earlier shape of this branch's migrations must be dropped and recreated: the merged journal renumbers them, so drizzle skips main's `0005`/`0006`/`0007` or a later step fails on a missing column. There is no repair path; only a fresh database is supported. See `apps/engine/README.md`.
+- **Migrations.** A fresh database runs `0000..0010` at boot, ending with the last migration (`0010`), which is additive. An environment that already ran an earlier shape of this branch's migrations must be dropped and recreated: the merged journal renumbers them, so drizzle skips main's `0005`/`0006`/`0007` or a later step fails on a missing column. There is no repair path; only a fresh database is supported. See `apps/engine/README.md`.
 
 ## Safety defaults
 

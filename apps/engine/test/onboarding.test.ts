@@ -141,7 +141,7 @@ describe('onboarding', () => {
     expect(await t.engine.services.onboarding.checkConnections()).toBe(1);
     expect(texts().slice(-2)).toEqual([
       "gmail's connected. give me a sec, checking for bills…",
-      "found 1 open bill:\n• DStv: ₦18,400, due sat 14 nov\ni'll remind you the day before each one's due. paid one already? just tell me.",
+      "found 1 open bill:\n• DStv: ₦18,400, due sat 14 nov\ni'll remind you the day before each one's due, and watch for the next one from each biller. paid one already? just tell me.",
     ]);
     // announced once; the bill is not texted again by the background scan
     expect(await t.engine.services.onboarding.checkConnections()).toBe(0);
