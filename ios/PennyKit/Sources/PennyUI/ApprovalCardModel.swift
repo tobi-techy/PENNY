@@ -56,6 +56,8 @@ public final class ApprovalCardModel: ObservableObject {
     @Published public private(set) var signingPreview: [ActionSummary] = []
     /// Set after "Get a new card": the new one arrives in the thread.
     @Published public private(set) var note: String?
+    /// A transient refresh failed; the loaded card is still on screen and may be stale.
+    @Published public private(set) var refreshWarning: String?
     /// Unfreeze cards: the challenge Face ID signs.
     private var unfreezeChallenge: String?
     /// "Not me" switches every key off: the screen asks first.
@@ -139,7 +141,7 @@ public final class ApprovalCardModel: ObservableObject {
             unfreezeChallenge = fetched.unfreezeChallenge
             signingPreview = fetched.ticket.map { ActionSummary.describe($0.detail) } ?? []
             phase = CardPhase.from(card: fetched.card, now: Date())
-            if note == Self.refreshNote { note = nil }
+            refreshWarning = nil
             if fetched.card.state == .approving { startPolling() }
             // an invest price lasts 90 s: opening the card gets a fresh one in place, once
             if fetched.card.type == "invest", fetched.card.state == .ready, !askedForFreshPrice {
@@ -147,19 +149,44 @@ public final class ApprovalCardModel: ObservableObject {
                 if (try? await client.freshPrice(token)) != nil { await load() }
             }
         } catch let error as PennyError {
-            // A card already on screen stays put through a refresh blip; only a first
-            // load has nothing to show, so only then does it become unavailable.
-            if card != nil {
-                note = Self.refreshNote
-            } else {
-                phase = .unavailable(message: error.errorDescription ?? "Couldn't load this card.")
+            switch error {
+            case .expired, .http(status: 401), .http(status: 403):
+                // the token is gone for good; renewal stays available on .expired
+                refreshWarning = nil
+                phase = .expired
+            case .http(status: 404):
+                refreshWarning = nil
+                phase = .unavailable(message: error.errorDescription ?? "Penny can't find this request anymore.")
+            default:
+                // a card already on screen stays put through a transient blip; only a
+                // first load has nothing to show, so only then does it become unavailable.
+                if card != nil, isTransient(error) {
+                    refreshWarning = Self.refreshNote
+                    if phase == .approving { startPolling() }
+                } else {
+                    refreshWarning = nil
+                    phase = .unavailable(message: error.errorDescription ?? "Couldn't load this card.")
+                }
             }
         } catch {
             if card != nil {
-                note = Self.refreshNote
+                refreshWarning = Self.refreshNote
+                if phase == .approving { startPolling() }
             } else {
+                refreshWarning = nil
                 phase = .unavailable(message: "Couldn't load this card.")
             }
+        }
+    }
+
+    private func isTransient(_ error: PennyError) -> Bool {
+        switch error {
+        case .network:
+            return true
+        case let .http(status):
+            return status >= 500
+        default:
+            return false
         }
     }
 
@@ -226,7 +253,8 @@ public final class ApprovalCardModel: ObservableObject {
                 if phase == .expired { note = "That didn't check out. Penny sent you a new card." }
             default:
                 // the signature may have reached the engine before the connection dropped
-                phase = .failed(message: error.errorDescription ?? "Something went wrong. Check the card before trying again.", steps: [])
+                let base = error.errorDescription ?? "Something went wrong."
+                phase = .failed(message: "\(base) Check the card before trying again.", steps: [])
             }
         } catch {
             phase = .failed(message: "Something went wrong. Check the card before trying again.", steps: [])
@@ -319,7 +347,13 @@ public final class ApprovalCardModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: delay)
                 guard !Task.isCancelled, let self else { return }
                 if let response = try? await self.client.status(link), response.status.isTerminal {
-                    await self.load()
+                    // A terminal status still needs one good card read. If that read
+                    // blips, retry instead of leaving the approving spinner forever.
+                    for _ in 0..<6 {
+                        await self.load()
+                        if self.refreshWarning == nil, self.phase != .approving { return }
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
                     return
                 }
                 delay = min(delay + 300_000_000, 3_000_000_000)

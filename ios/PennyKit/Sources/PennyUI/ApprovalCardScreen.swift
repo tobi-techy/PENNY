@@ -23,7 +23,10 @@ public struct ApprovalCardScreen: View {
     public var body: some View {
         switch presentation {
         case .transcript:
-            card
+            VStack(alignment: .leading, spacing: 8) {
+                card
+                if let notes { noteView(notes) }
+            }
         case .expanded:
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -64,11 +67,8 @@ public struct ApprovalCardScreen: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    if let note = model.note {
-                        Text(note)
-                            .cardFont(12)
-                            .foregroundStyle(PennyColor.meta)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    if let notes {
+                        noteView(notes)
                     }
                     if !model.signingPreview.isEmpty {
                         SigningPreview(summaries: model.signingPreview, approval: model.ticket?.detail)
@@ -80,6 +80,20 @@ public struct ApprovalCardScreen: View {
             }
             .background(Color.black.ignoresSafeArea())
         }
+    }
+
+    /// Action confirmations and a stale-card warning can both be true at once.
+    private var notes: String? {
+        let parts = [model.refreshWarning, model.note].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    private func noteView(_ note: String) -> some View {
+        Text(note)
+            .cardFont(12)
+            .foregroundStyle(PennyColor.meta)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var card: some View {

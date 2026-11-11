@@ -151,9 +151,14 @@ export class CardSender {
     return { token, url: `${this.d.publicBaseUrl.replace(/\/$/, '')}/c/${token}`, cardId: row.id };
   }
 
-  async send(
-    input: NewCard,
-  ): Promise<{ card: Card; token: string; url: string; channel: Channel; ref?: string }> {
+  async send(input: NewCard): Promise<{
+    card: Card;
+    token: string;
+    url: string;
+    channel: Channel;
+    ref?: string;
+    delivered: boolean;
+  }> {
     const device =
       input.forDevice !== undefined
         ? input.forDevice
@@ -188,8 +193,15 @@ export class CardSender {
     const card = toCardDto(row);
     const url = this.url(tok.token);
     this.remember(row.id, tok.token);
-    const ref = await this.deliver(row, card, url, input.subcaption, true);
-    return { card, token: tok.token, url, channel, ...(ref ? { ref } : {}) };
+    const delivery = await this.deliver(row, card, url, input.subcaption, true);
+    return {
+      card,
+      token: tok.token,
+      url,
+      channel,
+      ...(delivery.ref ? { ref: delivery.ref } : {}),
+      delivered: delivery.delivered,
+    };
   }
 
   /**
@@ -273,16 +285,17 @@ export class CardSender {
     url: string,
     subcaption: string | undefined,
     first: boolean,
-  ): Promise<string | undefined> {
+  ): Promise<{ ref?: string; delivered: boolean }> {
     const space = row.space;
-    if (!space) return undefined;
+    if (!space) return { delivered: false };
     if (row.channel === 'link') {
       // iMessage turns the URL into a picture card from the page's Open Graph tags.
       // A version suffix makes iMessage fetch the new picture instead of a cached one.
       const n = (this.linkSends.get(row.id) ?? 0) + 1;
       this.linkSends.set(row.id, n);
-      await this.safeText(space, first ? url : `${url}?v=${card.state}-${n}`);
-      return undefined;
+      return {
+        delivered: await this.safeText(space, first ? url : `${url}?v=${card.state}-${n}`),
+      };
     }
     try {
       const handle = await this.d.messaging.sendCard(
@@ -292,15 +305,14 @@ export class CardSender {
       this.handles.set(row.id, handle);
       // persisted so a restarted engine can still try an in-place edit
       await this.d.cards.update(row.id, { messageRef: handle.ref }).catch(() => null);
-      return handle.ref;
+      return { ref: handle.ref, delivered: true };
     } catch (e) {
       // the live card didn't go out: send the same card as a picture link so the user still gets it
       this.d.log.error(
         { err: (e as Error).message, cardId: row.id },
         'live card failed; sending link',
       );
-      await this.safeText(space, url);
-      return undefined;
+      return { delivered: await this.safeText(space, url) };
     }
   }
 
@@ -339,11 +351,13 @@ export class CardSender {
     }
   }
 
-  private async safeText(space: SpaceRef, text: string) {
+  private async safeText(space: SpaceRef, text: string): Promise<boolean> {
     try {
       await this.d.messaging.sendText(space, text);
+      return true;
     } catch (e) {
       this.d.log.error({ err: (e as Error).message }, 'text send failed');
+      return false;
     }
   }
 }

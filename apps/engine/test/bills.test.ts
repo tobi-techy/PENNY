@@ -202,7 +202,7 @@ describe('parseBills', () => {
       amount: '₦18,400',
       lines: [
         { label: 'Due', value: 'sat 14 nov' },
-        { label: 'Reminder', value: "the day before it's due" },
+        { label: 'Reminder', value: 'scheduled' },
       ],
     });
     const many = newBillsCard([
@@ -353,7 +353,7 @@ describe('bills + reminders (engine)', () => {
       (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(sent[0]?.card.url)),
     );
     expect(card?.type).toBe('found');
-    expect(card?.lines.map((l) => l.value)).toEqual(['sat 14 nov', "the day before it's due"]);
+    expect(card?.lines.map((l) => l.value)).toEqual(['sat 14 nov', 'scheduled']);
     expect(sent[0]?.card.caption).not.toContain('IKEDC');
     await t.engine.services.bills.scanAll();
     expect(found()).toHaveLength(1);
@@ -399,14 +399,19 @@ describe('bills + reminders (engine)', () => {
   test('a failed new-bill card is retried on the next scan, not lost', async () => {
     inbox.inbox = [dstvMail];
     const found = () => t.messaging.cards.filter((c) => c.card.caption.startsWith('New bill'));
-    const send = t.engine.services.cards.send.bind(t.engine.services.cards);
+    const sendCard = t.messaging.sendCard.bind(t.messaging);
+    const sendText = t.messaging.sendText.bind(t.messaging);
     let fail = true;
-    t.engine.services.cards.send = async (input) => {
+    t.messaging.sendCard = async (...args) => {
+      if (fail) throw new Error('messages down');
+      return sendCard(...args);
+    };
+    t.messaging.sendText = async (...args) => {
       if (fail) {
         fail = false;
         throw new Error('messages down');
       }
-      return send(input);
+      return sendText(...args);
     };
     expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
     expect(found()).toHaveLength(0);
@@ -605,6 +610,9 @@ describe('paying a bill in USDC (demo biller)', () => {
     // but the bill and its reminder stay, and the text says it was a test run.
     const out = await approveLatest(t, u, row.id);
     expect(out.status).toBe('settled');
+    const done = await t.engine.repos.cards.byApprovalId(row.id);
+    expect(done?.type).toBe('done');
+    expect(done?.statusLine).toBe('test run, nothing sent.');
     expect((await t.engine.services.bills.open(u.userId)).map((b) => b.payee).sort()).toEqual([
       'DStv',
       'Penny Demo Utility',

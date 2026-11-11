@@ -63,8 +63,15 @@ export function CardPage({ token }: { token: string }) {
           setErr("This card doesn't add up, so it can't be approved here. Ask Penny again.");
         }
       }
-    } catch {
-      setErr('This card is gone. Ask Penny for a fresh one.');
+    } catch (e) {
+      const status = Number((e as Error).message.replace('http_', ''));
+      setErr(
+        status === 401 || status === 403
+          ? 'This card link has expired. Ask Penny again.'
+          : status === 404
+            ? "Penny can't find this request anymore."
+            : "Couldn't refresh this card. Check your connection and try again.",
+      );
     }
   }, [token]);
 
@@ -131,15 +138,17 @@ export function CardPage({ token }: { token: string }) {
       await load();
     } catch (e) {
       const name = (e as Error).name;
-      setErr(
+      const message =
         name === 'ApprovalMismatch'
           ? "This card doesn't add up, so I didn't sign it. Nothing moved. Ask Penny for a new one."
           : name === 'PasskeyCancelled'
             ? 'Face ID was cancelled. Nothing was sent.'
             : name === 'PasskeyUnavailable'
               ? 'This phone has no passkey for Penny. Open the setup link Penny sent you.'
-              : "I couldn't confirm that. Check the card before trying again.",
-      );
+              : "I couldn't confirm that. Check the card before trying again.";
+      // the POST may have reached the engine before the reply was lost: re-read it
+      await load();
+      setErr(message);
     } finally {
       setBusy(false);
     }
@@ -180,11 +189,13 @@ export function CardPage({ token }: { token: string }) {
         setErr("That didn't check out. Penny is still frozen. Text unfreeze for a new card.");
       await load();
     } catch (e) {
-      setErr(
+      const message =
         (e as Error).name === 'PasskeyCancelled'
           ? 'Face ID was cancelled. Penny is still frozen.'
-          : "I couldn't confirm that. Check the card before trying again.",
-      );
+          : "I couldn't confirm that. Check the card before trying again.";
+      // a lost reply may still have unfrozen the card: re-read before saying it failed
+      await load();
+      setErr(message);
     } finally {
       setBusy(false);
     }

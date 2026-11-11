@@ -315,9 +315,10 @@ export class BillsService {
     billId: string | undefined,
     type: 'found' | 'done',
   ): Promise<boolean> {
+    let delivered = false;
     try {
       if (this.d.cards) {
-        await this.d.cards.send({
+        const sent = await this.d.cards.send({
           userId,
           space: target.space,
           agent: 'mail',
@@ -330,14 +331,20 @@ export class BillsService {
           ...(billId ? { payload: { billId } } : {}),
           state: 'done',
         });
+        delivered = sent.delivered;
       } else {
         await this.d.messaging.sendText(target.space, text);
+        delivered = true;
       }
     } catch (e) {
       this.d.log.warn({ err: (e as Error).name, userId }, 'bill card failed; will retry');
       return false;
     }
-    // The history is a fallback, not a delivery condition: a card already went out.
+    if (!delivered) {
+      this.d.log.warn({ err: 'not_delivered', userId }, 'bill card not delivered; will retry');
+      return false;
+    }
+    // Only after the card reached the thread: a failed send must retry on the next scan.
     try {
       await this.d.messages.add({
         conversationId: target.conversationId,
@@ -529,7 +536,7 @@ export function newBillsCard(
         { label: 'Due', value: one.dueOn ? formatDay(one.dueOn) : 'no due date' },
         {
           label: 'Reminder',
-          value: reminded.has(one.id) ? "the day before it's due" : 'none',
+          value: reminded.has(one.id) ? 'scheduled' : 'none',
         },
       ],
     };
@@ -615,7 +622,7 @@ export function bills0Text(open: OpenBill[]): string {
     );
   const more = open.length > 4 ? `\n…and ${open.length - 4} more.` : '';
   const head = open.length === 1 ? 'found 1 open bill:' : `found ${open.length} open bills:`;
-  return `${head}\n${shown.join('\n')}${more}\ni'll remind you the day before each one's due. paid one already? just tell me.`;
+  return `${head}\n${shown.join('\n')}${more}\ni'll remind you before each one's due. paid one already? just tell me.`;
 }
 
 /** One bill gets actions; a summary of several stays read-only. */

@@ -49,6 +49,7 @@ final class ApprovalCardModelTests: XCTestCase {
             return XCTFail("expected failed, got \(m.phase)")
         }
         XCTAssertFalse(message.isEmpty)
+        XCTAssertTrue(message.contains("Check the card before trying again."))
         XCTAssertEqual(m.card?.state, .ready, "a dropped reply never claims the card settled")
     }
 
@@ -76,10 +77,33 @@ final class ApprovalCardModelTests: XCTestCase {
         let client = FakeCardClient([.success(try card(.ready))])
         let m = model(client)
         await m.load()
-        client.cardError = PennyError.invalidResponse("offline")
+        client.cardError = PennyError.network
         await m.load()
         XCTAssertEqual(m.phase, .ask)
-        XCTAssertEqual(m.note, "couldn't refresh this card. it will catch up in a moment.")
+        XCTAssertEqual(m.refreshWarning, "couldn't refresh this card. it will catch up in a moment.")
+        XCTAssertNil(m.note)
+    }
+
+    func testExpiredTokenShowsExpiredNotAStaleCard() async throws {
+        let client = FakeCardClient([.success(try card(.ready))])
+        let m = model(client)
+        await m.load()
+        client.cardError = PennyError.http(status: 401)
+        await m.load()
+        XCTAssertEqual(m.phase, .expired)
+        XCTAssertNil(m.refreshWarning)
+    }
+
+    func testRemovedCardBecomesUnavailable() async throws {
+        let client = FakeCardClient([.success(try card(.ready))])
+        let m = model(client)
+        await m.load()
+        client.cardError = PennyError.http(status: 404)
+        await m.load()
+        guard case let .unavailable(message) = m.phase else {
+            return XCTFail("expected unavailable, got \(m.phase)")
+        }
+        XCTAssertEqual(message, "Penny can't find this request anymore.")
     }
 
     func testFirstLoadFailureIsUnavailable() async throws {
