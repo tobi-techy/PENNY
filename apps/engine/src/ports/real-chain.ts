@@ -57,8 +57,9 @@ export class RealChain implements ChainPort {
 
   /**
    * Client for the configured shared Guard contract, owner-signed when a signer is
-   * supplied. Returns undefined when PENNY_GUARD_CONTRACT is unset (autopilot off).
-   * The owner account is passed to each owner-scoped call, not derived per user.
+   * supplied. Returns undefined when PENNY_GUARD_CONTRACT is unset (the shared
+   * Guard check is off). The owner account is passed to each owner-scoped call,
+   * not derived per user.
    */
   guardFor(_userAccountId: string, ownerSigner?: TxSigner): GuardContract | undefined {
     const contractId = this.adapter.guardContract;

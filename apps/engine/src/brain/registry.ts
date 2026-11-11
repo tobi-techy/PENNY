@@ -37,6 +37,8 @@ export type ToolContext = {
   approvals: ApprovalService;
   connectors?: ConnectorPort;
   bills?: BillsService;
+  /** Recurring obligations Penny watches between bills. */
+  commitments?: import('../commitments/service.ts').CommitmentsService;
   onboarding?: OnboardingService;
   memory: MemoryService;
   mood: MoodService;

@@ -13,6 +13,8 @@ export type IdPrefix =
   | 'atch'
   | 'evt'
   | 'bil'
+  | 'cmt'
+  | 'cev'
   | 'crd'
   | 'pky'
   | 'rmd'

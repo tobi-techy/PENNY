@@ -205,5 +205,5 @@ export function bills0Text(open: OpenBill[]): string {
     );
   const more = open.length > 4 ? `\n…and ${open.length - 4} more.` : '';
   const head = open.length === 1 ? 'found 1 open bill:' : `found ${open.length} open bills:`;
-  return `${head}\n${shown.join('\n')}${more}\ni'll remind you the day before each one's due. paid one already? just tell me.`;
+  return `${head}\n${shown.join('\n')}${more}\ni'll remind you the day before each one's due, and watch for the next one from each biller. paid one already? just tell me.`;
 }

@@ -79,7 +79,7 @@ const BaseEnv = z.object({
   ),
   /**
    * The single shared Guard contract (contracts/guard), e.g. guard.penny.testnet.
-   * Unset = on-chain autopilot off and guardFor() returns undefined.
+   * Unset = the shared Guard check is off and guardFor() returns undefined.
    */
   PENNY_GUARD_CONTRACT: optionalStr.refine(
     (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),

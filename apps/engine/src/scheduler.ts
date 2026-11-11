@@ -92,6 +92,8 @@ export type SchedulerJobDeps = {
   weeklyReflection?: (now: Date) => Promise<void>;
   /** Check connected inboxes for new bills and tell the user. */
   scanBills?: () => Promise<void>;
+  /** One quiet check when an expected bill has not arrived. */
+  commitmentFollowUps?: (now: Date) => Promise<unknown>;
   /** Notice apps the user just connected (after a connect link) and follow up. */
   checkConnections?: () => Promise<void>;
 };
@@ -158,6 +160,14 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       everyMs: 6 * HOUR,
       anchorOnStart: true,
       run: d.scanBills,
+    });
+  }
+  if (d.commitmentFollowUps) {
+    // The service itself only texts inside the 09:00 local hour, once per cycle.
+    jobs.push({
+      name: 'commitment_followups',
+      everyMs: 15 * 60_000,
+      run: async (now) => void (await d.commitmentFollowUps?.(now)),
     });
   }
   if (d.weeklyReflection) {

@@ -78,6 +78,13 @@
       "when": 1794406551260,
       "tag": "0010_tough_lester",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794409901209,
+      "tag": "0011_commitments",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,7 @@ import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
 import { CardActions } from './cards/actions.ts';
 import { CardSender, toCardDto } from './cards/sender.ts';
+import { CommitmentsService } from './commitments/service.ts';
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
@@ -44,6 +45,7 @@ import { ApprovalsRepo } from './repo/approvals.ts';
 import { BillsRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import { CardsRepo, PasskeysRepo, RemindersRepo } from './repo/cards.ts';
+import { CommitmentsRepo } from './repo/commitments.ts';
 import { ConnectWatchesRepo } from './repo/connect-watches.ts';
 import { FollowUpRepo } from './repo/followup.ts';
 import {
@@ -91,6 +93,8 @@ export type EngineDeps = {
   renderCardImage?: (card: import('@penny/shared').Card) => Promise<Uint8Array>;
   /** Explorer base for receipts, e.g. https://testnet.nearblocks.io */
   explorerBaseUrl?: string;
+  /** App account the crew's agent sub-accounts hang off (NEAR_APP_ACCOUNT_ID). */
+  appAccountId?: string;
   /** Testnet proof routes (scripts/prove.ts). Only set from env on testnet. */
   proveSecret?: string;
   /** Test hook: no real waits between live-card edit retries. */
@@ -119,6 +123,7 @@ export function createEngine(d: EngineDeps) {
     idempotency: new IdempotencyRepo(d.db),
     guardDecisions: new GuardDecisionsRepo(d.db),
     bills: new BillsRepo(d.db),
+    commitments: new CommitmentsRepo(d.db),
     connectWatches: new ConnectWatchesRepo(d.db),
     cards: new CardsRepo(d.db),
     passkeys: new PasskeysRepo(d.db),
@@ -176,6 +181,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
     ...(d.explorerBaseUrl ? { explorerBaseUrl: d.explorerBaseUrl } : {}),
+    ...(d.appAccountId ? { appAccountId: d.appAccountId } : {}),
     ...(d.mainnetMaxPerTxUsd ? { mainnetMaxPerTxUsd: d.mainnetMaxPerTxUsd } : {}),
     ...(d.mainnetMaxDailyUsd ? { mainnetMaxDailyUsd: d.mainnetMaxDailyUsd } : {}),
     ...(d.relayerMaxDepositYocto !== undefined
@@ -217,12 +223,23 @@ export function createEngine(d: EngineDeps) {
     },
     (userId): Promise<void> => onboarding.onEnrolled(userId),
   );
+  const commitments = new CommitmentsService({
+    commitments: repos.commitments,
+    bills: repos.bills,
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    log: d.log,
+    timeZone,
+    now,
+  });
   const bills = new BillsService({
     bills: repos.bills,
     reminders: repos.reminders,
     users: repos.users,
     messages: repos.messages,
     messaging: d.messaging,
+    commitments,
     ...(d.connectors ? { connectors: d.connectors } : {}),
     approvals: repos.approvals,
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
@@ -270,6 +287,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     ...(d.privacy ? { privacy: d.privacy } : {}),
     bills,
+    commitments,
     onboarding,
     timeZone,
     now,
@@ -494,6 +512,7 @@ export function createEngine(d: EngineDeps) {
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
       fireReminders: (at: Date) => bills.sendDue(at),
+      commitmentFollowUps: (at: Date) => commitments.followUps(at),
       followupTick: (at: Date) => proactive.tick(at),
       refreshRelayed: () => approvals.refreshRelayed(),
       reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
@@ -523,6 +542,7 @@ export function createEngine(d: EngineDeps) {
     services: {
       approvals,
       bills,
+      commitments,
       onboarding,
       bots: botService,
       cards: cardSender,
