@@ -2,35 +2,35 @@ import { addDays, localDate, localTimeOn } from '../bills/time.ts';
 import { stripEmoji, toPlainText } from '../lib/plain-text.ts';
 
 /**
- * Penny's instinct: the small, deterministic layer that decides whether a
+ * Penny's follow-up layer: a small, deterministic module that decides whether a
  * proactive text is worth it. It is deliberately boring. A score (not a
  * prompt) says how often Penny may start a thread, a clock says only in
  * daylight, and only a due open loop wakes the model. The model writes the
  * sentence; it never decides to spend tokens checking for work.
  */
 
-export type InstinctMode = 'quiet' | 'steady' | 'eager';
+export type FollowUpMode = 'quiet' | 'steady' | 'eager';
 
-export const DEFAULT_INSTINCT_SCORE = 50;
-export const MAX_PROACTIVE_PER_DAY: Record<InstinctMode, number> = {
+export const DEFAULT_FOLLOWUP_SCORE = 50;
+export const MAX_PROACTIVE_PER_DAY: Record<FollowUpMode, number> = {
   quiet: 0,
   steady: 1,
   eager: 2,
 };
-const MIN_GAP_MS: Record<InstinctMode, number> = {
+const MIN_GAP_MS: Record<FollowUpMode, number> = {
   quiet: Number.POSITIVE_INFINITY,
   steady: 6 * 60 * 60_000,
   eager: 3 * 60 * 60_000,
 };
 
-export function modeForScore(score: number): InstinctMode {
+export function modeForScore(score: number): FollowUpMode {
   if (score < 25) return 'quiet';
   if (score < 70) return 'steady';
   return 'eager';
 }
 
-export function scoreForMode(mode: InstinctMode): number {
-  return mode === 'quiet' ? 0 : mode === 'eager' ? 80 : DEFAULT_INSTINCT_SCORE;
+export function scoreForMode(mode: FollowUpMode): number {
+  return mode === 'quiet' ? 0 : mode === 'eager' ? 80 : DEFAULT_FOLLOWUP_SCORE;
 }
 
 export function adjustScore(score: number, delta: number): number {
@@ -38,7 +38,7 @@ export function adjustScore(score: number, delta: number): number {
 }
 
 /** Small phrases are commands, never sent to the model. */
-export function instinctCommand(text: string): InstinctMode | null {
+export function followupCommand(text: string): FollowUpMode | null {
   const t = text
     .trim()
     .toLowerCase()
@@ -55,7 +55,7 @@ export function instinctCommand(text: string): InstinctMode | null {
   return null;
 }
 
-export const INSTINCT_COMMAND_REPLY: Record<InstinctMode, string> = {
+export const FOLLOWUP_COMMAND_REPLY: Record<FollowUpMode, string> = {
   quiet: "okay. i'll stay quiet unless you text me.",
   steady: "okay, normal it is. i'll follow up when something's worth it.",
   eager: "okay. i'll keep an eye on things and nudge you a bit more.",
@@ -201,7 +201,7 @@ export function autonomyGuidance(score: number): string {
 }
 
 /** Background block for the live turn. Data, never instructions. */
-export function formatInstinctContext(input: {
+export function formatFollowUpContext(input: {
   score: number;
   loops: LoopView[];
   lastProactive?: LastProactiveView;
@@ -273,7 +273,7 @@ export function cleanProactiveText(text: string): string | null {
 }
 
 /** Deterministic last resort when the composition model returns nothing. */
-export function fallbackFollowUp(loop: LoopView, score = DEFAULT_INSTINCT_SCORE): string {
+export function fallbackFollowUp(loop: LoopView, score = DEFAULT_FOLLOWUP_SCORE): string {
   const raw = loop.summary.replace(/[.!?]+$/, '').trim();
   const summary = raw.replace(/^to\s+/i, '');
   const mode = modeForScore(score);

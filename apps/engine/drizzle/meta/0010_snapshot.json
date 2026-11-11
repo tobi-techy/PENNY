@@ -1565,8 +1565,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.instincts": {
-      "name": "instincts",
+    "public.followups": {
+      "name": "followups",
       "schema": "",
       "columns": {
         "user_id": {
@@ -1619,9 +1619,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "instincts_user_id_users_id_fk": {
-          "name": "instincts_user_id_users_id_fk",
-          "tableFrom": "instincts",
+        "followups_user_id_users_id_fk": {
+          "name": "followups_user_id_users_id_fk",
+          "tableFrom": "followups",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"

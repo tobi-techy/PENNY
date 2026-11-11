@@ -1,10 +1,11 @@
 import type { SpectrumMessagesEvent } from '@penny/shared';
 import type { ApprovalService } from './approvals/service.ts';
 import type { Crew } from './brain/crew.ts';
-import { INSTINCT_COMMAND_REPLY, type InstinctMode, instinctCommand } from './brain/instinct.ts';
+import { FOLLOWUP_COMMAND_REPLY, type FollowUpMode, followupCommand } from './brain/followup.ts';
 import type { RateLimiter } from './http/security.ts';
 import type { Logger } from './lib/logger.ts';
 import { hasEmoji, stripEmoji, toPlainText } from './lib/plain-text.ts';
+import { shapeReply } from './lib/reply.ts';
 import type { OnboardingService } from './onboarding.ts';
 import type { MessagingPort, SpaceRef } from './ports/messaging.ts';
 import type { MessagesRepo } from './repo/bots.ts';
@@ -22,7 +23,7 @@ export type InboundDeps = {
   approvals?: ApprovalService;
   /** Open-loop tracking and quiet/normal/eager commands. Absent in unit tests. */
   proactive?: {
-    setMode(userId: string, mode: InstinctMode): Promise<void>;
+    setMode(userId: string, mode: FollowUpMode): Promise<void>;
     onInbound(userId: string): Promise<void>;
   };
 };
@@ -99,14 +100,14 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     try {
       await d.proactive.onInbound(user.id);
     } catch {
-      d.log.warn({ userId: user.id }, 'instinct reply tracking failed');
+      d.log.warn({ userId: user.id }, 'follow-up reply tracking failed');
     }
   }
 
-  const instinct = d.proactive ? instinctCommand(text) : null;
-  if (instinct && d.proactive) {
-    await d.proactive.setMode(user.id, instinct);
-    const reply = INSTINCT_COMMAND_REPLY[instinct];
+  const followup = d.proactive ? followupCommand(text) : null;
+  if (followup && d.proactive) {
+    await d.proactive.setMode(user.id, followup);
+    const reply = FOLLOWUP_COMMAND_REPLY[followup];
     await d.messaging.sendText(space, reply);
     await d.messages.add({ conversationId, direction: 'outbound', text: reply });
     return;
@@ -137,9 +138,14 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
   const plain = toPlainText(r.text);
   // Penny mirrors emoji only when the user used one first; otherwise drop them.
   const reply = hasEmoji(text) ? plain : stripEmoji(plain);
-  await d.messaging.sendText(space, reply);
-  await d.messages.add({ conversationId, direction: 'outbound', text: reply });
+  // One thought per bubble. Long answers become a few short texts, not a wall.
+  const parts = shapeReply(reply);
+  if (!parts.length) parts.push('on it.');
+  for (const part of parts) {
+    await d.messaging.sendText(space, part);
+    await d.messages.add({ conversationId, direction: 'outbound', text: part });
+  }
   // Background: remember durable facts and note what is still open. Never delays
   // the reply.
-  void d.crew.learnFromTurn(user.id, text, reply);
+  void d.crew.learnFromTurn(user.id, text, parts.join(' '));
 }

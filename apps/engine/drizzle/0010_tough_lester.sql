@@ -1,4 +1,4 @@
-CREATE TABLE "instincts" (
+CREATE TABLE "followups" (
 	"user_id" text PRIMARY KEY NOT NULL,
 	"score" integer DEFAULT 50 NOT NULL,
 	"quiet_start" text DEFAULT '20:00' NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE "proactive_messages" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "instincts" ADD CONSTRAINT "instincts_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "followups" ADD CONSTRAINT "followups_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_loops" ADD CONSTRAINT "open_loops_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "proactive_messages" ADD CONSTRAINT "proactive_messages_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "open_loops_user_idx" ON "open_loops" USING btree ("user_id","status","due_at");--> statement-breakpoint

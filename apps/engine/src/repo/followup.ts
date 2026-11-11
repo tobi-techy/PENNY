@@ -1,14 +1,13 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
-import { DEFAULT_INSTINCT_SCORE } from '../brain/instinct.ts';
+import { DEFAULT_FOLLOWUP_SCORE } from '../brain/followup.ts';
 import type { Db } from '../db/client.ts';
-import { instincts, openLoops, proactiveMessages } from '../db/schema.ts';
+import { followups, openLoops, proactiveMessages } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
 
-export type InstinctRow = typeof instincts.$inferSelect;
 export type LoopRow = typeof openLoops.$inferSelect;
 export type ProactiveRow = typeof proactiveMessages.$inferSelect;
 
-export type InstinctSettings = {
+export type FollowUpSettings = {
   score: number;
   quietStart: string;
   quietEnd: string;
@@ -30,24 +29,24 @@ const norm = (s: string) =>
     .trim()
     .replace(/[.!?]+$/, '');
 
-export class InstinctRepo {
+export class FollowUpRepo {
   constructor(private readonly db: Db) {}
 
   /** Defaults for a user who has never tuned Penny. No row is written on read. */
-  async settings(userId: string): Promise<InstinctSettings> {
+  async settings(userId: string): Promise<FollowUpSettings> {
     const [r] = await this.db
       .select({
-        score: instincts.score,
-        quietStart: instincts.quietStart,
-        quietEnd: instincts.quietEnd,
-        timezone: instincts.timezone,
+        score: followups.score,
+        quietStart: followups.quietStart,
+        quietEnd: followups.quietEnd,
+        timezone: followups.timezone,
       })
-      .from(instincts)
-      .where(eq(instincts.userId, userId))
+      .from(followups)
+      .where(eq(followups.userId, userId))
       .limit(1);
     return (
       r ?? {
-        score: DEFAULT_INSTINCT_SCORE,
+        score: DEFAULT_FOLLOWUP_SCORE,
         quietStart: '20:00',
         quietEnd: '08:00',
         timezone: null,
@@ -57,9 +56,9 @@ export class InstinctRepo {
 
   async setScore(userId: string, score: number, now = new Date()): Promise<void> {
     await this.db
-      .insert(instincts)
+      .insert(followups)
       .values({ userId, score, createdAt: now, updatedAt: now })
-      .onConflictDoUpdate({ target: instincts.userId, set: { score, updatedAt: now } });
+      .onConflictDoUpdate({ target: followups.userId, set: { score, updatedAt: now } });
   }
 
   async setQuietHours(
@@ -69,10 +68,10 @@ export class InstinctRepo {
     now = new Date(),
   ): Promise<void> {
     await this.db
-      .insert(instincts)
+      .insert(followups)
       .values({ userId, quietStart, quietEnd, createdAt: now, updatedAt: now })
       .onConflictDoUpdate({
-        target: instincts.userId,
+        target: followups.userId,
         set: { quietStart, quietEnd, updatedAt: now },
       });
   }

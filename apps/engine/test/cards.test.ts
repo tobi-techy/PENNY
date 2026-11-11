@@ -8,7 +8,7 @@ import { APPROVAL_POLICY, needsApproval } from '../src/cards/policy.ts';
 import { renderCardPng } from '../src/cards/render.ts';
 import { linkSubcaptionStates, pickChannel } from '../src/cards/sender.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
-import { FREEZE_REPLY, freezeCommand, UNFREEZE_REPLY } from '../src/inbound.ts';
+import { FREEZE_REPLY, freezeCommand, UNFREEZE_REPLY, WELCOME_TEXT } from '../src/inbound.ts';
 import { createLogger } from '../src/lib/logger.ts';
 import type { DeviceRow } from '../src/repo/users.ts';
 import {
@@ -619,6 +619,25 @@ describe('plain tone', () => {
     );
     await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what can you do? 🎉'));
     expect(t.messaging.texts.at(-1)?.text).toBe('on it 🎉');
+  });
+  test('a long answer lands as a few short texts', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554103');
+    const long =
+      'mail found three bills this week. nepa is the big one at $84, due friday. the internet bill is $22 and the water bill is $14. if you want, finance can line up all three so you only approve once. otherwise i can remind you the day before each one is due.';
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: long }]),
+    );
+    const before = t.messaging.texts.length;
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what bills do i have?'));
+    const sent = t.messaging.texts
+      .slice(before)
+      .map((x) => x.text)
+      .filter((x) => x !== WELCOME_TEXT);
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.join(' ').replace(/\s+/g, ' ')).toBe(long);
+    for (const text of sent) expect(text.length).toBeLessThanOrEqual(240);
   });
 });
 

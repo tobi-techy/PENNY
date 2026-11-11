@@ -45,13 +45,13 @@ import { BillsRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import { CardsRepo, PasskeysRepo, RemindersRepo } from './repo/cards.ts';
 import { ConnectWatchesRepo } from './repo/connect-watches.ts';
+import { FollowUpRepo } from './repo/followup.ts';
 import {
   AttestChallengesRepo,
   GuardDecisionsRepo,
   IdempotencyRepo,
   WebhookEventsRepo,
 } from './repo/infra.ts';
-import { InstinctRepo } from './repo/instinct.ts';
 import { LedgerRepo } from './repo/ledger.ts';
 import { UsersRepo } from './repo/users.ts';
 import { defaultJobs, Scheduler } from './scheduler.ts';
@@ -123,7 +123,7 @@ export function createEngine(d: EngineDeps) {
     cards: new CardsRepo(d.db),
     passkeys: new PasskeysRepo(d.db),
     reminders: new RemindersRepo(d.db),
-    instinct: new InstinctRepo(d.db),
+    followup: new FollowUpRepo(d.db),
   };
   const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
   const cardSender = new CardSender({
@@ -139,7 +139,7 @@ export function createEngine(d: EngineDeps) {
   const mood = new MoodService(repos.moods);
   const memory = new MemoryService(d.db, d.embedder);
   const proactive = new ProactiveService({
-    instinct: repos.instinct,
+    followup: repos.followup,
     users: repos.users,
     messages: repos.messages,
     messaging: d.messaging,
@@ -259,7 +259,7 @@ export function createEngine(d: EngineDeps) {
     approvals,
     memory,
     mood,
-    instinct: proactive,
+    followup: proactive,
     market: d.market,
     botOps: {
       draft: (u, p, s) => botService.draft(u, p, s),
@@ -494,7 +494,7 @@ export function createEngine(d: EngineDeps) {
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
       fireReminders: (at: Date) => bills.sendDue(at),
-      instinctTick: (at: Date) => proactive.tick(at),
+      followupTick: (at: Date) => proactive.tick(at),
       refreshRelayed: () => approvals.refreshRelayed(),
       reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),

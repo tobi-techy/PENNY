@@ -41,7 +41,7 @@ export type ToolContext = {
   memory: MemoryService;
   mood: MoodService;
   /** Open loops: the live turn can settle one so no follow-up repeats it. */
-  instinct?: {
+  followup?: {
     close(userId: string, id: string, status: 'done' | 'dropped'): Promise<boolean>;
   };
   market: MarketPort;

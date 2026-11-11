@@ -3,15 +3,15 @@ import { offerLoop } from '../src/brain/crew.ts';
 import {
   adjustScore,
   cleanProactiveText,
-  formatInstinctContext,
-  INSTINCT_COMMAND_REPLY,
-  instinctCommand,
+  FOLLOWUP_COMMAND_REPLY,
+  followupCommand,
+  formatFollowUpContext,
   isQuietTime,
   loopDueAt,
   modeForScore,
   parseLearnedLoops,
   shouldSend,
-} from '../src/brain/instinct.ts';
+} from '../src/brain/followup.ts';
 import { signSpectrum } from '../src/photon/verify.ts';
 import {
   enrolledUser,
@@ -23,7 +23,7 @@ import {
 
 const LAGOS = 'Africa/Lagos';
 
-describe('instinct mode and commands', () => {
+describe('follow-up mode and commands', () => {
   test('score maps to quiet, steady, eager', () => {
     expect(modeForScore(0)).toBe('quiet');
     expect(modeForScore(24)).toBe('quiet');
@@ -34,19 +34,19 @@ describe('instinct mode and commands', () => {
   });
 
   test('only explicit phrases are commands', () => {
-    expect(instinctCommand('be quiet')).toBe('quiet');
-    expect(instinctCommand('be quiet?')).toBe('quiet');
-    expect(instinctCommand('stop following up!')).toBe('quiet');
-    expect(instinctCommand('normal again')).toBe('steady');
-    expect(instinctCommand('be more proactive')).toBe('eager');
-    expect(instinctCommand('quiet')).toBeNull(); // too ambiguous
-    expect(instinctCommand('normal')).toBeNull();
-    expect(instinctCommand('what is quiet hours')).toBeNull();
-    expect(INSTINCT_COMMAND_REPLY.quiet).toContain('stay quiet');
+    expect(followupCommand('be quiet')).toBe('quiet');
+    expect(followupCommand('be quiet?')).toBe('quiet');
+    expect(followupCommand('stop following up!')).toBe('quiet');
+    expect(followupCommand('normal again')).toBe('steady');
+    expect(followupCommand('be more proactive')).toBe('eager');
+    expect(followupCommand('quiet')).toBeNull(); // too ambiguous
+    expect(followupCommand('normal')).toBeNull();
+    expect(followupCommand('what is quiet hours')).toBeNull();
+    expect(FOLLOWUP_COMMAND_REPLY.quiet).toContain('stay quiet');
   });
 });
 
-describe('instinct loops', () => {
+describe('follow-up loops', () => {
   test('parses the learner loop lines and ignores malformed ones', () => {
     expect(
       parseLearnedLoops(
@@ -86,13 +86,13 @@ describe('instinct loops', () => {
     try {
       const u = await enrolledUser(t);
       const dueAt = new Date('2026-11-06T08:00:00Z');
-      const first = await t.engine.repos.instinct.addLoop({
+      const first = await t.engine.repos.followup.addLoop({
         userId: u.userId,
         kind: 'asked',
         summary: 'book the dentist',
         dueAt,
       });
-      const second = await t.engine.repos.instinct.addLoop({
+      const second = await t.engine.repos.followup.addLoop({
         userId: u.userId,
         kind: 'asked',
         summary: 'Book the dentist.',
@@ -100,7 +100,7 @@ describe('instinct loops', () => {
       });
       expect(first).not.toBeNull();
       expect(second).toBeNull();
-      expect(await t.engine.repos.instinct.openFor(u.userId)).toHaveLength(1);
+      expect(await t.engine.repos.followup.openFor(u.userId)).toHaveLength(1);
     } finally {
       await t.db.close();
     }
@@ -110,24 +110,24 @@ describe('instinct loops', () => {
     const t = await makeEngine();
     try {
       const u = await enrolledUser(t);
-      const loop = await t.engine.repos.instinct.addLoop({
+      const loop = await t.engine.repos.followup.addLoop({
         userId: u.userId,
         kind: 'asked',
         summary: 'book the dentist',
         dueAt: new Date('2026-11-06T08:00:00Z'),
       });
       const now = new Date('2026-11-06T09:00:00Z');
-      expect(await t.engine.repos.instinct.claim(loop?.id ?? '', now)).toBe(true);
-      expect(await t.engine.repos.instinct.claim(loop?.id ?? '', now)).toBe(false);
-      await t.engine.repos.instinct.release(loop?.id ?? '', now);
-      expect(await t.engine.repos.instinct.claim(loop?.id ?? '', now)).toBe(true);
+      expect(await t.engine.repos.followup.claim(loop?.id ?? '', now)).toBe(true);
+      expect(await t.engine.repos.followup.claim(loop?.id ?? '', now)).toBe(false);
+      await t.engine.repos.followup.release(loop?.id ?? '', now);
+      expect(await t.engine.repos.followup.claim(loop?.id ?? '', now)).toBe(true);
     } finally {
       await t.db.close();
     }
   });
 });
 
-describe('instinct gate', () => {
+describe('follow-up gate', () => {
   const base = {
     now: new Date('2026-11-05T10:00:00Z'), // 11:00 Lagos
     timeZone: LAGOS,
@@ -175,7 +175,7 @@ describe('instinct gate', () => {
   });
 });
 
-describe('instinct copy', () => {
+describe('follow-up copy', () => {
   test('proactive text is plain, short, link-free, or SKIP', () => {
     expect(cleanProactiveText('SKIP')).toBeNull();
     expect(cleanProactiveText('')).toBeNull();
@@ -186,7 +186,7 @@ describe('instinct copy', () => {
   });
 
   test('the live prompt gets loops, ids, and autonomy as data', () => {
-    const text = formatInstinctContext({
+    const text = formatFollowUpContext({
       score: 50,
       loops: [
         {
@@ -241,7 +241,7 @@ function post(t: TestEngine, body: string) {
   });
 }
 
-describe('instinct in the engine', () => {
+describe('follow-up in the engine', () => {
   let t: TestEngine;
   afterEach(async () => {
     await t?.db.close();
@@ -255,7 +255,7 @@ describe('instinct in the engine', () => {
     });
     const u = await enrolledUser(t);
     await t.engine.repos.users.conversationFor(u.userId, u.space.spaceId, 'iMessage', null);
-    const loop = await t.engine.repos.instinct.addLoop({
+    const loop = await t.engine.repos.followup.addLoop({
       userId: u.userId,
       kind: 'asked',
       summary: 'book the dentist',
@@ -268,9 +268,9 @@ describe('instinct in the engine', () => {
     expect(t.messaging.texts.map((x) => x.text)).toContain(
       'hey, still want me to book the dentist? no rush.',
     );
-    const rows = await t.engine.repos.instinct.openFor(u.userId);
+    const rows = await t.engine.repos.followup.openFor(u.userId);
     expect(rows.find((r) => r.id === loop?.id)?.nudgeCount).toBe(1);
-    expect((await t.engine.repos.instinct.lastSent(u.userId))?.outcome).toBe('pending');
+    expect((await t.engine.repos.followup.lastSent(u.userId))?.outcome).toBe('pending');
 
     const second = await t.engine.services.proactive.tick(t.clock.now);
     expect(second.sent).toBe(0);
@@ -281,7 +281,7 @@ describe('instinct in the engine', () => {
     t = await makeEngine({ chat: scriptedModel([{ text: 'hey, still want me to book it?' }]) });
     const u = await enrolledUser(t);
     await t.engine.repos.users.conversationFor(u.userId, u.space.spaceId, 'iMessage', null);
-    const loop = await t.engine.repos.instinct.addLoop({
+    const loop = await t.engine.repos.followup.addLoop({
       userId: u.userId,
       kind: 'asked',
       summary: 'book the dentist',
@@ -292,7 +292,7 @@ describe('instinct in the engine', () => {
       throw new Error('messaging down');
     };
     expect((await t.engine.services.proactive.tick(t.clock.now)).sent).toBe(0);
-    const [stillOpen] = await t.engine.repos.instinct.openFor(u.userId);
+    const [stillOpen] = await t.engine.repos.followup.openFor(u.userId);
     expect(stillOpen?.id).toBe(loop?.id);
     expect(stillOpen?.nudgeCount).toBe(0);
     expect(stillOpen?.lastNudgedAt).toBeNull();
@@ -303,7 +303,7 @@ describe('instinct in the engine', () => {
     const u = await enrolledUser(t);
     await t.engine.repos.users.conversationFor(u.userId, u.space.spaceId, 'iMessage', null);
     await t.engine.services.proactive.setMode(u.userId, 'quiet');
-    await t.engine.repos.instinct.addLoop({
+    await t.engine.repos.followup.addLoop({
       userId: u.userId,
       kind: 'asked',
       summary: 'book the dentist',
@@ -325,7 +325,7 @@ describe('instinct in the engine', () => {
     });
     const u = await enrolledUser(t);
     await t.engine.repos.users.conversationFor(u.userId, u.space.spaceId, 'iMessage', null);
-    const loop = await t.engine.repos.instinct.addLoop({
+    const loop = await t.engine.repos.followup.addLoop({
       userId: u.userId,
       kind: 'asked',
       summary: 'book the dentist',
@@ -335,10 +335,10 @@ describe('instinct in the engine', () => {
     await t.engine.services.proactive.tick(t.clock.now);
 
     await t.engine.services.proactive.onInbound(u.userId);
-    const sent = await t.engine.repos.instinct.lastSent(u.userId);
+    const sent = await t.engine.repos.followup.lastSent(u.userId);
     expect(sent?.outcome).toBe('replied');
-    expect((await t.engine.repos.instinct.settings(u.userId)).score).toBe(54);
-    const [stillOpen] = await t.engine.repos.instinct.openFor(u.userId);
+    expect((await t.engine.repos.followup.settings(u.userId)).score).toBe(54);
+    const [stillOpen] = await t.engine.repos.followup.openFor(u.userId);
     expect(stillOpen?.id).toBe(loop?.id);
     expect(stillOpen?.dueAt.getTime()).toBeGreaterThan(t.clock.now.getTime());
   });
@@ -358,7 +358,7 @@ describe('instinct in the engine', () => {
       "i'll book the dentist tomorrow, i live in lagos",
       'ok, want me to remind you?',
     );
-    let loops = await t.engine.repos.instinct.openFor(u.userId);
+    let loops = await t.engine.repos.followup.openFor(u.userId);
     expect(loops).toHaveLength(1);
     expect(loops[0]?.summary).toBe('book the dentist');
     expect(loops[0]?.dueAt.toISOString()).toBe('2026-11-06T08:00:00.000Z');
@@ -372,7 +372,7 @@ describe('instinct in the engine', () => {
       'still need to book the dentist',
       'want me to book the dentist?',
     );
-    loops = await t.engine.repos.instinct.openFor(u.userId);
+    loops = await t.engine.repos.followup.openFor(u.userId);
     expect(loops).toHaveLength(1);
   });
 
@@ -385,7 +385,7 @@ describe('instinct in the engine', () => {
       'there is a bill from nepa due friday',
       'mail found it. want me to line up paying it?',
     );
-    const loops = await t.engine.repos.instinct.openFor(u.userId);
+    const loops = await t.engine.repos.followup.openFor(u.userId);
     expect(loops.map((l) => l.summary)).toEqual(['line up paying it']);
   });
 
@@ -393,10 +393,10 @@ describe('instinct in the engine', () => {
     const router = scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'chat' } }]);
     const chat = scriptedModel([{ text: 'should not run' }]);
     t = await makeEngine({ router, chat });
-    const res = await post(t, event('instinct-cmd-1', 'be quiet'));
+    const res = await post(t, event('followup-cmd-1', 'be quiet'));
     expect(res.status).toBe(200);
     await new Promise((r) => setTimeout(r, 50));
-    expect(t.messaging.texts.at(-1)?.text).toBe(INSTINCT_COMMAND_REPLY.quiet);
+    expect(t.messaging.texts.at(-1)?.text).toBe(FOLLOWUP_COMMAND_REPLY.quiet);
     expect(router.calls()).toBe(0);
     expect(chat.calls()).toBe(0);
   });

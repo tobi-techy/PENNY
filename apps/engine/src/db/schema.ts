@@ -415,9 +415,9 @@ export const moods = pgTable(
 /**
  * How proactive Penny is allowed to be with this user. A score, not a switch:
  * a reply to a follow-up moves it up, silence moves it down, "be quiet" sets it
- * to zero. Quiet hours are local time. See brain/instinct.ts.
+ * to zero. Quiet hours are local time. See brain/followup.ts.
  */
-export const instincts = pgTable('instincts', {
+export const followups = pgTable('followups', {
   userId: text('user_id')
     .primaryKey()
     .references(() => users.id),
@@ -464,7 +464,7 @@ export const openLoops = pgTable(
 );
 
 /**
- * Every text Penny sent first. Outcomes are how the instinct calibrates:
+ * Every text Penny sent first. Outcomes are how the follow-up calibration works:
  * replied (good), ignored (too eager), stopped (quiet).
  */
 export const proactiveMessages = pgTable(
@@ -604,7 +604,7 @@ export const schema = {
   ledgerEntries,
   memories,
   moods,
-  instincts,
+  followups,
   openLoops,
   proactiveMessages,
   soulsChangelog,
