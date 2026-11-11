@@ -120,23 +120,33 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
   })();
   const plain = toPlainText(r.text);
   // The model sometimes answers a connect request from history without calling
-  // the tool. Send the card anyway, so the link is a card and not pasted text.
+  // the tool, and repeats an old link. Send the card and replace its sentence
+  // with one clear line, so the thread never says "same link as before".
   const asked = connectRequest(text);
+  let connectLine = '';
   if (asked && !r.toolCalls.includes('connect_app')) {
     try {
-      await d.crew.connectApp(user.id, space, asked);
+      const sent = await d.crew.connectApp(user.id, space, asked);
+      connectLine =
+        sent === 'sent'
+          ? `i sent you a connect card for ${asked}. tap it and approve.`
+          : sent === 'connected'
+            ? `${asked} is already connected.`
+            : 'i could not send the connect card just now. try again in a moment.';
     } catch (e) {
       d.log.warn(
         { userId: user.id, toolkit: asked, err: (e as Error).name },
         'connect card failed',
       );
+      connectLine = 'i could not send the connect card just now. try again in a moment.';
     }
   }
   // Penny sends links as cards. Never let the model paste an external URL into
   // the thread; only a URL the user just sent is mirrored back.
   const linked = stripExternalLinks(plain, urlsIn(text));
   // Penny mirrors emoji only when the user used one first; otherwise drop them.
-  const reply = hasEmoji(text) ? linked : stripEmoji(linked);
+  const styled = hasEmoji(text) ? linked : stripEmoji(linked);
+  const reply = connectLine || styled;
   await d.messaging.sendText(space, reply);
   await d.messages.add({ conversationId, direction: 'outbound', text: reply });
   // Background: remember durable facts from this turn. Never delays the reply.

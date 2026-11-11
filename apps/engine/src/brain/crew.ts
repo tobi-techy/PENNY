@@ -212,14 +212,20 @@ export class Crew {
    * calling connect_app. Send the card deterministically so the only link in
    * the thread is Penny's own card page.
    */
-  async connectApp(userId: string, space: SpaceRef, toolkit: 'gmail' | 'github'): Promise<void> {
-    if (!this.d.connectors || !this.d.onboarding) return;
+  async connectApp(
+    userId: string,
+    space: SpaceRef,
+    toolkit: 'gmail' | 'github',
+  ): Promise<'sent' | 'connected' | 'failed'> {
+    if (!this.d.connectors || !this.d.onboarding) return 'failed';
     const r = await this.d.connectors.connect(userId, toolkit, {
       callbackUrl: this.d.onboarding.connectedUrl(toolkit),
     });
     if (r.status === 'link') {
       await this.d.onboarding.watchConnect(userId, toolkit, { link: r.redirectUrl, space });
+      return 'sent';
     }
+    return r.status === 'connected' ? 'connected' : 'failed';
   }
 
   async handle(
