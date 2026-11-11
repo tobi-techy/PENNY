@@ -1,7 +1,7 @@
 import { type MoneyPlan, toMicros } from '@penny/shared';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
-import type { MessagingPort } from '../ports/messaging.ts';
+import type { MessagingPort, SpaceRef } from '../ports/messaging.ts';
 import type { ApprovalsRepo } from '../repo/approvals.ts';
 import type { BillRow, BillsRepo } from '../repo/bills.ts';
 import type { MessagesRepo } from '../repo/bots.ts';
@@ -89,6 +89,8 @@ export type BillsDeps = {
   messaging: MessagingPort;
   connectors?: ConnectorPort;
   approvals?: ApprovalsRepo;
+  /** Every notice goes through the one card sender (found bills are cards, not bullets). */
+  cards?: import('../cards/sender.ts').CardSender;
   /** Biller registry in force (resolveBillers); defaults to the built-in list. */
   billers?: readonly Biller[];
   /** Explorer prefix for receipts, e.g. https://testnet.nearblocks.io/txns/ */
@@ -246,14 +248,11 @@ export class BillsService {
               .map((rem) => rem.billId)
               .filter((id): id is string => Boolean(id)),
           );
-          const text = newBillsText(toText, reminded);
-          try {
-            await this.d.messaging.sendText(target.space, text);
-          } catch (e) {
-            // Keep notified_at null; the next scan retries this exact text once.
-            this.d.log.warn({ err: (e as Error).name, userId }, 'bill text failed; will retry');
+          // A found bill is a card: the same anatomy as every other result. Only a
+          // successful card counts as notified, so an outage retries on the next scan.
+          const notice = newBillsText(toText, reminded);
+          if (!(await this.notifyNewBills(userId, target.space, toText, reminded, notice)))
             continue;
-          }
           await this.d.bills.markNotified(
             toText.map((b) => b.id),
             now,
@@ -261,7 +260,7 @@ export class BillsService {
           await this.d.messages.add({
             conversationId: target.conversationId,
             direction: 'outbound',
-            text,
+            text: notice,
           });
           notified += 1;
         } catch (e) {
@@ -272,6 +271,43 @@ export class BillsService {
       after = ids[ids.length - 1];
     }
     return { users, notified };
+  }
+
+  /**
+   * New bills arrive as a `found` card (Mail's colour, no Face ID: reading mail and
+   * naming a bill changes nothing outside Penny). The plain text stays in the thread
+   * history and is the fallback when cards aren't wired (unit tests).
+   */
+  private async notifyNewBills(
+    userId: string,
+    space: SpaceRef,
+    bills: BillRow[],
+    reminded: ReadonlySet<string>,
+    text: string,
+  ): Promise<boolean> {
+    try {
+      if (this.d.cards) {
+        const card = newBillsCard(bills, reminded);
+        await this.d.cards.send({
+          userId,
+          space,
+          agent: 'mail',
+          kind: 'info',
+          type: 'found',
+          title: card.title,
+          ...(card.amount ? { amount: card.amount } : {}),
+          lines: card.lines,
+          buttons: [],
+          state: 'done',
+        });
+      } else {
+        await this.d.messaging.sendText(space, text);
+      }
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).name, userId }, 'bill card failed; will retry');
+      return false;
+    }
+    return true;
   }
 
   async open(userId: string) {
@@ -440,6 +476,40 @@ export class BillsService {
     }
     return sent;
   }
+}
+
+/** The `found` card for fresh bills. One bill gets the number; several are rows. */
+export function newBillsCard(
+  fresh: BillRow[],
+  reminded: ReadonlySet<string> = new Set(),
+): { title: string; amount?: string; lines: { label?: string; value: string }[] } {
+  const one = fresh.length === 1 ? fresh[0] : undefined;
+  if (one) {
+    const amount = one.amount ? formatMoney(one.amount, one.currency) : undefined;
+    return {
+      title: `New bill · ${one.payeeName}`.slice(0, 80),
+      ...(amount ? { amount } : {}),
+      lines: [
+        { label: 'Due', value: one.dueOn ? formatDay(one.dueOn) : 'no due date' },
+        {
+          label: 'Reminder',
+          value: reminded.has(one.id) ? "the day before it's due" : 'none',
+        },
+      ],
+    };
+  }
+  return {
+    title: `${fresh.length} new bills`,
+    lines: [
+      ...fresh.slice(0, 3).map((b) => ({
+        label: b.payeeName.slice(0, 40),
+        value: `${formatMoney(b.amount, b.currency)}${
+          b.dueOn ? `, due ${formatDay(b.dueOn)}` : ''
+        }`.slice(0, 120),
+      })),
+      ...(fresh.length > 3 ? [{ value: `…and ${fresh.length - 3} more` }] : []),
+    ],
+  };
 }
 
 export function newBillsText(fresh: BillRow[], reminded: ReadonlySet<string> = new Set()): string {

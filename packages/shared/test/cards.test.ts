@@ -8,6 +8,7 @@ import {
   EnrollBody,
   KNOWN_CARD_TYPES,
   parseCardLenient,
+  settledPill,
 } from '../src/index.ts';
 
 const base = {
@@ -29,6 +30,17 @@ describe('Card', () => {
   });
   test('every known type has its own style', () => {
     for (const t of KNOWN_CARD_TYPES) expect(cardStyle(t).known).toBe(true);
+    // one tag, one meaning: no two types share a label
+    const tags = KNOWN_CARD_TYPES.map((t) => cardStyle(t).tag);
+    expect(new Set(tags).size).toBe(tags.length);
+  });
+  test('a finished card is named by what it did', () => {
+    expect(settledPill('send')).toBe('Sent');
+    expect(settledPill('pay_bill')).toBe('Paid');
+    expect(settledPill('new_bot')).toBe('Created');
+    expect(settledPill('unfreeze')).toBe('Unfrozen');
+    expect(settledPill('found')).toBe('Found');
+    expect(settledPill('whatever')).toBe('Done');
   });
   test('an unknown type still parses and gets the plain style', () => {
     const c = Card.parse({ ...base, type: 'weather_report' });

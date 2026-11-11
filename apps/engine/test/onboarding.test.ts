@@ -82,7 +82,8 @@ describe('onboarding', () => {
       conversationId,
       enrolled: false,
     });
-    const link = texts().find((x) => x.includes('/setup#code='));
+    // the setup link arrives as its own rich card, never a bare URL in a sentence
+    const link = t.messaging.richLinks.at(-1)?.url;
     expect(texts()).toContain(SETUP_LEAD_TEXT);
     expect(link).toMatch(/^https:\/\/penny\.test\/setup#code=[A-Z2-9]{8}$/);
 

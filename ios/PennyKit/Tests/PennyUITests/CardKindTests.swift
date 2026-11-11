@@ -31,4 +31,25 @@ final class CardKindTests: XCTestCase {
         let tags = CardKind.allCases.map(\.tag)
         XCTAssertEqual(Set(tags).count, tags.count)
     }
+
+    func testEveryEngineCardTypeHasItsOwnKind() {
+        // packages/shared KNOWN_CARD_TYPES: nothing falls back to `plain`
+        XCTAssertEqual(CardKind(cardType: "connect"), .connect)
+        XCTAssertEqual(CardKind(cardType: "setup"), .setup)
+        XCTAssertEqual(CardKind(cardType: "unfreeze"), .unfreeze)
+        for type in ["invest", "pick", "send", "pay_bill", "request", "errand", "guard_block",
+                     "checkin", "write", "new_bot", "reminder", "email_draft", "plan", "found",
+                     "done", "unfreeze", "connect", "setup"] {
+            XCTAssertNotEqual(CardKind(cardType: type), .plain, type)
+        }
+    }
+
+    func testFinishedCardsNameTheirOwnOutcome() {
+        XCTAssertEqual(CardKind.send.settledLabel, "Sent")
+        XCTAssertEqual(CardKind.bill.settledLabel, "Paid")
+        XCTAssertEqual(CardKind.write.settledLabel, "Sent")
+        XCTAssertEqual(CardKind.bot.settledLabel, "Created")
+        XCTAssertEqual(CardKind.unfreeze.settledLabel, "Unfrozen")
+        XCTAssertEqual(CardKind.found.settledLabel, "Found")
+    }
 }

@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { countdown, pillFor, readCard, styleFor, tokenFromPath } from '../src/cardView.ts';
+import {
+  countdown,
+  pillFor,
+  readCard,
+  settledFor,
+  styleFor,
+  tokenFromPath,
+} from '../src/cardView.ts';
 import { authenticationOptions, registrationOptions } from '../src/keys/passkey.ts';
 
 // a made-up 43-char base64url card token (built, not a literal, so it never looks like a secret)
@@ -29,6 +36,25 @@ describe('link card page', () => {
     expect(
       readCard({ title: 'x', receiptUrl: 'https://testnet.nearblocks.io/txns/a' })?.receiptUrl,
     ).toBe('https://testnet.nearblocks.io/txns/a');
+  });
+
+  test('every engine card type has its own style', () => {
+    for (const type of ['connect', 'setup', 'unfreeze', 'found', 'new_bot', 'email_draft']) {
+      expect(styleFor(type).known).toBe(true);
+    }
+    expect(styleFor('connect').tag).toBe('CONNECT');
+    expect(styleFor('setup').tag).toBe('SET UP');
+    expect(styleFor('unfreeze').tag).toBe('UNFREEZE');
+  });
+
+  test('finished cards name their own outcome', () => {
+    expect(settledFor('pay_bill')).toBe('Paid');
+    expect(settledFor('new_bot')).toBe('Created');
+    expect(settledFor('unfreeze')).toBe('Unfrozen');
+    expect(settledFor('found')).toBe('Found');
+    expect(pillFor('sent', 'pay_bill')).toBe('Paid');
+    expect(pillFor('done', 'new_bot')).toBe('Created');
+    expect(pillFor('sent')).toBe('Sent');
   });
 
   test('pills and countdown in plain words', () => {

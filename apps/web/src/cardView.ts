@@ -63,6 +63,9 @@ const STYLE: Record<string, { color: string; tag: string }> = {
   plan: { color: '#B77DF8', tag: 'PLAN' },
   found: { color: '#FEA247', tag: 'FOUND IT' },
   done: { color: '#4FD57F', tag: 'DONE' },
+  unfreeze: { color: '#F6A8F0', tag: 'UNFREEZE' },
+  connect: { color: '#6EA1D6', tag: 'CONNECT' },
+  setup: { color: '#6EA1D6', tag: 'SET UP' },
 };
 
 export function styleFor(type: string): { color: string; tag: string; known: boolean } {
@@ -70,15 +73,47 @@ export function styleFor(type: string): { color: string; tag: string; known: boo
   return s ? { ...s, known: true } : { color: '#B1C3D8', tag: 'PENNY', known: false };
 }
 
+/** The outcome a finished card announces ("Sent", "Paid", "Created"). */
+export function settledFor(type: string): string {
+  switch (type) {
+    case 'send':
+      return 'Sent';
+    case 'invest':
+      return 'Bought';
+    case 'pay_bill':
+      return 'Paid';
+    case 'errand':
+      return 'Hired';
+    case 'write':
+    case 'email_draft':
+      return 'Sent';
+    case 'new_bot':
+      return 'Created';
+    case 'unfreeze':
+      return 'Unfrozen';
+    case 'connect':
+      return 'Connected';
+    case 'setup':
+      return 'Set up';
+    case 'found':
+      return 'Found';
+    case 'guard_block':
+      return 'Blocked';
+    default:
+      return 'Done';
+  }
+}
+
 /** The main pill on an approval card, plain words. */
-export function pillFor(state: CardState): string | null {
+export function pillFor(state: CardState, type?: string): string | null {
   switch (state) {
     case 'ready':
       return 'Approve with Face ID';
     case 'approving':
       return 'Approving…';
     case 'sent':
-      return 'Sent';
+    case 'done':
+      return type ? settledFor(type) : 'Sent';
     case 'expired':
       return 'Get a new card';
     case 'blocked':

@@ -105,7 +105,15 @@ export class OnboardingService {
     const target = await this.d.users.primarySpace(userId);
     const conv = target?.conversationId ?? null;
     await this.say(space, conv, SETUP_LEAD_TEXT);
-    await this.say(space, conv, `${this.base()}/setup#code=${code}`, 'setup link [code]');
+    // The setup link is its own rich card (the /setup page carries the Open Graph
+    // picture and the code stays in the fragment), never a bare URL in a sentence.
+    await this.d.messaging.sendLink(space, `${this.base()}/setup#code=${code}`);
+    if (conv)
+      await this.d.messages.add({
+        conversationId: conv,
+        direction: 'outbound',
+        text: 'setup link [code]',
+      });
     return { sent: true };
   }
 

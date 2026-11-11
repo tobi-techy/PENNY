@@ -212,6 +212,7 @@ export function createEngine(d: EngineDeps) {
     messaging: d.messaging,
     ...(d.connectors ? { connectors: d.connectors } : {}),
     approvals: repos.approvals,
+    cards: cardSender,
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
     explorerTxUrl: `${d.explorerBaseUrl ?? (d.chainNetwork === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io')}/txns/`,
     log: d.log,

@@ -137,7 +137,7 @@ export class CardSender {
         { label: 'What', value: `Penny can watch your ${name}` },
         { label: 'Promise', value: 'nothing is sent without your ok' },
       ],
-      buttons: [],
+      buttons: [{ id: 'continue', label: 'Continue', action: 'open' }],
       state: 'ready',
       approvalId: null,
       tokenHash: sha256Hex(token),

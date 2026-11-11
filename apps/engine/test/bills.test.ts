@@ -8,7 +8,7 @@ import {
   parseBills,
   parseDueDate,
 } from '../src/bills/parse.ts';
-import { billSearchQuery, newBillsText } from '../src/bills/service.ts';
+import { billSearchQuery, newBillsCard, newBillsText } from '../src/bills/service.ts';
 import {
   describeNow,
   localDate,
@@ -187,6 +187,36 @@ describe('parseBills', () => {
     expect(newBillsText([b({})], new Set())).toBe('new bill: DStv: ₦18,400, due sat 14 nov.');
     expect(newBillsText([b({}), b({ payeeName: 'IKEDC', dueOn: null })])).toContain('2 new bills');
   });
+  test('new bills card: the number for one, rows for several', () => {
+    const b = (over: Partial<BillRow>) =>
+      ({
+        id: 'bil_1',
+        payeeName: 'DStv',
+        amount: '18400',
+        currency: 'NGN',
+        dueOn: '2026-11-14',
+        ...over,
+      }) as BillRow;
+    expect(newBillsCard([b({})], new Set(['bil_1']))).toEqual({
+      title: 'New bill · DStv',
+      amount: '₦18,400',
+      lines: [
+        { label: 'Due', value: 'sat 14 nov' },
+        { label: 'Reminder', value: "the day before it's due" },
+      ],
+    });
+    const many = newBillsCard([
+      b({}),
+      b({ id: 'bil_2', payeeName: 'IKEDC', amount: '9000', dueOn: null }),
+      b({ id: 'bil_3', payeeName: 'MTN', amount: '5000', dueOn: '2026-11-20' }),
+      b({ id: 'bil_4', payeeName: 'Water', amount: '2000', dueOn: null }),
+    ]);
+    expect(many.title).toBe('4 new bills');
+    expect(many.amount).toBeUndefined();
+    expect(many.lines).toHaveLength(4);
+    expect(many.lines[1]).toEqual({ label: 'IKEDC', value: '₦9,000' });
+    expect(many.lines[3]).toEqual({ value: '…and 1 more' });
+  });
 });
 
 describe('time', () => {
@@ -299,7 +329,7 @@ describe('bills + reminders (engine)', () => {
     expect(r.ok).toBe(false);
   });
 
-  test('background scan texts fresh bills once and stores stale ones quietly', async () => {
+  test('background scan shows fresh bills as a found card once and stores stale ones quietly', async () => {
     inbox.inbox = [
       dstvMail,
       {
@@ -310,14 +340,23 @@ describe('bills + reminders (engine)', () => {
         snippet: '',
       },
     ];
+    const found = () => t.messaging.cards.filter((c) => c.card.caption.startsWith('New bill'));
     const first = await t.engine.services.bills.scanAll();
     expect(first.notified).toBe(1);
-    const sent = t.messaging.texts.filter((x) => x.text.startsWith('new bill'));
+    const sent = found();
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.text).toContain('DStv: ₦18,400, due sat 14 nov');
-    expect(sent[0]?.text).not.toContain('IKEDC');
+    expect(sent[0]?.card).toMatchObject({
+      caption: 'New bill · DStv',
+      subcaption: 'due sat 14 nov',
+    });
+    const card = await t.engine.repos.cards.byTokenHash(
+      (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(sent[0]?.card.url)),
+    );
+    expect(card?.type).toBe('found');
+    expect(card?.lines.map((l) => l.value)).toEqual(['sat 14 nov', "the day before it's due"]);
+    expect(sent[0]?.card.caption).not.toContain('IKEDC');
     await t.engine.services.bills.scanAll();
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(1);
+    expect(found()).toHaveLength(1);
     expect(await t.engine.services.bills.open(u.userId)).toHaveLength(2);
   });
 
@@ -357,27 +396,27 @@ describe('bills + reminders (engine)', () => {
     expect(r.ok ? r.reminded : []).toEqual([billId]);
   });
 
-  test('a failed new-bill text is retried on the next scan, not lost', async () => {
+  test('a failed new-bill card is retried on the next scan, not lost', async () => {
     inbox.inbox = [dstvMail];
-    const original = t.messaging.sendText.bind(t.messaging);
+    const found = () => t.messaging.cards.filter((c) => c.card.caption.startsWith('New bill'));
+    const send = t.engine.services.cards.send.bind(t.engine.services.cards);
     let fail = true;
-    t.messaging.sendText = async (space, text) => {
+    t.engine.services.cards.send = async (input) => {
       if (fail) {
         fail = false;
         throw new Error('messages down');
       }
-      return original(space, text);
+      return send(input);
     };
     expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(0);
+    expect(found()).toHaveLength(0);
 
     expect((await t.engine.services.bills.scanAll()).notified).toBe(1);
-    const sent = t.messaging.texts.filter((x) => x.text.startsWith('new bill'));
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.text).toContain('DStv: ₦18,400');
+    expect(found()).toHaveLength(1);
+    expect(found()[0]?.card.caption).toBe('New bill · DStv');
     // and only once
     expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(1);
+    expect(found()).toHaveLength(1);
   });
 
   test('a failed reminder send retries, then gives up after three attempts', async () => {

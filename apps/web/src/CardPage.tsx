@@ -7,6 +7,7 @@ import {
   countdown,
   pillFor,
   readCard,
+  settledFor,
   styleFor,
 } from './cardView.ts';
 import { type ApprovalForSigning, signApproval } from './chain/sign.ts';
@@ -126,7 +127,7 @@ export function CardPage({ token }: { token: string }) {
       });
       if (res.status === 423) setErr('Penny is frozen. Text unfreeze to start again.');
       else if (res.status === 410) setErr('This card ran out of time. Tap Get a new card.');
-      else if (!res.ok) setErr("That didn't go through. The card below says what happened.");
+      else if (!res.ok) setErr("I couldn't confirm that. The card below says what happened.");
       await load();
     } catch (e) {
       const name = (e as Error).name;
@@ -137,7 +138,7 @@ export function CardPage({ token }: { token: string }) {
             ? 'Face ID was cancelled. Nothing was sent.'
             : name === 'PasskeyUnavailable'
               ? 'This phone has no passkey for Penny. Open the setup link Penny sent you.'
-              : "That didn't go through. Nothing moved.",
+              : "I couldn't confirm that. Check the card before trying again.",
       );
     } finally {
       setBusy(false);
@@ -182,7 +183,7 @@ export function CardPage({ token }: { token: string }) {
       setErr(
         (e as Error).name === 'PasskeyCancelled'
           ? 'Face ID was cancelled. Penny is still frozen.'
-          : "That didn't go through. Penny is still frozen.",
+          : "I couldn't confirm that. Check the card before trying again.",
       );
     } finally {
       setBusy(false);
@@ -269,7 +270,7 @@ export function CardPage({ token }: { token: string }) {
   const live = card.kind === 'approval' && card.state === 'ready';
   const expired = live && card.expiresAt !== undefined && Date.parse(card.expiresAt) <= now;
   const state = expired ? 'expired' : card.state;
-  const pill = card.kind === 'approval' ? pillFor(state) : null;
+  const pill = card.kind === 'approval' ? pillFor(state, card.type) : null;
   const closing = card.statusLine ?? closingLine(state);
 
   return (
@@ -333,6 +334,7 @@ export function CardPage({ token }: { token: string }) {
           )}
           {state === 'approving' && <div className="pill dim">{pill}</div>}
           {state === 'sent' && <div className="pill ok">✓ {pill}</div>}
+          {state === 'done' && card.kind === 'approval' && <div className="pill ok">✓ {pill}</div>}
           {state === 'expired' && card.kind === 'approval' && (
             <button type="button" className="pill dim" disabled={busy} onClick={renew}>
               {pill}
@@ -370,7 +372,7 @@ export function CardPage({ token }: { token: string }) {
                 <button
                   key={b.id}
                   type="button"
-                  className="pill dim"
+                  className={b.action === 'unfreeze' ? 'pill' : 'pill dim'}
                   disabled={busy}
                   onClick={() => press(card, b.id)}
                 >
@@ -378,6 +380,9 @@ export function CardPage({ token }: { token: string }) {
                 </button>
               ))}
             </div>
+          )}
+          {card.kind === 'info' && state === 'done' && card.buttons.length === 0 && (
+            <div className="pill ok">✓ {settledFor(card.type)}</div>
           )}
           {editing !== null && (
             <div className="edit">

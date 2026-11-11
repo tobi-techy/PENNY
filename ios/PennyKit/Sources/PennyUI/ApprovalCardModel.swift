@@ -20,6 +20,7 @@ public final class ApprovalCardModel: ObservableObject {
     /// "Not me" switches every key off: the screen asks first.
     @Published public private(set) var confirmingFreeze: String?
     private var askedForFreshPrice = false
+    private static let refreshNote = "couldn't refresh this card. it will catch up in a moment."
 
     public let token: CardToken
     private let client: EngineClient
@@ -97,6 +98,7 @@ public final class ApprovalCardModel: ObservableObject {
             unfreezeChallenge = fetched.unfreezeChallenge
             signingPreview = fetched.ticket.map { ActionSummary.describe($0.detail) } ?? []
             phase = CardPhase.from(card: fetched.card, now: Date())
+            if note == Self.refreshNote { note = nil }
             if fetched.card.state == .approving { startPolling() }
             // an invest price lasts 90 s: opening the card gets a fresh one in place, once
             if fetched.card.type == "invest", fetched.card.state == .ready, !askedForFreshPrice {
@@ -104,9 +106,19 @@ public final class ApprovalCardModel: ObservableObject {
                 if (try? await client.freshPrice(token)) != nil { await load() }
             }
         } catch let error as PennyError {
-            phase = .unavailable(message: error.errorDescription ?? "Couldn't load this card.")
+            // A card already on screen stays put through a refresh blip; only a first
+            // load has nothing to show, so only then does it become unavailable.
+            if card != nil {
+                note = Self.refreshNote
+            } else {
+                phase = .unavailable(message: error.errorDescription ?? "Couldn't load this card.")
+            }
         } catch {
-            phase = .unavailable(message: "Couldn't load this card.")
+            if card != nil {
+                note = Self.refreshNote
+            } else {
+                phase = .unavailable(message: "Couldn't load this card.")
+            }
         }
     }
 
@@ -172,10 +184,11 @@ public final class ApprovalCardModel: ObservableObject {
                 await load()
                 if phase == .expired { note = "That didn't check out. Penny sent you a new card." }
             default:
-                phase = .failed(message: error.errorDescription ?? "Something went wrong. Nothing was sent.", steps: [])
+                // the signature may have reached the engine before the connection dropped
+                phase = .failed(message: error.errorDescription ?? "Something went wrong. Check the card before trying again.", steps: [])
             }
         } catch {
-            phase = .failed(message: "Something went wrong. Nothing was sent.", steps: [])
+            phase = .failed(message: "Something went wrong. Check the card before trying again.", steps: [])
         }
     }
 

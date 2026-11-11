@@ -148,7 +148,7 @@ public struct PennyCardView: View {
                 .padding(.top, 12)
             StepsList(steps: steps).padding(.top, 12)
         case let .done(steps, _):
-            Pill(title: "✓ \(CardState.sent.pillTitle ?? "Sent")", faceID: false, fill: PennyColor.okBackground, text: PennyColor.okText)
+            Pill(title: "✓ \(content.kind.settledLabel)", faceID: false, fill: PennyColor.okBackground, text: PennyColor.okText)
                 .padding(.top, 12)
             if !steps.isEmpty { StepsList(steps: steps).padding(.top, 12) }
         case .expired:
