@@ -182,6 +182,7 @@ describe('onboarding', () => {
     );
     expect(t.messaging.richLinks.at(-1)?.url).toMatch(/^https:\/\/penny\.test\/c\//);
     expect(texts().some((x) => x.includes('https://'))).toBe(false);
+    expect(texts().at(-1)).toBe('i sent you a connect card for gmail. tap it and approve.');
   });
 
   test('connect watches expire quietly after 30 minutes', async () => {
