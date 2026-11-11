@@ -1,10 +1,10 @@
-import { type MoneyPlan, toMicros } from '@penny/shared';
+import { type CardButton, type MoneyPlan, toMicros } from '@penny/shared';
 import { watchSuffix } from '../commitments/copy.ts';
 import type { CommitmentsService } from '../commitments/service.ts';
 import type { BillContext } from '../commitments/types.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
-import type { MessagingPort } from '../ports/messaging.ts';
+import type { MessagingPort, SpaceRef } from '../ports/messaging.ts';
 import type { ApprovalsRepo } from '../repo/approvals.ts';
 import type { BillRow, BillsRepo } from '../repo/bills.ts';
 import type { MessagesRepo } from '../repo/bots.ts';
@@ -92,6 +92,8 @@ export type BillsDeps = {
   messaging: MessagingPort;
   connectors?: ConnectorPort;
   approvals?: ApprovalsRepo;
+  /** Every notice goes through the one card sender (found bills are cards, not bullets). */
+  cards?: import('../cards/sender.ts').CardSender;
   /** Recurring obligations behind bills. Absent in narrow unit tests. */
   commitments?: CommitmentsService;
   /** Biller registry in force (resolveBillers); defaults to the built-in list. */
@@ -264,23 +266,14 @@ export class BillsService {
               .map((rem) => rem.billId)
               .filter((id): id is string => Boolean(id)),
           );
-          const text = newBillsText(toText, reminded, r.contexts);
-          try {
-            await this.d.messaging.sendText(target.space, text);
-          } catch (e) {
-            // Keep notified_at null; the next scan retries this exact text once.
-            this.d.log.warn({ err: (e as Error).name, userId }, 'bill text failed; will retry');
+          // A found bill is a card: the same anatomy as every other result. Only a
+          // successful card counts as notified, so an outage retries on the next scan.
+          if (!(await this.sendNewBillsCard(userId, target, toText, reminded, r.contexts)))
             continue;
-          }
           await this.d.bills.markNotified(
             toText.map((b) => b.id),
             now,
           );
-          await this.d.messages.add({
-            conversationId: target.conversationId,
-            direction: 'outbound',
-            text,
-          });
           notified += 1;
         } catch (e) {
           this.d.log.warn({ err: (e as Error).name, userId }, 'bill scan failed for user');
@@ -290,6 +283,98 @@ export class BillsService {
       after = ids[ids.length - 1];
     }
     return { users, notified };
+  }
+
+  /**
+   * New bills arrive as a `found` card (Mail's colour, no Face ID: reading mail and
+   * naming a bill changes nothing outside Penny). One bill gets Pay / Not mine;
+   * a summary of several stays read-only. Text is only the fallback.
+   */
+  async sendNewBillsCard(
+    userId: string,
+    target: { conversationId: string; space: SpaceRef },
+    bills: BillRow[],
+    reminded: ReadonlySet<string>,
+    contexts: Readonly<Record<string, BillContext | undefined>> = {},
+  ): Promise<boolean> {
+    const card = newBillsCard(bills, reminded, contexts);
+    return this.deliverBillsCard(
+      userId,
+      target,
+      card,
+      newBillsText(bills, reminded, contexts),
+      billButtons(bills, this.billers),
+      bills.length === 1 ? bills[0]?.id : undefined,
+      'found',
+    );
+  }
+
+  /** The first scan after Gmail connects: open bills, or a calm all-clear card. */
+  async sendOpenBillsCard(
+    userId: string,
+    target: { conversationId: string; space: SpaceRef },
+    open: OpenBill[],
+  ): Promise<boolean> {
+    return this.deliverBillsCard(
+      userId,
+      target,
+      openBillsCard(open),
+      bills0Text(open),
+      openBillButtons(open),
+      open.length === 1 ? open[0]?.billId : undefined,
+      open.length ? 'found' : 'done',
+    );
+  }
+
+  private async deliverBillsCard(
+    userId: string,
+    target: { conversationId: string; space: SpaceRef },
+    card: { title: string; amount?: string; lines: { label?: string; value: string }[] },
+    text: string,
+    buttons: CardButton[],
+    billId: string | undefined,
+    type: 'found' | 'done',
+  ): Promise<boolean> {
+    let delivered = false;
+    try {
+      if (this.d.cards) {
+        const sent = await this.d.cards.send({
+          userId,
+          space: target.space,
+          agent: 'mail',
+          kind: 'info',
+          type,
+          title: card.title,
+          ...(card.amount ? { amount: card.amount } : {}),
+          lines: card.lines,
+          buttons,
+          ...(billId ? { payload: { billId } } : {}),
+          state: 'done',
+        });
+        delivered = sent.delivered;
+      } else {
+        await this.d.messaging.sendText(target.space, text);
+        delivered = true;
+      }
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).name, userId }, 'bill card failed; will retry');
+      return false;
+    }
+    if (!delivered) {
+      this.d.log.warn({ err: 'not_delivered', userId }, 'bill card not delivered; will retry');
+      return false;
+    }
+    // Only after the card reached the thread: a failed send must retry on the next scan.
+    try {
+      await this.d.messages.add({
+        conversationId: target.conversationId,
+        direction: 'outbound',
+        text,
+      });
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).name, userId }, 'bill history write failed');
+    }
+    return true;
   }
 
   async open(userId: string) {
@@ -463,6 +548,57 @@ export class BillsService {
   }
 }
 
+/** The `found` card for fresh bills. One bill gets the number; several are rows. */
+export function newBillsCard(
+  fresh: BillRow[],
+  reminded: ReadonlySet<string> = new Set(),
+  contexts: Readonly<Record<string, BillContext | undefined>> = {},
+): { title: string; amount?: string; lines: { label?: string; value: string }[] } {
+  const one = fresh.length === 1 ? fresh[0] : undefined;
+  if (one) {
+    const ctx = contexts[one.id];
+    const amount = one.amount ? formatMoney(one.amount, one.currency) : undefined;
+    return {
+      title: `${ctx?.repeat ? 'Bill again' : 'New bill'} · ${one.payeeName}`.slice(0, 80),
+      ...(amount ? { amount } : {}),
+      lines: [
+        { label: 'Due', value: one.dueOn ? formatDay(one.dueOn) : 'no due date' },
+        {
+          label: 'Reminder',
+          value: reminded.has(one.id) ? 'scheduled' : 'none',
+        },
+        ...(ctx
+          ? [
+              {
+                label: 'Watch',
+                value: watchSuffix(Boolean(one.dueOn) && reminded.has(one.id)),
+              },
+            ]
+          : []),
+        ...(ctx?.repeat && ctx.repeatLine
+          ? [{ label: 'Change', value: ctx.repeatLine.slice(0, 120) }]
+          : []),
+      ],
+    };
+  }
+  return {
+    title: `${fresh.length} ${fresh.some((b) => contexts[b.id]?.repeat) ? 'bills' : 'new bills'}`,
+    lines: [
+      ...fresh.slice(0, 3).map((b) => {
+        const ctx = contexts[b.id];
+        const repeat = ctx?.repeat && ctx.repeatLine ? ` · ${ctx.repeatLine}` : '';
+        return {
+          label: `${b.payeeName}${ctx?.repeat ? ' again' : ''}`.slice(0, 40),
+          value: `${formatMoney(b.amount, b.currency)}${
+            b.dueOn ? `, due ${formatDay(b.dueOn)}` : ''
+          }${repeat}`.slice(0, 120),
+        };
+      }),
+      ...(fresh.length > 3 ? [{ value: `…and ${fresh.length - 3} more` }] : []),
+    ],
+  };
+}
+
 export function newBillsText(
   fresh: BillRow[],
   reminded: ReadonlySet<string> = new Set(),
@@ -492,4 +628,82 @@ export function newBillsText(
   const more =
     fresh.length > 3 ? `\n…and ${fresh.length - 3} more. ask me "what bills do i have?"` : '';
   return `${fresh.length} ${anyRepeat ? 'bills' : 'new bills'}:\n${shown.join('\n')}${more}`;
+}
+
+export type OpenBill = ReturnType<typeof billView>;
+
+/** The first-scan summary, or the calm all-clear card. */
+export function openBillsCard(open: OpenBill[]): {
+  title: string;
+  amount?: string;
+  lines: { label?: string; value: string }[];
+} {
+  if (!open.length) {
+    return {
+      title: 'No bills found',
+      lines: [
+        { value: 'Nothing from the last 2 months.' },
+        { value: "i'll check every few hours and text you when one lands." },
+      ],
+    };
+  }
+  if (open.length === 1) {
+    const b = open[0] as OpenBill;
+    return {
+      title: `Open bill · ${b.payee}`.slice(0, 80),
+      amount: b.amount,
+      lines: [
+        { label: 'Due', value: b.due },
+        { label: 'Status', value: b.overdue ? 'Overdue' : 'Open' },
+      ],
+    };
+  }
+  return {
+    title: `${open.length} open bills`,
+    lines: [
+      ...open.slice(0, 3).map((b) => ({
+        label: b.payee.slice(0, 40),
+        value: `${b.amount}${b.overdue ? `, was due ${b.due}` : `, due ${b.due}`}`.slice(0, 120),
+      })),
+      ...(open.length > 3 ? [{ value: `…and ${open.length - 3} more` }] : []),
+    ],
+  };
+}
+
+/** The first-scan summary after Gmail connects. */
+export function bills0Text(open: OpenBill[]): string {
+  if (!open.length)
+    return "all clear: no bills in your inbox from the last 2 months. i'll check every few hours and text you when one lands.";
+  const shown = open
+    .slice(0, 4)
+    .map(
+      (b) =>
+        `• ${b.payee}: ${b.amount}${b.dueOn ? `${b.overdue ? ', was due' : ', due'} ${formatDay(b.dueOn)}` : ''}`,
+    );
+  const more = open.length > 4 ? `\n…and ${open.length - 4} more.` : '';
+  const head = open.length === 1 ? 'found 1 open bill:' : `found ${open.length} open bills:`;
+  return `${head}\n${shown.join('\n')}${more}\ni'll remind you before each one's due, and watch for the next one from each biller. paid one already? just tell me.`;
+}
+
+/** One bill gets actions; a summary of several stays read-only. */
+export function billButtons(bills: BillRow[], billers: readonly Biller[] = BILLERS): CardButton[] {
+  if (bills.length !== 1 || !bills[0]) return [];
+  const bill = bills[0];
+  const pay = payability(bill, billers);
+  return [
+    ...(pay.payable
+      ? [{ id: 'pay', label: 'Pay this bill', action: 'pay' } satisfies CardButton]
+      : []),
+    { id: 'dismiss', label: 'Not mine', action: 'dismiss' },
+  ];
+}
+
+function openBillButtons(open: OpenBill[]): CardButton[] {
+  if (open.length !== 1 || !open[0]) return [];
+  return [
+    ...(open[0].payableInApp
+      ? [{ id: 'pay', label: 'Pay this bill', action: 'pay' } satisfies CardButton]
+      : []),
+    { id: 'dismiss', label: 'Not mine', action: 'dismiss' },
+  ];
 }

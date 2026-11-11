@@ -447,7 +447,7 @@ export class ApprovalService {
     approvalId: string,
     state: CardState,
     subcaption?: string,
-    extra: { receiptUrl?: string } = {},
+    extra: { receiptUrl?: string; type?: string } = {},
   ): Promise<void> {
     try {
       const card = await this.d.cardsRepo.byApprovalId(approvalId);
@@ -456,6 +456,7 @@ export class ApprovalService {
         card.id,
         {
           state,
+          ...(extra.type ? { type: extra.type } : {}),
           ...(extra.receiptUrl ? { receiptUrl: extra.receiptUrl } : {}),
           ...(state === 'sent' || state === 'blocked' || state === 'expired' || state === 'failed'
             ? {
@@ -2251,7 +2252,20 @@ export class ApprovalService {
       }
       await this.d.mood.on(row.userId, 'approval_settled');
       const dry = (await this.d.approvals.events(id)).some((e) => e.reason === 'relayed (dry run)');
-      await this.updateCard(id, 'sent', 'sent', this.receiptOpts(row.txHash, dry));
+      const depositOnly =
+        row.kind === 'invest' &&
+        (!this.d.invest || !investDepositAddress(row.actions as NearAction[]));
+      // A dry run moved nothing, and a deposit alone does not prove the swap bought
+      // anything. Use the neutral Done card instead of claiming Paid/Bought.
+      await this.updateCard(
+        id,
+        'sent',
+        dry ? 'test run, nothing sent.' : depositOnly ? "sent. couldn't confirm the swap." : 'sent',
+        {
+          ...this.receiptOpts(row.txHash, dry),
+          ...(dry || depositOnly ? { type: 'done' } : {}),
+        },
+      );
       return 'settled';
     }
     await this.d.approvals.transition(id, row.kind, 'relayed', 'failed', 'chain reported failure');

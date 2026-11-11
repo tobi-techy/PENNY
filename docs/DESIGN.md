@@ -122,6 +122,9 @@ Mood changes words, tapbacks and card art only. It never changes a limit, a rout
 | Weekly check-in | mint `#8FE4CC` | no (read-only) |
 | Write (post, email or message as you) | indigo `#8B8CF0` | yes |
 | New bot | amber `#E8C766` | yes if it has write or money tools |
+| Bills found | orange `#FEA247` | no (read-only) |
+| Connect app / set up | blue `#6EA1D6` | no (a link, not an action) |
+| Unfreeze | guard pink `#F6A8F0` | yes (the one card that turns keys back on) |
 
 A bot's own cards use the bot's colour once it exists; the amber "new bot" card is the ask to create it.
 

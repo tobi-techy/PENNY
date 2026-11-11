@@ -31,4 +31,42 @@ final class CardKindTests: XCTestCase {
         let tags = CardKind.allCases.map(\.tag)
         XCTAssertEqual(Set(tags).count, tags.count)
     }
+
+    func testEveryEngineCardTypeHasItsOwnKind() {
+        // packages/shared KNOWN_CARD_TYPES: nothing falls back to `plain`
+        XCTAssertEqual(CardKind(cardType: "connect"), .connect)
+        XCTAssertEqual(CardKind(cardType: "setup"), .setup)
+        XCTAssertEqual(CardKind(cardType: "unfreeze"), .unfreeze)
+        for type in ["invest", "pick", "send", "pay_bill", "request", "errand", "guard_block",
+                     "checkin", "write", "new_bot", "reminder", "email_draft", "plan", "found",
+                     "done", "unfreeze", "connect", "setup"] {
+            XCTAssertNotEqual(CardKind(cardType: type), .plain, type)
+        }
+    }
+
+    func testFinishedCardsNameTheirOwnOutcome() {
+        XCTAssertEqual(CardKind.send.settledLabel, "Sent")
+        XCTAssertEqual(CardKind.bill.settledLabel, "Paid")
+        XCTAssertEqual(CardKind.write.settledLabel, "Sent")
+        XCTAssertEqual(CardKind.bot.settledLabel, "Created")
+        XCTAssertEqual(CardKind.unfreeze.settledLabel, "Unfrozen")
+        XCTAssertEqual(CardKind.found.settledLabel, "Found")
+    }
+
+    func testTheCheckedInContractFixtureMatchesTheCards() throws {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { root.deleteLastPathComponent() }
+        let url = root.appendingPathComponent("packages/shared/contracts/card-contract.json")
+        let fixture = try JSONParser.parse(Data(contentsOf: url))
+        for item in fixture["types"]?.arrayValue ?? [] {
+            let type = try XCTUnwrap(item["type"]?.stringValue)
+            let kind = CardKind(cardType: type)
+            XCTAssertNotEqual(kind, .plain, type)
+            XCTAssertEqual(kind.tag, item["tag"]?.stringValue, type)
+            XCTAssertEqual(kind.settledLabel, item["settled"]?.stringValue, type)
+        }
+        for (state, pill) in fixture["pills"]?.objectValue ?? [:] {
+            XCTAssertEqual(CardState(rawValue: state)?.pillTitle, pill.stringValue, state)
+        }
+    }
 }

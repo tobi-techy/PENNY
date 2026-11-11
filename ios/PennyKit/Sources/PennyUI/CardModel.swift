@@ -7,6 +7,7 @@ import SwiftUI
 public enum CardKind: String, CaseIterable, Sendable {
     case invest, send, bill, split, errand, guardBlock, pick, weekly, write, bot
     case reminder, emailDraft, plan, found, done, plain
+    case connect, setup, unfreeze
 
     public var palette: CardPalette {
         switch self {
@@ -23,6 +24,9 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .plan: return .purple
         case .found: return .orange
         case .done: return .green
+        case .connect: return .blue
+        case .setup: return .blue
+        case .unfreeze: return .guardPink
         case .plain: return .muted
         }
     }
@@ -30,9 +34,9 @@ public enum CardKind: String, CaseIterable, Sendable {
     public var crew: Crew {
         switch self {
         case .invest, .pick: return .invest
-        case .send, .split, .errand, .write, .bot, .reminder, .plan, .done, .plain: return .penny
+        case .send, .split, .errand, .write, .bot, .reminder, .plan, .done, .plain, .connect, .setup: return .penny
         case .bill, .emailDraft, .found: return .mail
-        case .guardBlock: return .guardian
+        case .guardBlock, .unfreeze: return .guardian
         case .weekly: return .finance
         }
     }
@@ -46,7 +50,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .errand: return "✦ ERRAND"
         case .guardBlock: return "■ BLOCKED"
         case .pick: return "◇ PICK ONE"
-        case .weekly: return "● YOUR WEEK"
+        case .weekly: return "◎ THIS WEEK"
         case .write: return "✎ WRITE"
         case .bot: return "✳ NEW BOT"
         case .reminder: return "◷ REMINDER"
@@ -54,7 +58,28 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .plan: return "☰ PLAN"
         case .found: return "◉ FOUND IT"
         case .done: return "✓ DONE"
+        case .connect: return "⇢ CONNECT"
+        case .setup: return "◈ SET UP"
+        case .unfreeze: return "◆ UNFREEZE"
         case .plain: return "● PENNY"
+        }
+    }
+
+    /// The outcome the finished card announces ("Sent", "Paid", "Created").
+    public var settledLabel: String {
+        switch self {
+        case .send: return "Sent"
+        case .invest: return "Bought"
+        case .bill: return "Paid"
+        case .errand: return "Hired"
+        case .write, .emailDraft: return "Sent"
+        case .bot: return "Created"
+        case .unfreeze: return "Unfrozen"
+        case .connect: return "Connected"
+        case .setup: return "Set up"
+        case .found: return "Found"
+        case .guardBlock: return "Blocked"
+        default: return "Done"
         }
     }
 
@@ -76,6 +101,9 @@ public enum CardKind: String, CaseIterable, Sendable {
         case "plan": self = .plan
         case "found": self = .found
         case "done": self = .done
+        case "connect": self = .connect
+        case "setup": self = .setup
+        case "unfreeze": self = .unfreeze
         default: self = .plain
         }
     }
@@ -171,6 +199,8 @@ public enum CardPhase: Equatable, Sendable {
     case blocked(message: String)
     /// An info card (reminder set, draft ready, found it): rows and its buttons.
     case info
+    /// An info card that finished (connected, set up, dismissed): rows, then its outcome.
+    case infoDone
     /// An info card that is finished (e.g. undone).
     case closed(message: String)
 
@@ -178,7 +208,7 @@ public enum CardPhase: Equatable, Sendable {
         switch self {
         case .loading, .approving, .approved: return .working
         case .ask, .info: return .ask
-        case .done: return .calm
+        case .done, .infoDone: return .calm
         case .expired, .declined, .unavailable, .closed: return .quiet
         case .failed, .blocked: return .alarm
         }
@@ -195,7 +225,7 @@ public enum CardPhase: Equatable, Sendable {
                                                   StatusStep(label: "Sending", state: .active)])
         case .sent: return .done(steps: [StatusStep(label: "Approved with Face ID", state: .done),
                                          StatusStep(label: "Sent", state: .done)], at: now)
-        case .done: return card.isApproval ? .done(steps: [], at: now) : .info
+        case .done: return card.isApproval ? .done(steps: [], at: now) : .infoDone
         case .blocked: return .blocked(message: card.lines.first?.value ?? "Guard said no.")
         case .expired: return .expired
         case .declined: return .declined

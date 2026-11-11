@@ -60,9 +60,11 @@ const BUTTON_POLICY: Readonly<Record<string, boolean>> = {
   decline: false,
   renew: false,
   freeze: false, // freezing only takes power away; it never needs Face ID
+  dismiss: false, // closes a saved bill inside Penny; no money moves
   send: true,
   approve: true,
   unfreeze: true, // gives power back: Face ID on the card, never a plain press
+  pay: true, // a bill card turns into a Face ID approval card first
 };
 
 export type PolicyAction =

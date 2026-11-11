@@ -18,8 +18,15 @@ import {
   resumedText,
 } from '../src/commitments/copy.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
+import { sha256Hex } from '../src/lib/crypto.ts';
 import type { CommitmentRow } from '../src/repo/commitments.ts';
-import { enrolledUser, makeEngine, scriptedModel, type TestEngine } from './helpers.ts';
+import {
+  enrolledUser,
+  makeEngine,
+  scriptedModel,
+  type TestEngine,
+  tokenFromUrl,
+} from './helpers.ts';
 
 class InboxConnector extends FakeConnector {
   inbox: Record<string, unknown>[] = [];
@@ -193,6 +200,11 @@ describe('commitments (engine)', () => {
     return t.engine.services.bills.scanAll();
   }
 
+  const latestCard = async () => {
+    const url = t.messaging.cards.at(-1)?.card.url;
+    return url ? t.engine.repos.cards.byTokenHash(sha256Hex(tokenFromUrl(url))) : null;
+  };
+
   beforeEach(async () => {
     inbox = new InboxConnector();
     t = await makeEngine({ connectors: inbox });
@@ -203,16 +215,21 @@ describe('commitments (engine)', () => {
 
   test('the first bill opens an obligation, and the next bill recognises it', async () => {
     await loadInbox([octDstv]);
-    expect(t.messaging.texts.at(-1)?.text).toBe(
-      "new bill: DStv: ₦18,400, due wed 14 oct. i'll remind you, and watch for the next one.",
-    );
+    const first = await latestCard();
+    expect(first?.title).toBe('New bill · DStv');
+    expect(first?.amount).toBe('₦18,400');
+    expect(first?.lines).toContainEqual({ label: 'Due', value: 'wed 14 oct' });
+    expect(first?.lines).toContainEqual({
+      label: 'Watch',
+      value: "i'll remind you, and watch for the next one.",
+    });
     expect(await t.engine.repos.commitments.active(u.userId)).toHaveLength(1);
 
     t.clock.now = new Date('2026-11-08T12:00:00Z');
     await loadInbox([octDstv, novDstv]);
-    expect(t.messaging.texts.at(-1)?.text).toBe(
-      "DStv again: ₦18,400, due sat 14 nov. same as last month. i'll remind you.",
-    );
+    const second = await latestCard();
+    expect(second?.title).toBe('Bill again · DStv');
+    expect(second?.lines).toContainEqual({ label: 'Change', value: 'same as last month.' });
 
     const [watch] = await t.engine.repos.commitments.active(u.userId);
     expect(watch).toMatchObject({
@@ -241,25 +258,29 @@ describe('commitments (engine)', () => {
     });
   });
 
-  test('a rescan in the same cycle never texts the bill twice', async () => {
+  test('a rescan in the same cycle never sends the bill twice', async () => {
     await loadInbox([octDstv]);
     t.clock.now = new Date('2026-11-08T12:00:00Z');
     await loadInbox([octDstv, novDstv]);
-    const before = t.messaging.texts.length;
+    const before = t.messaging.cards.length;
     await loadInbox([octDstv, novDstv]);
-    expect(t.messaging.texts.length).toBe(before);
-    expect(t.messaging.texts.filter((x) => x.text.includes('DStv again'))).toHaveLength(1);
+    expect(t.messaging.cards.length).toBe(before);
+    expect(t.messaging.cards.filter((x) => x.card.caption === 'Bill again · DStv')).toHaveLength(1);
   });
 
-  test('a price change is named in the bill text and recorded', async () => {
+  test('a price change is named in the bill card and recorded', async () => {
     await loadInbox([octDstv]);
     t.clock.now = new Date('2026-11-08T12:00:00Z');
     await loadInbox([octDstv, novDstv]);
     t.clock.now = new Date('2026-12-08T12:00:00Z');
     await loadInbox([octDstv, novDstv, decDstvMore]);
-    expect(t.messaging.texts.at(-1)?.text).toContain(
-      "DStv again: ₦21,400, due mon 14 dec. that's ₦3,000 more than last month.",
-    );
+    const changed = await latestCard();
+    expect(changed?.title).toBe('Bill again · DStv');
+    expect(changed?.amount).toBe('₦21,400');
+    expect(changed?.lines).toContainEqual({
+      label: 'Change',
+      value: "that's ₦3,000 more than last month.",
+    });
     const [watch] = await t.engine.repos.commitments.active(u.userId);
     const events = await t.engine.repos.commitments.events(watch?.id ?? '');
     expect(events.some((e) => e.kind === 'amount_changed')).toBe(true);

@@ -28,7 +28,7 @@ final class LiveCardUITests: XCTestCase {
         XCTAssertEqual(CardPhase.from(card: try card("expired"), now: now), .expired)
         XCTAssertEqual(CardPhase.from(card: try card("declined"), now: now), .declined)
         if case .failed = CardPhase.from(card: try card("failed"), now: now) {} else { XCTFail("failed") }
-        XCTAssertEqual(CardPhase.from(card: try card("done", kind: "info", type: "reminder"), now: now), .info)
+        XCTAssertEqual(CardPhase.from(card: try card("done", kind: "info", type: "reminder"), now: now), .infoDone)
         XCTAssertEqual(CardPhase.from(card: try card("undone", kind: "info", type: "reminder"), now: now), .closed(message: "Undone."))
     }
 

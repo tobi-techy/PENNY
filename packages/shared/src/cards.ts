@@ -27,6 +27,8 @@ export const KNOWN_CARD_TYPES = [
   'found',
   'done',
   'unfreeze',
+  'connect',
+  'setup',
 ] as const;
 export type KnownCardType = (typeof KNOWN_CARD_TYPES)[number];
 
@@ -48,6 +50,8 @@ export const CardButtonAction = z.enum([
   'renew',
   'freeze',
   'unfreeze',
+  'pay',
+  'dismiss',
 ]);
 export type CardButtonAction = z.infer<typeof CardButtonAction>;
 
@@ -129,6 +133,8 @@ const STYLE: Record<KnownCardType, { color: string; tag: string }> = {
   found: { color: '#FEA247', tag: '◉ FOUND IT' },
   done: { color: '#4FD57F', tag: '✓ DONE' },
   unfreeze: { color: '#F6A8F0', tag: '◆ UNFREEZE' },
+  connect: { color: '#6EA1D6', tag: '⇢ CONNECT' },
+  setup: { color: '#6EA1D6', tag: '◈ SET UP' },
 };
 const PLAIN = { color: '#B1C3D8', tag: '● PENNY' };
 
@@ -156,6 +162,47 @@ export function crewColor(agent: string): string {
       return '#5EE3A1';
     default:
       return '#E8C766';
+  }
+}
+
+/**
+ * What a finished card says it did, in the card's own words. One card type,
+ * one outcome: a bot is "Created", a bill is "Paid", a send is "Sent".
+ */
+export function settledPill(type: string): string {
+  switch (type) {
+    case 'send':
+      return 'Sent';
+    case 'invest':
+      return 'Bought';
+    case 'pay_bill':
+      return 'Paid';
+    case 'errand':
+      return 'Hired';
+    case 'write':
+    case 'email_draft':
+      return 'Sent';
+    case 'new_bot':
+      return 'Created';
+    case 'unfreeze':
+      return 'Unfrozen';
+    case 'connect':
+      return 'Connected';
+    case 'setup':
+      return 'Set up';
+    case 'found':
+      return 'Found';
+    case 'guard_block':
+      return 'Blocked';
+    case 'reminder':
+    case 'checkin':
+    case 'request':
+    case 'pick':
+    case 'plan':
+    case 'done':
+      return 'Done';
+    default:
+      return 'Done';
   }
 }
 

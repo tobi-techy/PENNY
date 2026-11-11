@@ -8,7 +8,7 @@ import {
   parseBills,
   parseDueDate,
 } from '../src/bills/parse.ts';
-import { billSearchQuery, newBillsText } from '../src/bills/service.ts';
+import { billSearchQuery, newBillsCard, newBillsText } from '../src/bills/service.ts';
 import {
   describeNow,
   localDate,
@@ -187,6 +187,36 @@ describe('parseBills', () => {
     expect(newBillsText([b({})], new Set())).toBe('new bill: DStv: ₦18,400, due sat 14 nov.');
     expect(newBillsText([b({}), b({ payeeName: 'IKEDC', dueOn: null })])).toContain('2 new bills');
   });
+  test('new bills card: the number for one, rows for several', () => {
+    const b = (over: Partial<BillRow>) =>
+      ({
+        id: 'bil_1',
+        payeeName: 'DStv',
+        amount: '18400',
+        currency: 'NGN',
+        dueOn: '2026-11-14',
+        ...over,
+      }) as BillRow;
+    expect(newBillsCard([b({})], new Set(['bil_1']))).toEqual({
+      title: 'New bill · DStv',
+      amount: '₦18,400',
+      lines: [
+        { label: 'Due', value: 'sat 14 nov' },
+        { label: 'Reminder', value: 'scheduled' },
+      ],
+    });
+    const many = newBillsCard([
+      b({}),
+      b({ id: 'bil_2', payeeName: 'IKEDC', amount: '9000', dueOn: null }),
+      b({ id: 'bil_3', payeeName: 'MTN', amount: '5000', dueOn: '2026-11-20' }),
+      b({ id: 'bil_4', payeeName: 'Water', amount: '2000', dueOn: null }),
+    ]);
+    expect(many.title).toBe('4 new bills');
+    expect(many.amount).toBeUndefined();
+    expect(many.lines).toHaveLength(4);
+    expect(many.lines[1]).toEqual({ label: 'IKEDC', value: '₦9,000' });
+    expect(many.lines[3]).toEqual({ value: '…and 1 more' });
+  });
 });
 
 describe('time', () => {
@@ -299,7 +329,7 @@ describe('bills + reminders (engine)', () => {
     expect(r.ok).toBe(false);
   });
 
-  test('background scan texts fresh bills once and stores stale ones quietly', async () => {
+  test('background scan shows fresh bills as a found card once and stores stale ones quietly', async () => {
     inbox.inbox = [
       dstvMail,
       {
@@ -310,14 +340,27 @@ describe('bills + reminders (engine)', () => {
         snippet: '',
       },
     ];
+    const found = () => t.messaging.cards.filter((c) => c.card.caption.startsWith('New bill'));
     const first = await t.engine.services.bills.scanAll();
     expect(first.notified).toBe(1);
-    const sent = t.messaging.texts.filter((x) => x.text.startsWith('new bill'));
+    const sent = found();
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.text).toContain('DStv: ₦18,400, due sat 14 nov');
-    expect(sent[0]?.text).not.toContain('IKEDC');
+    expect(sent[0]?.card).toMatchObject({
+      caption: 'New bill · DStv',
+      subcaption: 'due sat 14 nov',
+    });
+    const card = await t.engine.repos.cards.byTokenHash(
+      (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(sent[0]?.card.url)),
+    );
+    expect(card?.type).toBe('found');
+    expect(card?.lines.map((l) => l.value)).toEqual([
+      'sat 14 nov',
+      'scheduled',
+      "i'll remind you, and watch for the next one.",
+    ]);
+    expect(sent[0]?.card.caption).not.toContain('IKEDC');
     await t.engine.services.bills.scanAll();
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(1);
+    expect(found()).toHaveLength(1);
     expect(await t.engine.services.bills.open(u.userId)).toHaveLength(2);
   });
 
@@ -357,27 +400,32 @@ describe('bills + reminders (engine)', () => {
     expect(r.ok ? r.reminded : []).toEqual([billId]);
   });
 
-  test('a failed new-bill text is retried on the next scan, not lost', async () => {
+  test('a failed new-bill card is retried on the next scan, not lost', async () => {
     inbox.inbox = [dstvMail];
-    const original = t.messaging.sendText.bind(t.messaging);
+    const found = () => t.messaging.cards.filter((c) => c.card.caption.startsWith('New bill'));
+    const sendCard = t.messaging.sendCard.bind(t.messaging);
+    const sendText = t.messaging.sendText.bind(t.messaging);
     let fail = true;
-    t.messaging.sendText = async (space, text) => {
+    t.messaging.sendCard = async (...args) => {
+      if (fail) throw new Error('messages down');
+      return sendCard(...args);
+    };
+    t.messaging.sendText = async (...args) => {
       if (fail) {
         fail = false;
         throw new Error('messages down');
       }
-      return original(space, text);
+      return sendText(...args);
     };
     expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(0);
+    expect(found()).toHaveLength(0);
 
     expect((await t.engine.services.bills.scanAll()).notified).toBe(1);
-    const sent = t.messaging.texts.filter((x) => x.text.startsWith('new bill'));
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.text).toContain('DStv: ₦18,400');
+    expect(found()).toHaveLength(1);
+    expect(found()[0]?.card.caption).toBe('New bill · DStv');
     // and only once
     expect((await t.engine.services.bills.scanAll()).notified).toBe(0);
-    expect(t.messaging.texts.filter((x) => x.text.startsWith('new bill'))).toHaveLength(1);
+    expect(found()).toHaveLength(1);
   });
 
   test('a failed reminder send retries, then gives up after three attempts', async () => {
@@ -566,6 +614,9 @@ describe('paying a bill in USDC (demo biller)', () => {
     // but the bill and its reminder stay, and the text says it was a test run.
     const out = await approveLatest(t, u, row.id);
     expect(out.status).toBe('settled');
+    const done = await t.engine.repos.cards.byApprovalId(row.id);
+    expect(done?.type).toBe('done');
+    expect(done?.statusLine).toBe('test run, nothing sent.');
     expect((await t.engine.services.bills.open(u.userId)).map((b) => b.payee).sort()).toEqual([
       'DStv',
       'Penny Demo Utility',
@@ -574,6 +625,70 @@ describe('paying a bill in USDC (demo biller)', () => {
     expect(pending.some((p) => p.billId === bill.billId)).toBe(true);
     expect(t.messaging.texts.at(-1)?.text).toBe(
       "paid (test run, nothing sent). Penny Demo Utility, $5.00. it's still on your list.",
+    );
+  });
+
+  test('a found bill card pays through Face ID, or dismisses without moving money', async () => {
+    const target = await t.engine.repos.users.primarySpace(u.userId);
+    if (!target) throw new Error('no primary space');
+    const demo = await t.engine.repos.bills.get(
+      u.userId,
+      (await billFor('Penny Demo Utility')).billId,
+    );
+    const dstv = await t.engine.repos.bills.get(u.userId, (await billFor('DStv')).billId);
+    if (!demo || !dstv) throw new Error('missing bills');
+
+    expect(
+      await t.engine.services.bills.sendNewBillsCard(u.userId, target, [demo], new Set()),
+    ).toBe(true);
+    const payCard = t.messaging.cards.at(-1)?.card;
+    expect(payCard).toMatchObject({
+      caption: 'New bill · Penny Demo Utility',
+      subcaption: 'due sat 14 nov',
+    });
+    expect(payCard?.url).toMatch(/^https:\/\/penny\.test\/a\/[A-Za-z0-9_-]{43}$/);
+    const payRow = await t.engine.repos.cards.byTokenHash(
+      (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(payCard?.url)),
+    );
+    expect(payRow?.buttons.map((b) => b.action)).toEqual(['pay', 'dismiss']);
+
+    // Pay is not money yet: the same card turns into a pay_bill Face ID approval.
+    const press = (token: string, buttonId: string) =>
+      t.engine.app.request(`/v1/cards/by-token/${token}/press`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+        body: JSON.stringify({ buttonId }),
+      });
+    const token = tokenFromUrl(payCard?.url);
+    const paid = await press(token, 'pay');
+    expect(paid.status).toBe(200);
+    const paidBody = (await paid.json()) as { card: { id: string; kind: string; state: string } };
+    expect(paidBody.card.id).toBe(payRow?.id ?? '');
+    expect(paidBody.card.kind).toBe('approval');
+    expect(paidBody.card.state).toBe('ready');
+    const approvals = await t.engine.repos.approvals.listForUser(u.userId, 5);
+    expect(approvals.some((a) => a.kind === 'pay_bill' && a.billId === demo.id)).toBe(true);
+
+    expect(
+      await t.engine.services.bills.sendNewBillsCard(u.userId, target, [dstv], new Set()),
+    ).toBe(true);
+    const dismissCard = t.messaging.cards.at(-1)?.card;
+    const dismissRow = await t.engine.repos.cards.byTokenHash(
+      (await import('../src/lib/crypto.ts')).sha256Hex(tokenFromUrl(dismissCard?.url)),
+    );
+    expect(dismissRow?.buttons.map((b) => b.action)).toEqual(['dismiss']);
+    const dismissed = await press(tokenFromUrl(dismissCard?.url), 'dismiss');
+    expect(dismissed.status).toBe(200);
+    const dismissedBody = (await dismissed.json()) as {
+      card: { state: string; title: string; buttons: unknown[] };
+    };
+    expect(dismissedBody.card).toMatchObject({
+      state: 'done',
+      title: 'Bill dismissed',
+      buttons: [],
+    });
+    expect((await t.engine.services.bills.open(u.userId)).map((b) => b.payee)).not.toContain(
+      'DStv',
     );
   });
 

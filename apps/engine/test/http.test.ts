@@ -100,9 +100,11 @@ describe('POST /v1/photon/webhook', () => {
         { spaceId: `any;-;${from}`, userHandle: from },
         { force: true },
       );
-      const url = t.messaging.texts.at(-1)?.text ?? '';
+      const url = t.messaging.richLinks.at(-1)?.url ?? '';
       expect(url).not.toContain(host);
       expect(url).toMatch(/^https:\/\/penny\.test\/setup#code=/);
+      // still never pasted as a URL in a sentence
+      expect(t.messaging.texts.at(-1)?.text ?? '').not.toContain('/setup#code=');
     }
   });
 

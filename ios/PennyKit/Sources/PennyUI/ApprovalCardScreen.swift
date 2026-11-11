@@ -23,7 +23,10 @@ public struct ApprovalCardScreen: View {
     public var body: some View {
         switch presentation {
         case .transcript:
-            card
+            VStack(alignment: .leading, spacing: 8) {
+                card
+                if let notes { noteView(notes) }
+            }
         case .expanded:
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -31,7 +34,7 @@ public struct ApprovalCardScreen: View {
                     if model.phase == .ask {
                         Button { Task { await model.decline() } } label: {
                             Text("Not now · nothing moves")
-                                .font(.geist(12.5, medium: true))
+                                .cardFont(12.5, medium: true)
                                 .foregroundStyle(PennyColor.meta)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 38)
@@ -42,12 +45,12 @@ public struct ApprovalCardScreen: View {
                     if model.confirmingFreeze != nil {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Freeze Penny? Every key is switched off and every open card is cancelled.")
-                                .font(.geist(12.5))
+                                .cardFont(12.5)
                                 .foregroundStyle(PennyColor.text)
                                 .fixedSize(horizontal: false, vertical: true)
                             Button { Task { await model.confirmFreeze() } } label: {
                                 Text("Yes, freeze everything")
-                                    .font(.geist(12.5, medium: true))
+                                    .cardFont(12.5, medium: true)
                                     .foregroundStyle(PennyColor.errorText)
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 38)
@@ -56,7 +59,7 @@ public struct ApprovalCardScreen: View {
                             .buttonStyle(.plain)
                             Button { model.cancelFreeze() } label: {
                                 Text("Cancel")
-                                    .font(.geist(12.5))
+                                    .cardFont(12.5)
                                     .foregroundStyle(PennyColor.meta)
                                     .frame(maxWidth: .infinity)
                                     .frame(height: 38)
@@ -64,11 +67,8 @@ public struct ApprovalCardScreen: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    if let note = model.note {
-                        Text(note)
-                            .font(.geist(12))
-                            .foregroundStyle(PennyColor.meta)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    if let notes {
+                        noteView(notes)
                     }
                     if !model.signingPreview.isEmpty {
                         SigningPreview(summaries: model.signingPreview, approval: model.ticket?.detail)
@@ -80,6 +80,20 @@ public struct ApprovalCardScreen: View {
             }
             .background(Color.black.ignoresSafeArea())
         }
+    }
+
+    /// Action confirmations and a stale-card warning can both be true at once.
+    private var notes: String? {
+        let parts = [model.refreshWarning, model.note].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    private func noteView(_ note: String) -> some View {
+        Text(note)
+            .cardFont(12)
+            .foregroundStyle(PennyColor.meta)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var card: some View {
@@ -105,15 +119,15 @@ struct SigningPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("WHAT YOU'RE SIGNING")
-                .font(.geistMono(10))
+                .cardMonoFont(10)
                 .tracking(0.9)
                 .foregroundStyle(PennyColor.meta)
             ForEach(summaries) { summary in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(summary.title).font(.geist(13, medium: true)).foregroundStyle(PennyColor.text)
+                    Text(summary.title).cardFont(13, medium: true).foregroundStyle(PennyColor.text)
                     ForEach(summary.lines, id: \.self) { line in
                         Text(line)
-                            .font(.geistMono(11))
+                            .cardMonoFont(11)
                             .foregroundStyle(PennyColor.meta)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -126,7 +140,7 @@ struct SigningPreview: View {
             }
             if let approval {
                 Text("Good until \(approval.expiresAt.formatted(date: .omitted, time: .shortened)) · signed on this iPhone only")
-                    .font(.geistMono(10))
+                    .cardMonoFont(10)
                     .foregroundStyle(PennyColor.meta.opacity(0.7))
             }
         }

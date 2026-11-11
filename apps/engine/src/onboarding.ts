@@ -1,5 +1,7 @@
-import { formatDay } from './bills/parse.ts';
-import type { BillsService } from './bills/service.ts';
+import { type BillsService, bills0Text } from './bills/service.ts';
+
+export { bills0Text };
+
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { EnrollService } from './devices/enroll.ts';
 import type { Logger } from './lib/logger.ts';
@@ -105,15 +107,45 @@ export class OnboardingService {
     const target = await this.d.users.primarySpace(userId);
     const conv = target?.conversationId ?? null;
     await this.say(space, conv, SETUP_LEAD_TEXT);
-    await this.say(space, conv, `${this.base()}/setup#code=${code}`, 'setup link [code]');
+    // The setup link is its own rich card (the /setup page carries the Open Graph
+    // picture and the code stays in the fragment), never a bare URL in a sentence.
+    await this.d.messaging.sendLink(space, `${this.base()}/setup#code=${code}`);
+    if (conv)
+      await this.d.messages.add({
+        conversationId: conv,
+        direction: 'outbound',
+        text: 'setup link [code]',
+      });
     return { sent: true };
   }
 
-  /** A device just enrolled from the setup page: tell them in the thread. */
+  /** A device just enrolled from the setup page: close the loop with a card. */
   async onEnrolled(userId: string): Promise<void> {
     this.lastSetupLink.delete(userId);
     const target = await this.d.users.primarySpace(userId);
     if (!target) return;
+    if (this.d.cards) {
+      try {
+        await this.d.cards.send({
+          userId,
+          space: target.space,
+          agent: 'penny',
+          kind: 'info',
+          type: 'setup',
+          title: 'Penny is set up',
+          lines: [
+            { value: 'Approvals are on.' },
+            { value: 'Any move or action comes here as a card first.' },
+            { value: 'Only your Face ID approves it.' },
+          ],
+          buttons: [],
+          state: 'done',
+        });
+        return;
+      } catch (e) {
+        this.d.log.warn({ err: (e as Error).name, userId }, 'setup card failed; sending text');
+      }
+    }
     await this.say(target.space, target.conversationId, ENROLLED_TEXT);
   }
 
@@ -128,20 +160,22 @@ export class OnboardingService {
     toolkit: string,
     opts: { link?: string; space?: SpaceRef } = {},
   ): Promise<void> {
-    await this.d.watches.watch(userId, toolkit, new Date(this.d.now().getTime() + WATCH_TTL_MS));
-    // Send the connect URL as its own card, not buried in a sentence.
-    if (!opts.link || !opts.space) return;
-    if (this.d.cards) {
-      const { url } = await this.d.cards.createConnectCard({
+    const expiresAt = new Date(this.d.now().getTime() + WATCH_TTL_MS);
+    // Send the connect URL as its own card, not buried in a sentence. Keep the
+    // card id with the watch so the card can close itself when the app connects.
+    if (opts.link && opts.space && this.d.cards) {
+      const { url, cardId } = await this.d.cards.createConnectCard({
         userId,
         space: opts.space,
         toolkit,
         connectUrl: opts.link,
       });
+      await this.d.watches.watch(userId, toolkit, expiresAt, cardId);
       await this.d.messaging.sendLink(opts.space, url);
       return;
     }
-    await this.d.messaging.sendLink(opts.space, opts.link);
+    await this.d.watches.watch(userId, toolkit, expiresAt);
+    if (opts.link && opts.space) await this.d.messaging.sendLink(opts.space, opts.link);
   }
 
   /** Scheduler: announce new connections, then do the first useful thing. */
@@ -157,8 +191,9 @@ export class OnboardingService {
         const target = await this.d.users.primarySpace(w.userId);
         if (!target) continue;
         announced += 1;
-        if (w.toolkit === 'gmail') await this.afterGmail(w.userId, target);
-        else
+        const closed = await this.markConnectCard(w.cardId, w.toolkit);
+        if (w.toolkit === 'gmail') await this.afterGmail(w.userId, target, closed);
+        else if (!closed)
           await this.say(
             target.space,
             target.conversationId,
@@ -171,12 +206,39 @@ export class OnboardingService {
     return announced;
   }
 
+  private async markConnectCard(cardId: string | null, toolkit: string): Promise<boolean> {
+    if (!this.d.cards || !cardId) return false;
+    const name = toolkit === 'gmail' ? 'Gmail' : toolkit;
+    try {
+      const card = await this.d.cards.update(
+        cardId,
+        {
+          state: 'done',
+          title: `${name} connected`.slice(0, 80),
+          lines: [{ label: 'Status', value: 'Connected' }],
+          buttons: [],
+        },
+        { subcaption: 'connected.' },
+      );
+      return card !== null;
+    } catch (e) {
+      this.d.log.warn({ err: (e as Error).name, cardId, toolkit }, 'connect card update failed');
+      return false;
+    }
+  }
+
   private async afterGmail(
     userId: string,
     target: { conversationId: string; space: SpaceRef },
+    cardClosed: boolean,
   ): Promise<void> {
     const { space, conversationId } = target;
-    await this.say(space, conversationId, "gmail's connected. give me a sec, checking for bills…");
+    if (!cardClosed)
+      await this.say(
+        space,
+        conversationId,
+        "gmail's connected. give me a sec, checking for bills…",
+      );
     if (!this.d.bills) return;
     const r = await this.d.bills.scan(userId, { interactive: true });
     if (!r.ok) {
@@ -187,23 +249,18 @@ export class OnboardingService {
       );
       return;
     }
+    if (this.d.cards) {
+      const sent = r.newBills.length
+        ? await this.d.bills.sendNewBillsCard(
+            userId,
+            target,
+            r.newBills,
+            new Set(r.reminded),
+            r.contexts,
+          )
+        : await this.d.bills.sendOpenBillsCard(userId, target, await this.d.bills.open(userId));
+      if (sent) return;
+    }
     await this.say(space, conversationId, bills0Text(await this.d.bills.open(userId)));
   }
-}
-
-type OpenBill = Awaited<ReturnType<BillsService['open']>>[number];
-
-/** The first-scan summary after Gmail connects. */
-export function bills0Text(open: OpenBill[]): string {
-  if (!open.length)
-    return "all clear: no bills in your inbox from the last 2 months. i'll check every few hours and text you when one lands.";
-  const shown = open
-    .slice(0, 4)
-    .map(
-      (b) =>
-        `• ${b.payee}: ${b.amount}${b.dueOn ? `${b.overdue ? ', was due' : ', due'} ${formatDay(b.dueOn)}` : ''}`,
-    );
-  const more = open.length > 4 ? `\n…and ${open.length - 4} more.` : '';
-  const head = open.length === 1 ? 'found 1 open bill:' : `found ${open.length} open bills:`;
-  return `${head}\n${shown.join('\n')}${more}\ni'll remind you the day before each one's due, and watch for the next one from each biller. paid one already? just tell me.`;
 }

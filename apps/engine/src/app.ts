@@ -242,6 +242,7 @@ export function createEngine(d: EngineDeps) {
     commitments,
     ...(d.connectors ? { connectors: d.connectors } : {}),
     approvals: repos.approvals,
+    cards: cardSender,
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
     explorerTxUrl: `${d.explorerBaseUrl ?? (d.chainNetwork === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io')}/txns/`,
     log: d.log,
@@ -298,6 +299,25 @@ export function createEngine(d: EngineDeps) {
     approvals,
     reminders: repos.reminders,
     bots: repos.bots,
+    // Pay on a found bill becomes the same pay_bill approval Face ID knows how to sign.
+    payBill: async ({ userId, billId, space, card }) => {
+      const p = await bills.paymentPlan(userId, billId);
+      if (!p.ok) return { decision: 'block', reasons: [p.reason] };
+      return approvals.createMoneyApproval({
+        userId,
+        bot: null,
+        plan: p.plan,
+        space,
+        facts: p.facts,
+        fromCard: { id: card.id, tokenHash: card.tokenHash },
+        quiet: true,
+      });
+    },
+    // "Not mine" never moves money: it only closes the saved bill.
+    dismissBill: async (userId, billId) => {
+      const r = await bills.close(userId, billId, 'dismissed');
+      return r.ok ? { ok: true } : { ok: false, error: r.error };
+    },
     now,
     log: d.log,
   });
