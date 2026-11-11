@@ -195,10 +195,7 @@ describe('commitments (engine)', () => {
 
   beforeEach(async () => {
     inbox = new InboxConnector();
-    t = await makeEngine({
-      connectors: inbox,
-      extra: { explorerBaseUrl: 'https://testnet.nearblocks.io' },
-    });
+    t = await makeEngine({ connectors: inbox });
     t.clock.now = new Date('2026-10-08T12:00:00Z');
     u = await enrolledUser(t);
     await t.engine.repos.users.conversationFor(u.userId, u.space.spaceId, 'imessage', '+1555PENNY');
@@ -281,7 +278,7 @@ describe('commitments (engine)', () => {
       dryRun: false,
     });
     expect(t.messaging.texts.at(-1)?.text).toBe(
-      "paid. DStv, ₦18,400. i've crossed it off and cancelled the reminder. next one expected around tue 8 dec.\nreceipt: https://testnet.nearblocks.io/txns/5555555555555555555555555555555555555555555",
+      "paid. DStv, ₦18,400. i've crossed it off and cancelled the reminder. next one expected around tue 8 dec. the card has the receipt.",
     );
     const [watch] = await t.engine.repos.commitments.active(u.userId);
     expect(watch).toMatchObject({ paidCount: 1, lastPaidAmount: '18400' });

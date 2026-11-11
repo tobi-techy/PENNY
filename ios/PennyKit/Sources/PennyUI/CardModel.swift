@@ -285,6 +285,7 @@ extension Crew {
         default: self = .penny
         }
     }
+}
 
 extension CardRow {
     /// "X of Y" values get a meter (fraction = X / Y), everything else is a plain fact.
