@@ -256,6 +256,27 @@ export class Crew {
     return active.find((b) => b.slug === picked) ?? penny;
   }
 
+  /**
+   * The model sometimes answers a connect request from history instead of
+   * calling connect_app. Send the card deterministically so the only link in
+   * the thread is Penny's own card page.
+   */
+  async connectApp(
+    userId: string,
+    space: SpaceRef,
+    toolkit: 'gmail' | 'github',
+  ): Promise<'sent' | 'connected' | 'failed'> {
+    if (!this.d.connectors || !this.d.onboarding) return 'failed';
+    const r = await this.d.connectors.connect(userId, toolkit, {
+      callbackUrl: this.d.onboarding.connectedUrl(toolkit),
+    });
+    if (r.status === 'link') {
+      await this.d.onboarding.watchConnect(userId, toolkit, { link: r.redirectUrl, space });
+      return 'sent';
+    }
+    return r.status === 'connected' ? 'connected' : 'failed';
+  }
+
   async handle(
     userId: string,
     space: SpaceRef,
@@ -319,7 +340,7 @@ export class Crew {
         const extra = await this.d.connectors.toolsFor(userId, bot.slug);
         Object.assign(tools, extra);
         connectorNote =
-          '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app and share its tellUser text; Penny texts them when it is live. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';
+          '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app; it sends the card itself. Never paste a URL or a connect link into your reply. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';
       } catch {
         this.d.log.warn({ bot: bot.slug }, 'connector tools unavailable, continuing without them');
       }

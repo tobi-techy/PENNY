@@ -149,6 +149,42 @@ describe('onboarding', () => {
     expect(texts().filter((x) => x.includes('DStv')).length).toBe(1);
   });
 
+  test('a connect request still sends a card when the model reuses an old link', async () => {
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'connect' } }]),
+      scriptedModel([{ text: 'same link as before (https://connect.example/gmail)' }]),
+    );
+    const { handleInbound } = await import('../src/inbound.ts');
+    const { createLogger } = await import('../src/lib/logger.ts');
+    await handleInbound(
+      {
+        users: t.engine.repos.users,
+        messages: t.engine.repos.messages,
+        crew: t.engine.services.crew,
+        onboarding: t.engine.services.onboarding,
+        messaging: t.messaging,
+        userLimiter: { take: () => 0 } as never,
+        log: createLogger('silent'),
+        approvals: t.engine.services.approvals,
+      },
+      {
+        event: 'messages',
+        space: { id: space.spaceId, platform: 'imessage', type: 'dm' },
+        message: {
+          id: 'm-connect-fallback',
+          platform: 'imessage',
+          direction: 'inbound',
+          timestamp: new Date().toISOString(),
+          sender: { id: HANDLE, platform: 'imessage' },
+          content: { type: 'text', text: 'connect my gmail' },
+        },
+      } as never,
+    );
+    expect(t.messaging.richLinks.at(-1)?.url).toMatch(/^https:\/\/penny\.test\/c\//);
+    expect(texts().some((x) => x.includes('https://'))).toBe(false);
+    expect(texts().at(-1)).toBe('i sent you a connect card for gmail. tap it and approve.');
+  });
+
   test('connect watches expire quietly after 30 minutes', async () => {
     await t.engine.services.onboarding.watchConnect(userId, 'gmail');
     t.clock.now = new Date('2026-11-08T12:31:00Z');

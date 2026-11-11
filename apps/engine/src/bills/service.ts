@@ -357,11 +357,7 @@ export class BillsService {
     await this.d.onBillClosed?.(userId, b.id);
     const target = await this.d.users.primarySpace(userId);
     if (!target) return;
-    const link =
-      receipt.txHash && this.d.explorerTxUrl
-        ? `\nreceipt: ${this.d.explorerTxUrl}${receipt.txHash}`
-        : '';
-    const text = `paid. ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder.${link}`;
+    const text = `paid. ${b.payeeName}, ${formatMoney(b.amount, b.currency)}. i've crossed it off and cancelled the reminder. the card has the receipt.`;
     await this.d.messaging.sendText(target.space, text);
     await this.d.messages.add({
       conversationId: target.conversationId,

@@ -139,7 +139,14 @@ Penny is non-custodial. Your only full-access NEAR key is created on your iPhone
 
 ## 10. Hackathon tracks
 
-Swarms (a crew of agents that debate and hand off), Agents (acting on your behalf), DeFi (Intents + Glider portfolios), Privacy (non-custodial keys, private memory, NEAR AI Cloud inference).
+Penny fits four tracks. These are the ones to submit; the rest are adjacent and not claimed.
+
+- **Real-World Money (`realworld`)** — the product is everyday money: a bill found in Gmail, a reminder the day before, a stablecoin payment from iMessage, and a receipt on the card. The person never opens a wallet or installs an app.
+- **AI Security & Defense (`security`)** — the Guard contract, per-owner budgets, per-tx and daily caps, allowlists, expiry, pause/revoke and nonce; a phone key behind Face ID or a browser passkey; a locked Guard account; freeze by text. "Give an agent money without giving it the keys" is the whole design, not a feature.
+- **Agent Economy (`agents`)** — a crew of agents with their own accounts, tools, souls and limits. Penny routes work, Mail reads the inbox, Guard checks the plan, Invest prices a swap, and every acting step is a card the user approves.
+- **Privacy & Private AI (`privacy`)** — inference on NEAR AI Cloud with Intel TDX and NVIDIA GPU evidence and per-response signatures; the deployed engine runs `NEARAI_ATTESTATION=enforce` and reports `verified=true`.
+
+Adjacent, not claimed: `defi` (Invest uses NEAR Intents, but Penny is not a trading product), `swarms` (the crew hands off work, but there is no agent market or bidding), `business` (Penny is personal money, not a company treasury), `open` (the idea fits existing tracks).
 
 ## 11. Scope and plan
 
@@ -147,7 +154,7 @@ Swarms (a crew of agents that debate and hand off), Agents (acting on your behal
 - iMessage line via Photon, Penny replying with soul and moods.
 - Penny iMessage extension: the live card in its four states, Face ID signing on device.
 - Engine: router, Guard, approvals, webhook, relayer.
-- One real money path end to end on mainnet with tiny amounts (Invest via Intents, or Send).
+- One real money path end to end on testnet with test funds (a bill payment or Send), with mainnet relay kept off until explicitly enabled.
 - Device enrollment.
 - Custom bot creation (one demo bot).
 - README with "do X, see Y" steps, demo video, X post.

@@ -622,7 +622,7 @@ describe('plain tone', () => {
   });
   test('a long answer lands as a few short texts', async () => {
     const { handleInbound } = await import('../src/inbound.ts');
-    const f = await enrolledUser(t, '+15554103');
+    const f = await enrolledUser(t, '+15554104');
     const long =
       'mail found three bills this week. nepa is the big one at $84, due friday. the internet bill is $22 and the water bill is $14. if you want, finance can line up all three so you only approve once. otherwise i can remind you the day before each one is due.';
     t.setModels(
@@ -638,6 +638,17 @@ describe('plain tone', () => {
     expect(sent.length).toBeGreaterThan(1);
     expect(sent.join(' ').replace(/\s+/g, ' ')).toBe(long);
     for (const text of sent) expect(text.length).toBeLessThanOrEqual(240);
+  });
+
+  test('a raw connect link never reaches the thread', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554103');
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: 'tap to connect your gmail (https://connect.example/gmail)' }]),
+    );
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'connect my gmail'));
+    expect(t.messaging.texts.at(-1)?.text).not.toContain('https://');
   });
 });
 
