@@ -22,6 +22,16 @@ jobs:
         env:
           PENNY_ENV: dev
           DRY_RUN: "1"
+  swift:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: ios/PennyKit
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift build
+      - run: swift test
   contract:
     runs-on: ubuntu-latest
     defaults:

@@ -31,6 +31,19 @@ Tooling: Bun 1.x, TypeScript strict, Biome (lint+format), bun test, Drizzle ORM 
 - Agent sub-accounts hold no user funds. They sign nothing on behalf of users.
 - Optional later: a function-call key on the user account limited to a Penny vault contract with a small allowance for auto-approvals under the user's tap-to-approve limit. Out of scope for v0.1.
 
+## Guard (shared contract)
+
+`contracts/guard` is one shared on-chain policy engine, e.g. `guard.penny-tobi.testnet`. It is the half of the custody model that lets an agent spend without holding the user's key.
+
+- **Locked account.** The contract account has no access keys, so nobody can redeploy, upgrade or drain it. Changing the code means deploying a new contract and pointing `PENNY_GUARD_CONTRACT` at it. The wasm is built from `contracts/guard`, with tests and a checksum in CI.
+- **Funding and policy in one call.** An owner funds their own budget with `ft_transfer_call`; the `msg` can set policies for agents in the same call. Owner methods act only on `predecessor_account_id`.
+- **Policy per owner and agent.** Each policy lists allowed tokens with per-tx and UTC-day caps, an optional recipient allowlist, and an optional expiry. Pause and revoke are separate flags. A token with no limit entry is not spendable.
+- **Agent spend.** An agent calls `spend(owner_id, token, recipient, amount, memo, nonce)` from its own account. The guard checks that the caller is the agent in that owner's policy, the token is allowed, the amount is under both caps, the recipient is allowed, the policy is not paused, revoked or expired, and the nonce is newer than the last one. Only then does it call `ft_transfer` on the token.
+- **Rollback.** A failed `ft_transfer` (for example, the recipient is not registered with the token) runs the callback, which restores the owner's budget and the agent's day counter. Gas is checked before the transfer so the callback cannot be starved: `spend` and `withdraw` require at least 45 Tgas.
+- **Bounds.** Up to 8 tokens and 8 limits per policy, 64 allowlist entries, 16 agents per owner, 128-byte memo. State is keyed by owner and agent and never iterated globally, so one owner cannot make another owner's call more expensive.
+- **Two layers.** The engine evaluates the same policy before it shows a card and again before it relays. The on-chain guard is the backstop for agent spending. A user's own send, bill payment or swap is a delegate action signed by the user's device, not a guard spend; the guard does not hold the user's key and cannot sign for them.
+- **Errors.** Stable `E_*` codes map to the engine's Guard cards, so a revert is shown in plain words instead of a raw panic.
+
 ## Shared contracts (packages/shared)
 ### Intent Plan
 ```ts
