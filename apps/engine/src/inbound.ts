@@ -41,12 +41,12 @@ export function freezeCommand(text: string): 'freeze' | 'unfreeze' | null {
   return null;
 }
 
-/** "connect my gmail" / "link my inbox" / "set up github", but not "disconnect". */
+/** "connect my gmail" / "connect mail" / "link my inbox", but not "disconnect". */
 export function connectRequest(text: string): 'gmail' | 'github' | null {
   if (/\b(don'?t|do not|not now|never|disconnect|unlink|remove)\b/i.test(text)) return null;
   if (!/\b(connect|link|hook up|set up)\b/i.test(text)) return null;
   if (/\bgithub\b/i.test(text)) return 'github';
-  if (/\bgmail\b|\binbox\b/i.test(text)) return 'gmail';
+  if (/\bgmail\b|\bmail\b|\bemail\b|\binbox\b/i.test(text)) return 'gmail';
   return null;
 }
 

@@ -33,16 +33,22 @@ describe('outbound links', () => {
 
   test.each([
     ['connect my gmail', 'gmail'],
+    ['Connect mail', 'gmail'],
+    ['connect my email', 'gmail'],
     ['link my inbox', 'gmail'],
     ['set up github', 'github'],
   ])('%s asks for %s', (text, toolkit) => {
     expect(connectRequest(text)).toBe(toolkit as 'gmail' | 'github');
   });
 
-  test.each(['disconnect gmail', "don't connect gmail", 'is gmail connected?', 'pay my bill'])(
-    '%s does not ask for a connect card',
-    (text) => {
-      expect(connectRequest(text)).toBeNull();
-    },
-  );
+  test.each([
+    'disconnect gmail',
+    "don't connect gmail",
+    'is gmail connected?',
+    'check my mail',
+    'send mail to ada',
+    'pay my bill',
+  ])('%s does not ask for a connect card', (text) => {
+    expect(connectRequest(text)).toBeNull();
+  });
 });
