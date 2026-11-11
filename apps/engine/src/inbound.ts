@@ -1,6 +1,7 @@
 import type { SpectrumMessagesEvent } from '@penny/shared';
 import type { ApprovalService } from './approvals/service.ts';
 import type { Crew } from './brain/crew.ts';
+import { INSTINCT_COMMAND_REPLY, type InstinctMode, instinctCommand } from './brain/instinct.ts';
 import type { RateLimiter } from './http/security.ts';
 import type { Logger } from './lib/logger.ts';
 import { hasEmoji, stripEmoji, toPlainText } from './lib/plain-text.ts';
@@ -19,6 +20,11 @@ export type InboundDeps = {
   log: Logger;
   /** Freeze / unfreeze. Absent in a few unit tests. */
   approvals?: ApprovalService;
+  /** Open-loop tracking and quiet/normal/eager commands. Absent in unit tests. */
+  proactive?: {
+    setMode(userId: string, mode: InstinctMode): Promise<void>;
+    onInbound(userId: string): Promise<void>;
+  };
 };
 
 export { WELCOME_TEXT } from './onboarding.ts';
@@ -87,6 +93,25 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     return;
   }
 
+  // A reply to a nudge counts before anything else happens: it calibrates how
+  // often Penny texts first and pushes that open loop out of the way.
+  if (d.proactive) {
+    try {
+      await d.proactive.onInbound(user.id);
+    } catch {
+      d.log.warn({ userId: user.id }, 'instinct reply tracking failed');
+    }
+  }
+
+  const instinct = d.proactive ? instinctCommand(text) : null;
+  if (instinct && d.proactive) {
+    await d.proactive.setMode(user.id, instinct);
+    const reply = INSTINCT_COMMAND_REPLY[instinct];
+    await d.messaging.sendText(space, reply);
+    await d.messages.add({ conversationId, direction: 'outbound', text: reply });
+    return;
+  }
+
   // Everyone's first text gets a short welcome; then Penny answers what they
   // actually said (a bare "hi" gets a first thing to try instead). No setup
   // link up front: it goes out on its own when something needs approval.
@@ -114,6 +139,7 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
   const reply = hasEmoji(text) ? plain : stripEmoji(plain);
   await d.messaging.sendText(space, reply);
   await d.messages.add({ conversationId, direction: 'outbound', text: reply });
-  // Background: remember durable facts from this turn. Never delays the reply.
-  void d.crew.learnFromTurn(user.id, text);
+  // Background: remember durable facts and note what is still open. Never delays
+  // the reply.
+  void d.crew.learnFromTurn(user.id, text, reply);
 }

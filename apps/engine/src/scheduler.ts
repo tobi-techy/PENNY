@@ -82,6 +82,8 @@ export type SchedulerJobDeps = {
   expireApprovals: (now: Date) => Promise<unknown>;
   /** Send reminders that are due (each exactly once). */
   fireReminders?: (now: Date) => Promise<unknown>;
+  /** Follow up on one open loop per user when the deterministic gate allows. */
+  instinctTick?: (now: Date) => Promise<unknown>;
   refreshRelayed?: () => Promise<unknown>;
   /** Release approvals stuck in `signed` after a relay that never reported back. */
   reconcileStuckSigned?: () => Promise<unknown>;
@@ -139,6 +141,16 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
   if (d.checkConnections) {
     // One live Composio call per pending watch: minute-scale, not tick-scale.
     jobs.push({ name: 'check_connections', everyMs: 60_000, run: d.checkConnections });
+  }
+  if (d.instinctTick) {
+    // A DB query for due loops, no model. The model runs only after the gate.
+    const tick = d.instinctTick;
+    jobs.push({
+      name: 'instinct_due',
+      everyMs: 60_000,
+      anchorOnStart: true,
+      run: async (now) => void (await tick(now)),
+    });
   }
   if (d.scanBills) {
     jobs.push({
