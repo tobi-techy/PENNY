@@ -3,7 +3,7 @@ import type { ApprovalService } from './approvals/service.ts';
 import type { Crew } from './brain/crew.ts';
 import type { RateLimiter } from './http/security.ts';
 import type { Logger } from './lib/logger.ts';
-import { hasEmoji, stripEmoji, toPlainText } from './lib/plain-text.ts';
+import { hasEmoji, stripEmoji, stripExternalLinks, toPlainText, urlsIn } from './lib/plain-text.ts';
 import type { OnboardingService } from './onboarding.ts';
 import type { MessagingPort, SpaceRef } from './ports/messaging.ts';
 import type { MessagesRepo } from './repo/bots.ts';
@@ -38,6 +38,15 @@ export function freezeCommand(text: string): 'freeze' | 'unfreeze' | null {
     .replace(/[.!]+$/, '');
   if (t === 'freeze' || t === 'freeze penny') return 'freeze';
   if (t === 'unfreeze' || t === 'unfreeze penny') return 'unfreeze';
+  return null;
+}
+
+/** "connect my gmail" / "link my inbox" / "set up github", but not "disconnect". */
+export function connectRequest(text: string): 'gmail' | 'github' | null {
+  if (/\b(don'?t|do not|not now|never|disconnect|unlink|remove)\b/i.test(text)) return null;
+  if (!/\b(connect|link|hook up|set up)\b/i.test(text)) return null;
+  if (/\bgithub\b/i.test(text)) return 'github';
+  if (/\bgmail\b|\binbox\b/i.test(text)) return 'gmail';
   return null;
 }
 
@@ -110,8 +119,24 @@ export async function handleInbound(d: InboundDeps, evt: SpectrumMessagesEvent):
     }
   })();
   const plain = toPlainText(r.text);
+  // The model sometimes answers a connect request from history without calling
+  // the tool. Send the card anyway, so the link is a card and not pasted text.
+  const asked = connectRequest(text);
+  if (asked && !r.toolCalls.includes('connect_app')) {
+    try {
+      await d.crew.connectApp(user.id, space, asked);
+    } catch (e) {
+      d.log.warn(
+        { userId: user.id, toolkit: asked, err: (e as Error).name },
+        'connect card failed',
+      );
+    }
+  }
+  // Penny sends links as cards. Never let the model paste an external URL into
+  // the thread; only a URL the user just sent is mirrored back.
+  const linked = stripExternalLinks(plain, urlsIn(text));
   // Penny mirrors emoji only when the user used one first; otherwise drop them.
-  const reply = hasEmoji(text) ? plain : stripEmoji(plain);
+  const reply = hasEmoji(text) ? linked : stripEmoji(linked);
   await d.messaging.sendText(space, reply);
   await d.messages.add({ conversationId, direction: 'outbound', text: reply });
   // Background: remember durable facts from this turn. Never delays the reply.

@@ -21,7 +21,7 @@ Text Penny's number on iMessage. Everything Penny does or proposes shows up as a
 
 **1. With the app (live cards).** Install Penny from TestFlight, open it once and tap the setup link Penny texted you. Your key is made on the phone, behind Face ID, and never leaves it. From then on cards are live iMessage cards that change in place. Try:
 
-- "send 0.1 NEAR to amara.testnet" → a Send card with a countdown → Approve with Face ID → the card flips to Sent with a receipt link.
+- "send 0.1 NEAR to amara.testnet" → a Send card with a countdown → Approve with Face ID → the card flips to Sent with a View receipt button.
 - "remind me to call mum at 7" → "Reminder set for 7am" with Undo. No Face ID.
 - "email Amara the invoice" → "Email to Amara ready" with Send and Edit. Send asks for Face ID.
 - "send 5000 NEAR to stranger.testnet" → a Blocked card. No approval card is ever sent for it.
@@ -68,14 +68,14 @@ More: `apps/engine/README.md`. iOS: `ios/README.md`.
 | Create a testnet account for the biller, e.g. `penny-demo-biller.testnet` | it exists on [testnet NearBlocks](https://testnet.nearblocks.io) |
 | Set `NEAR_NETWORK=testnet`, `NEAR_RPC_URL=https://rpc.testnet.near.org`, the testnet app and relayer keys, and `PENNY_DEMO_BILLER_ACCOUNT=penny-demo-biller.testnet` | engine boots and talks to testnet |
 | Set `NEAR_USDC_CONTRACT` to your Penny test dollar (tUSD) contract id, deployed from `contracts/guard/mock-ft` | every dollar action uses that token |
-| Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: the card settles as a test run, the bill is not crossed off and its reminder stays, and Penny texts `paid (test run, nothing sent) ✓` with no receipt link |
+| Set `DRY_RUN=0` | Penny really sends. Left at its default `1`, nothing is sent: the card settles as a test run, the bill is not crossed off and its reminder stays, and Penny texts `paid (test run, nothing sent)` with no receipt on the card |
 | Optional: set `PENNY_GUARD_CONTRACT=<shared guard id>` (e.g. `guard.penny.testnet`) | Guard checks the shared Guard contract; unset = autopilot off |
 | Text Penny, open the setup link | your Penny account is made on testnet; its `account_id` is on your `users` row |
 | Give that account tUSD: call `mint` on the tUSD contract from its owner account with `{"account_id":"<your penny account>","amount":"10000000"}` | 6 decimals, so `10000000` is `$10.00` |
 | Text "connect my gmail" and authorize | Penny texts "gmail's connected ✓" and checks for bills |
 | Email yourself: subject `Penny Demo Utility bill: $5.00 due <date>` | Mail texts you about the new bill |
 | Text "pay it" | a card: `$5.00 in USDC`, paying `penny-demo-biller.testnet` |
-| Approve with Face ID | the card goes to done, the bill is crossed off, the reminder is cancelled, and Penny texts a NearBlocks receipt link (only when the transfer really went out, so `DRY_RUN=0`) |
+| Approve with Face ID | the card goes to done, the bill is crossed off, the reminder is cancelled, and the card carries a View receipt button (only when the transfer really went out, so `DRY_RUN=0`) |
 
 On both networks the bill card shows `$5.00 in USDC`; on testnet that token is tUSD, and the payment is the same token transfer (`ft_transfer`) as mainnet USDC. `PENNY_RELAYER_MAX_DEPOSIT_NEAR` caps NEAR the relayer fronts for one approval. A tUSD token transfer is not NEAR, so that cap does not block this demo. The mock token's `mint` is owner-only and never deploys to mainnet.
 
