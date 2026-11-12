@@ -309,6 +309,8 @@ export function CardPage({ token }: { token: string }) {
   const state = expired ? 'expired' : card.state;
   const pill = card.kind === 'approval' ? pillFor(state, card.type) : null;
   const closing = card.statusLine ?? closingLine(state);
+  // the same test approve() uses: no passkey in this browser, so the enrolled device key signs
+  const deviceKey = view?.approval?.passkeys?.length === 0 && Boolean(view.approval.deviceId);
 
   return (
     <main>
@@ -445,7 +447,11 @@ export function CardPage({ token }: { token: string }) {
       {msg && <p className="ok">{msg}</p>}
       {err && <p className="err">{err}</p>}
       {card.kind === 'approval' && state === 'ready' && (
-        <p>Approving uses Face ID on this phone. Penny's server never holds your key.</p>
+        <p>
+          {deviceKey
+            ? "Approving uses the key this browser enrolled. Penny's server never holds it."
+            : "Approving uses Face ID on this phone. Penny's server never holds your key."}
+        </p>
       )}
     </main>
   );

@@ -6,6 +6,7 @@ import { DEFAULT_TIME_ZONE, describeNow } from '../bills/time.ts';
 import type { ConnectorPort } from '../connectors/composio.ts';
 import type { Logger } from '../lib/logger.ts';
 import type { OnboardingService } from '../onboarding.ts';
+import { demoSessionOf } from '../ports/demo-messaging.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
 import type { BotRow, BotsRepo, MessagesRepo } from '../repo/bots.ts';
 import type { UsersRepo } from '../repo/users.ts';
@@ -360,6 +361,12 @@ export class Crew {
         this.d.log.warn({ bot: bot.slug }, 'connector tools unavailable, continuing without them');
       }
     }
+    // The public demo's marquee moment is the Guard refusing. A model that
+    // compares the amount to the limits itself answers in prose and the block
+    // card never renders, so on a demo space it has to hand the question over.
+    const demoNote = demoSessionOf(space.spaceId)
+      ? '\nThis is the public demo: nothing is broadcast and the account is only for show. When someone asks you to move money, call the propose_* tool and let the Guard decide. Never compare the amount with the limits yourself, never refuse in advance, never predict the answer. A refusal comes back as a card, and that card is the point.'
+      : '';
     const gate = this.d.privacy && this.d.privacy.mode !== 'off' ? this.d.privacy : null;
     const sensitive = new Set<string>();
     const registryTools = new Map(this.d.registry.allowedFor(bot).map((t) => [t.id, t]));
@@ -375,7 +382,7 @@ export class Crew {
       const run = () =>
         generateText({
           model: this.d.chat,
-          system: `${bot.soulMd}\n\nNow: ${describeNow(this.d.timeZone ?? DEFAULT_TIME_ZONE, (this.d.now ?? (() => new Date()))())}. Assume this time zone unless the user says otherwise.\nCurrent mood: ${mood}.${formatMemories(recalled)}${followupContext ? `\n\n${followupContext}` : ''}${connectorNote}${opts.enrolled === false ? '\nThis user has not turned on approvals yet (no app needed). Chat, reading, reminders and bills work normally, so just help. When something needs approval, try it anyway: Penny texts them the setup link automatically; tell them in one line to tap it and ask again. Never paste a setup link yourself.' : ''}\n${HOUSE_RULES}`,
+          system: `${bot.soulMd}\n\nNow: ${describeNow(this.d.timeZone ?? DEFAULT_TIME_ZONE, (this.d.now ?? (() => new Date()))())}. Assume this time zone unless the user says otherwise.\nCurrent mood: ${mood}.${formatMemories(recalled)}${followupContext ? `\n\n${followupContext}` : ''}${connectorNote}${opts.enrolled === false ? '\nThis user has not turned on approvals yet (no app needed). Chat, reading, reminders and bills work normally, so just help. When something needs approval, try it anyway: Penny texts them the setup link automatically; tell them in one line to tap it and ask again. Never paste a setup link yourself.' : ''}${demoNote}\n${HOUSE_RULES}`,
           messages: buildHistoryMessages(history, userText),
           tools,
           stopWhen: stepCountIs(5),

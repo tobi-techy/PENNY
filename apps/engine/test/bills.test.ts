@@ -536,6 +536,31 @@ describe('bills + reminders (engine)', () => {
     expect(system).toContain(`Now: ${describeNow('Africa/Lagos', t.clock.now)}`);
     expect(system).toContain('Africa/Lagos');
   });
+
+  test('only a demo space is told to leave the money question to the Guard', async () => {
+    const systemFor = async (spaceId: string) => {
+      const chat = scriptedModel([{ text: 'ok' }]);
+      let system = '';
+      const orig = (
+        chat as unknown as {
+          doGenerate: (o: { prompt: { role: string; content: string }[] }) => unknown;
+        }
+      ).doGenerate.bind(chat);
+      (chat as unknown as { doGenerate: unknown }).doGenerate = async (o: {
+        prompt: { role: string; content: string }[];
+      }) => {
+        system = o.prompt.find((p) => p.role === 'system')?.content ?? '';
+        return orig(o);
+      };
+      t.setModels(scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]), chat);
+      await t.engine.services.crew.handle(u.userId, { ...u.space, spaceId }, 'send $400');
+      return system;
+    };
+    // The block card only renders if the model hands the amount to the Guard
+    // instead of comparing it with the limits and answering in prose.
+    expect(await systemFor('demo;sess-1')).toContain('let the Guard decide');
+    expect(await systemFor(u.space.spaceId)).not.toContain('let the Guard decide');
+  });
 });
 
 describe('paying a bill in USDC (demo biller)', () => {
