@@ -1,4 +1,3 @@
-import { approvalSignMessage } from '@penny/shared';
 import { useCallback, useEffect, useState } from 'react';
 import { api, apiJson, idem } from './api.ts';
 import {
@@ -11,6 +10,7 @@ import {
   settledFor,
   styleFor,
 } from './cardView.ts';
+import { approvalSignMessage } from './chain/delegate.ts';
 import { toBase64Url } from './chain/encoding.ts';
 import { type ApprovalForSigning, signApproval } from './chain/sign.ts';
 import { loadDeviceKey } from './keys/deviceKey.ts';

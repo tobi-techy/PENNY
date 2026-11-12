@@ -217,34 +217,68 @@ export function DemoPage() {
     return out;
   }, [messages]);
 
+  // Grouped like Messages: a run from one side sits tight, and only the last bubble
+  // of a run carries the tail corner. "Delivered" sits under the last thing the judge
+  // sent, which is what iMessage shows. Penny's words (outbound) are the grey ones on
+  // the left; the visitor's (inbound) are blue on the right.
+  const rows = useMemo(() => {
+    const lastSent = items.map((m) => m.direction).lastIndexOf('inbound');
+    return items.map((m, i) => {
+      const prev = items[i - 1];
+      const next = items[i + 1];
+      return {
+        m,
+        dir: m.direction === 'outbound' ? 'in' : 'out',
+        same: Boolean(prev && prev.direction === m.direction && prev.kind === 'text'),
+        tail: !(next && next.direction === m.direction && next.kind === 'text'),
+        delivered: i === lastSent && i === items.length - 1,
+      };
+    });
+  }, [items]);
+
+  const clock = useMemo(
+    () =>
+      new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s/g, ' '),
+    [],
+  );
+
   if (!start) {
     return (
       <div className="im">
-        <header className="im-head">
-          <div className="im-name">
-            <span className="im-dot" aria-hidden="true" />
-            Penny
+        <div className="im-phone">
+          <StatusBar clock={clock} />
+          <header className="im-head">
+            <div />
+            <div className="im-who">
+              <div className="im-avatar" aria-hidden="true">
+                P
+              </div>
+              <div className="im-name">Penny</div>
+            </div>
+            <div />
+          </header>
+          <div className="im-intro">
+            <p className="im-lead">
+              This is Penny&apos;s engine, running now. The Guard, the approval, the signature check
+              and the cards are real. The account is a throwaway, so nothing is ever sent.
+            </p>
+            <button type="button" className="im-cta" onClick={begin} disabled={busy === 'start'}>
+              {busy === 'start' ? 'Opening…' : 'Open the demo thread'}
+            </button>
+            {note && <p className="im-note">{note}</p>}
+            <p className="im-fine">
+              No install and no phone number. If this browser has a passkey you will be asked for
+              Face ID or Touch ID, the same check Penny does in Messages.
+            </p>
+            {film && (
+              <a className="im-film" href={film} target="_blank" rel="noreferrer noopener">
+                Or watch the 60 second film
+              </a>
+            )}
           </div>
-          <div className="im-sub">demo · NEAR testnet</div>
-        </header>
-        <div className="im-body im-intro">
-          <p className="im-lead">
-            This is Penny&apos;s engine, running now. The Guard, the approval, the signature check
-            and the cards are real. The account is a throwaway, so nothing is ever sent.
-          </p>
-          <button type="button" className="im-cta" onClick={begin} disabled={busy === 'start'}>
-            {busy === 'start' ? 'Opening…' : 'Open the demo thread'}
-          </button>
-          {note && <p className="im-note">{note}</p>}
-          <p className="im-fine">
-            No install and no phone number. If this browser has a passkey you will be asked for Face
-            ID or Touch ID, the same check Penny does in Messages.
-          </p>
-          {film && (
-            <a className="im-film" href={film} target="_blank" rel="noreferrer noopener">
-              Or watch the 60 second film
-            </a>
-          )}
+          <div className="im-home" aria-hidden="true">
+            <i />
+          </div>
         </div>
       </div>
     );
@@ -252,119 +286,183 @@ export function DemoPage() {
 
   return (
     <div className="im">
-      <header className="im-head">
-        <div className="im-name">
-          <span className="im-dot" aria-hidden="true" />
-          Penny
-        </div>
-        <div className="im-sub">
-          {start.accountId} · {approvals === 'passkey' ? 'Face ID' : 'device key'}
-        </div>
-      </header>
+      <div className="im-phone">
+        <StatusBar clock={clock} />
 
-      <div className="im-strip">
-        Live: {start.live.join(' · ')}. Not live: {start.simulated.join(' · ')}.
-        {start.guard && (
-          <>
-            {' '}
-            <a href={start.guard.explorer} target="_blank" rel="noreferrer noopener">
-              {start.guard.contractId}
-            </a>
-          </>
-        )}
-      </div>
-
-      {start.policy && (
-        <div className="im-limits">
-          <b>Guard</b> ${start.policy.perTxUsd} per send · ${start.policy.dailyUsd} a day · new
-          recipients over ${start.policy.blockNewRecipientsOverUsd}
-        </div>
-      )}
-
-      <div className="im-body">
-        <div className="im-stamp">Today</div>
-        {items.length === 0 && (
-          <div className="im-hint">Try one of these. Each one goes through the real code path.</div>
-        )}
-        {items.map((m) => {
-          if (m.kind === 'card' && m.url) {
-            const url = m.url;
-            return (
-              <button
-                type="button"
-                key={m.seq}
-                className="im-card"
-                onClick={() => setOpen(tokenOf(url))}
-              >
-                <img src={`${url}/card.png`} alt="Penny card" />
-                <span className="im-card-tap">
-                  {approvals === 'passkey' ? 'Open to review · Face ID' : 'Open to review'}
-                </span>
-              </button>
-            );
-          }
-          return (
-            <div key={m.seq} className={`im-row ${m.direction === 'outbound' ? 'in' : 'out'}`}>
-              <div className="im-bubble">{m.text}</div>
+        <header className="im-head">
+          <button type="button" className="im-back" aria-label="Back">
+            ‹
+          </button>
+          <div className="im-who">
+            <div className="im-avatar" aria-hidden="true">
+              P
             </div>
-          );
-        })}
-        {busy === 'send' && (
-          <div className="im-row in">
-            <div className="im-bubble im-typing" role="status" aria-label="Penny is typing">
-              <i />
-              <i />
-              <i />
+            <div className="im-name" title={start.accountId}>
+              Penny <i>›</i>
             </div>
           </div>
-        )}
-        <div ref={endRef} />
-      </div>
+          <div className="im-actions" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M17 10.5V7a1.5 1.5 0 0 0-1.5-1.5h-11A1.5 1.5 0 0 0 3 7v10a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 17 17v-3.5l4 3.5V7l-4 3.5Z" />
+            </svg>
+          </div>
+        </header>
 
-      <div className="im-chips">
-        {start.prompts.map((p) => (
-          <button
-            type="button"
-            key={p.text}
-            className="im-chip"
-            title={p.note}
-            onClick={() => say(p.text)}
-            disabled={busy === 'send'}
-          >
-            {p.label}
+        <div className="im-body">
+          <div className="im-stamp">
+            <b>Today</b> {clock}
+          </div>
+
+          {/* The two things a demo cannot own, said in the thread rather than on a banner. */}
+          <div className="im-live">
+            <span>
+              <b>Live:</b> {start.live.join(', ')}.
+            </span>
+            <span>
+              <b>Not live:</b> {start.simulated.join(', ')}.
+            </span>
+            {start.policy && (
+              <span>
+                Guard · ${start.policy.perTxUsd} per send · ${start.policy.dailyUsd} a day · new
+                recipients over ${start.policy.blockNewRecipientsOverUsd}.
+              </span>
+            )}
+            {start.guard && (
+              <span>
+                <a href={start.guard.explorer} target="_blank" rel="noreferrer noopener">
+                  {start.guard.contractId}
+                </a>
+              </span>
+            )}
+          </div>
+
+          {items.length === 0 && (
+            <div className="im-hint">
+              Try one of these. Each one goes through the real code path.
+            </div>
+          )}
+
+          {rows.map(({ m, dir, same, tail, delivered }) => (
+            <div key={m.seq}>
+              {m.kind === 'card' && m.url ? (
+                <button
+                  type="button"
+                  className="im-card"
+                  onClick={() => setOpen(tokenOf(m.url as string))}
+                >
+                  <img src={`${m.url}/card.png`} alt="Penny card" />
+                  <span className="im-card-tap">
+                    {approvals === 'passkey' ? 'Open to review · Face ID' : 'Open to review'}
+                  </span>
+                </button>
+              ) : (
+                <div className={`im-row ${dir}${same ? ' same' : ''}${tail ? ' tail' : ''}`}>
+                  <div className="im-bubble">{m.text}</div>
+                </div>
+              )}
+              {delivered && <div className="im-delivered">Delivered</div>}
+            </div>
+          ))}
+
+          {busy === 'send' && (
+            <div className="im-row in tail">
+              <div className="im-bubble im-typing" role="status" aria-label="Penny is typing">
+                <i />
+                <i />
+                <i />
+              </div>
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+
+        <div className="im-quick">
+          {start.prompts.map((p) => (
+            <button
+              type="button"
+              key={p.text}
+              className="im-chip"
+              title={p.note}
+              onClick={() => say(p.text)}
+              disabled={busy === 'send'}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <form
+          className="im-composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void say(draft);
+          }}
+        >
+          <button type="button" className="im-plus" aria-hidden="true" tabIndex={-1}>
+            +
           </button>
-        ))}
+          <input
+            className="im-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="iMessage"
+            aria-label="Message"
+            maxLength={400}
+          />
+          <button
+            type="submit"
+            className="im-send"
+            aria-label="Send"
+            disabled={!draft.trim() || busy === 'send'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M12 19V5M12 5l-6 6M12 5l6 6"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </form>
+
+        {note && <div className="im-note">{note}</div>}
+
+        <div className="im-home" aria-hidden="true">
+          <i />
+        </div>
       </div>
-
-      <form
-        className="im-composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void say(draft);
-        }}
-      >
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Text Penny"
-          aria-label="Message"
-          maxLength={400}
-        />
-        <button type="submit" aria-label="Send" disabled={!draft.trim() || busy === 'send'}>
-          ↑
-        </button>
-      </form>
-
-      {note && <div className="im-note">{note}</div>}
 
       {open && (
         <div className="im-sheet">
           <button type="button" className="im-close" onClick={() => setOpen(null)}>
-            Close
+            Done
           </button>
           <CardPage token={open} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** The iOS status bar, drawn rather than described: time, signal, wifi, battery. */
+function StatusBar({ clock }: { clock: string }) {
+  return (
+    <div className="im-status" aria-hidden="true">
+      <span className="im-clock">{clock}</span>
+      <span className="im-status-right">
+        <span className="im-bars">
+          <i />
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="im-wifi" />
+        <span className="im-batt">
+          <b />
+        </span>
+      </span>
     </div>
   );
 }
