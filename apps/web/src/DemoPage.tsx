@@ -28,6 +28,8 @@ type Start = {
 };
 
 const SESSION_KEY = 'penny.demo.session';
+/** Which check this browser enrolled with: passkey (Face ID) or the device key. */
+const MODE_KEY = 'penny.demo.mode';
 const tokenOf = (url: string) => /\/a\/([A-Za-z0-9_-]{43})/.exec(url)?.[1] ?? url;
 
 /**
@@ -43,7 +45,7 @@ export function DemoPage() {
   const [note, setNote] = useState('');
   const [draft, setDraft] = useState('');
   const [open, setOpen] = useState<string | null>(null);
-  const [approvals, setApprovals] = useState<'unknown' | 'on' | 'off'>('unknown');
+  const [approvals, setApprovals] = useState<'unknown' | 'passkey' | 'device'>('unknown');
   const [film, setFilm] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -66,7 +68,7 @@ export function DemoPage() {
     try {
       const s = JSON.parse(raw) as Start;
       setStart(s);
-      setApprovals('on');
+      setApprovals(localStorage.getItem(MODE_KEY) === 'passkey' ? 'passkey' : 'device');
       void load(s.sessionId);
     } catch {
       localStorage.removeItem(SESSION_KEY);
@@ -112,7 +114,10 @@ export function DemoPage() {
       });
       localStorage.setItem(SESSION_KEY, JSON.stringify(s));
       setStart(s);
-      setApprovals(await enroll(s));
+      const mode = await enroll(s);
+      // Remembered so a reload keeps telling the truth about which check this browser uses.
+      if (mode !== 'off') localStorage.setItem(MODE_KEY, mode);
+      setApprovals(mode === 'off' ? 'device' : mode);
     } catch {
       setNote('Could not open a demo session. Try again in a moment.');
     } finally {
@@ -125,7 +130,7 @@ export function DemoPage() {
    * check the phone does); a browser without one signs with its device key instead, so
    * the demo never dead-ends on a desktop.
    */
-  async function enroll(s: Start): Promise<'on' | 'off'> {
+  async function enroll(s: Start): Promise<'passkey' | 'device' | 'off'> {
     try {
       const key = (await loadDeviceKey()) ?? (await createDeviceKey());
       let passkey: Record<string, unknown> = {};
@@ -155,7 +160,9 @@ export function DemoPage() {
           ...passkey,
         }),
       });
-      return res.ok ? 'on' : 'off';
+      // Say which check this browser will actually be asked for, not the one we hoped for.
+      if (!res.ok) return 'off';
+      return passkey.passkey ? 'passkey' : 'device';
     } catch {
       return 'off';
     }
@@ -251,7 +258,7 @@ export function DemoPage() {
           Penny
         </div>
         <div className="im-sub">
-          {start.accountId} · {approvals === 'off' ? 'device key' : 'Face ID'}
+          {start.accountId} · {approvals === 'passkey' ? 'Face ID' : 'device key'}
         </div>
       </header>
 
@@ -291,7 +298,7 @@ export function DemoPage() {
               >
                 <img src={`${url}/card.png`} alt="Penny card" />
                 <span className="im-card-tap">
-                  {approvals === 'off' ? 'Open to review' : 'Open to review · Face ID'}
+                  {approvals === 'passkey' ? 'Open to review · Face ID' : 'Open to review'}
                 </span>
               </button>
             );

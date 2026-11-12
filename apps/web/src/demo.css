@@ -229,6 +229,8 @@
 }
 .im-chip {
   flex: none;
+  /* The app-wide button rule is width: 100%, which would stack the pills. */
+  width: auto;
   font-size: 13px;
   font-family: inherit;
   color: #fff;

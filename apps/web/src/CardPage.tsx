@@ -1,3 +1,4 @@
+import { approvalSignMessage } from '@penny/shared';
 import { useCallback, useEffect, useState } from 'react';
 import { api, apiJson, idem } from './api.ts';
 import {
@@ -10,6 +11,7 @@ import {
   settledFor,
   styleFor,
 } from './cardView.ts';
+import { toBase64Url } from './chain/encoding.ts';
 import { type ApprovalForSigning, signApproval } from './chain/sign.ts';
 import { loadDeviceKey } from './keys/deviceKey.ts';
 import { assertPasskey } from './keys/passkey.ts';
@@ -114,6 +116,31 @@ export function CardPage({ token }: { token: string }) {
         setErr('No approval key in this browser yet. Open the setup link Penny sent you first.');
         return;
       }
+      const signed = await signApproval(c.detail as unknown as ApprovalForSigning, key);
+      // This browser enrolled a key but no passkey (no Touch ID here, or the prompt was
+      // cancelled): the key signs the same action this page checked. The server verifies
+      // it against the enrolled device key exactly as it does for the phone.
+      if (a.passkeys?.length === 0 && a.deviceId && a.challenge) {
+        const signature = toBase64Url(
+          await key.sign(
+            new TextEncoder().encode(approvalSignMessage(a.approvalHash, a.challenge)),
+          ),
+        );
+        const res = await api(`/v1/approvals/${a.id}/sign`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Card ${token}`,
+            'idempotency-key': idem(),
+          },
+          body: JSON.stringify({ deviceId: a.deviceId, signature, ...signed }),
+        });
+        if (res.status === 423) setErr('Penny is frozen. Text unfreeze to start again.');
+        else if (res.status === 410) setErr('This card ran out of time. Tap Get a new card.');
+        else if (!res.ok) setErr("I couldn't confirm that. The card below says what happened.");
+        await load();
+        return;
+      }
       // 1) Face ID on this phone (the tap above is what lets Safari start it). The passkey
       //    answers a challenge bound to the approval hash this page checked itself.
       const assertion = await assertPasskey({
@@ -122,7 +149,6 @@ export function CardPage({ token }: { token: string }) {
         passkeys: a.passkeys ?? [],
       });
       // 2) this browser's key signs the exact action it checked (and the server checks again)
-      const signed = await signApproval(c.detail as unknown as ApprovalForSigning, key);
       const res = await api(`/v1/approvals/${a.id}/passkey`, {
         method: 'POST',
         headers: {

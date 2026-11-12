@@ -326,6 +326,47 @@ describe('/demo routes', () => {
     expect((await png.arrayBuffer()).byteLength).toBeGreaterThan(1_000);
   }, 60_000);
 
+  test('a card tells the page how to sign when there is no passkey', async () => {
+    // The demo's promised fallback: no Touch ID here, so the page must be told to sign
+    // with the key it enrolled rather than dead-end on a Face ID prompt.
+    const s = (await (await start()).json()) as { sessionId: string; enrollCode: string };
+    const key = Buffer.from(ed25519.getPublicKey(new Uint8Array(32).fill(11))).toString(
+      'base64url',
+    );
+    await t.engine.app.request('/v1/demo/enroll', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: s.sessionId,
+        enrollCode: s.enrollCode,
+        publicKeyEd25519: key,
+      }),
+    });
+    const user = await t.engine.repos.users.byAccountId(
+      `demo-${s.sessionId.slice(0, 20).toLowerCase()}.testnet`,
+    );
+    if (!user) throw new Error('demo user missing');
+    // $5 is inside the policy, so the Guard says yes and an approval card goes out.
+    const created = await t.engine.services.approvals.createMoneyApproval({
+      userId: user.id,
+      bot: null,
+      plan: { kind: 'send', asset: 'USDC', amount: '5', to: 'amara.testnet' },
+      space: { spaceId: demoSpaceId(s.sessionId), userHandle: `demo:${s.sessionId}` },
+    });
+    expect(created.decision).not.toBe('block');
+
+    const { messages } = (await (
+      await t.engine.app.request(`/v1/demo/thread?session=${s.sessionId}`)
+    ).json()) as { messages: { kind: string; url: string | null }[] };
+    const token = tokenFromUrl(messages.find((m) => m.kind === 'card')?.url ?? undefined);
+    const view = (await (await t.engine.app.request(`/v1/approvals/by-token/${token}`)).json()) as {
+      approval?: { passkeys?: string[]; deviceId?: string; challenge?: string };
+    };
+    expect(view.approval?.passkeys).toEqual([]);
+    expect(typeof view.approval?.deviceId).toBe('string');
+    expect(view.approval?.challenge).toBeTruthy();
+  }, 60_000);
+
   test('reading the thread closes a card approved in the sheet', async () => {
     const s = (await (await start()).json()) as { sessionId: string; enrollCode: string };
     const key = Buffer.from(ed25519.getPublicKey(new Uint8Array(32).fill(5))).toString('base64url');
@@ -455,6 +496,13 @@ describe('/demo routes', () => {
       plan: { kind: 'send', asset: 'USDC', amount: '400', to: 'new-wallet.testnet' },
       space: { spaceId: demoSpaceId(s.sessionId), userHandle: `demo:${s.sessionId}` },
     });
+    // one the Guard allows, so the audit trail has an approval and its events to keep
+    await t.engine.services.approvals.createMoneyApproval({
+      userId: user.id,
+      bot: null,
+      plan: { kind: 'send', asset: 'USDC', amount: '5', to: 'amara.testnet' },
+      space: { spaceId: demoSpaceId(s.sessionId), userHandle: `demo:${s.sessionId}` },
+    });
 
     const count = async (q: ReturnType<typeof sql>) =>
       Number(((await t.db.db.execute(q)) as unknown as { rows: { n: number }[] }).rows[0]?.n ?? 0);
@@ -471,19 +519,18 @@ describe('/demo routes', () => {
     );
     expect(await t.engine.repos.demo.prune(new Date())).toBeGreaterThan(0);
 
-    // the thread, the user and everything hanging off it are gone, not just the session
+    // the thread and the content are gone, not just the session
     expect(
       await count(sql`select count(*)::int as n from demo_sessions where id = ${s.sessionId}`),
     ).toBe(0);
-    expect(await t.engine.repos.users.byId(user.id)).toBeNull();
     for (const table of [
       'devices',
       'conversations',
       'cards',
-      'approvals',
       'guard_decisions',
       'guard_policies',
       'enroll_codes',
+      'ledger_entries',
       'messages',
     ]) {
       const rows = await count(
@@ -493,6 +540,11 @@ describe('/demo routes', () => {
       );
       expect([table, rows]).toEqual([table, 0]);
     }
+    // The audit trail stays: approval_events is append-only by trigger, so approvals and
+    // their user row remain. What is left is unreadable content, not a live account.
+    expect(await owned('approvals')).toBeGreaterThan(0);
+    const device = await t.engine.repos.users.activeDevice(user.id);
+    expect(device).toBeNull();
   }, 60_000);
 
   test('the demo is off unless the engine was started with it', async () => {

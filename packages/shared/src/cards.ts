@@ -280,6 +280,8 @@ export const ApprovalByTokenResponse = z.object({
       status: z.string(),
       /** Web passkey credential ids for this user (link page only). */
       passkeys: z.array(z.string()).optional(),
+      /** The enrolled device, so a browser with a key but no passkey can sign with it. */
+      deviceId: z.string().optional(),
       /** The full approval (NEAR actions, nonce, max block height) the device signs over. */
       detail: z.unknown(),
     })

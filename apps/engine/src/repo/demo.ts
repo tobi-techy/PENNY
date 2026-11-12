@@ -1,8 +1,6 @@
 import { and, asc, eq, getTableName, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import {
-  approvalEvents,
-  approvals,
   bills,
   bots,
   cards,
@@ -25,7 +23,6 @@ import {
   passkeys,
   proactiveMessages,
   reminders,
-  users,
 } from '../db/schema.ts';
 
 /** A demo thread lives for a day; the sweeper deletes it and the user it created. */
@@ -150,13 +147,17 @@ export class DemoRepo {
   }
 
   /**
-   * Sweeper: drop expired sessions and everything the session created.
+   * Sweeper: drop expired sessions and the content the session wrote.
    *
-   * The thread cascades with the session, but nothing else does: the user, its
-   * device, policy, conversation, messages, cards, approvals and ledger rows all
-   * point at each other through plain foreign keys. One session is only a handful
-   * of rows, but the endpoint is unauthenticated, so they are removed here rather
-   * than accumulating one session at a time.
+   * The thread cascades with the session. Everything else a session created (cards,
+   * ledger rows, guard decisions, the device, the conversation and its messages) is
+   * removed here rather than accumulating one session at a time.
+   *
+   * Two things stay on purpose: the `users` row and its `approvals` with their
+   * `approval_events`, which are append-only by trigger and are the audit trail of
+   * every decision the demo made. A demo user holds no money, no chain account and no
+   * usable key (the device is deleted), so what remains is a few audit rows per
+   * session, not a thread a visitor can read.
    */
   async prune(now: Date): Promise<number> {
     const dead = await this.db
@@ -164,8 +165,8 @@ export class DemoRepo {
       .from(demoSessions)
       .where(lt(demoSessions.expiresAt, now));
     for (const s of dead) {
-      // One transaction: the session row has to go before its user, and a half-done
-      // sweep would leave the user behind for good.
+      // One transaction: the session row goes first, then its content. The audit rows
+      // deliberately survive, so nothing here can leave a broken reference behind.
       await this.db.transaction(async (tx) => {
         await tx.delete(demoSessions).where(eq(demoSessions.id, s.id));
         await deleteFootprint(tx, s.userId);
@@ -176,15 +177,14 @@ export class DemoRepo {
 }
 
 /**
- * Every table a demo session can write, children before the rows they point at, so
- * the user row can be last. Named from the schema itself rather than spelled by hand.
+ * Everything a demo session can write that is not the audit trail, children before the
+ * rows they point at. Named from the schema itself rather than spelled by hand.
  */
 const OWNED = [
   cards,
   ledgerEntries,
   guardDecisions,
   reminders,
-  approvals,
   conversations,
   passkeys,
   devices,
@@ -205,15 +205,9 @@ const OWNED = [
 /** The transaction handle, so the wipe below runs inside the sweeper's transaction. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-/** Delete everything one demo user created. The `is_demo` guard keeps this a demo-only path. */
+/** Delete what one demo user left behind, except the append-only approval audit trail. */
 async function deleteFootprint(db: Tx, userId: string): Promise<void> {
-  // Two tables inherit their owner through the row they point at.
-  const approvalIds = (
-    await db.select({ id: approvals.id }).from(approvals).where(eq(approvals.userId, userId))
-  ).map((r) => r.id);
-  if (approvalIds.length > 0) {
-    await db.delete(approvalEvents).where(inArray(approvalEvents.approvalId, approvalIds));
-  }
+  // Messages inherit their owner through the conversation they point at.
   const conversationIds = (
     await db
       .select({ id: conversations.id })
@@ -226,5 +220,4 @@ async function deleteFootprint(db: Tx, userId: string): Promise<void> {
   for (const t of OWNED) {
     await db.execute(sql`delete from ${sql.identifier(getTableName(t))} where user_id = ${userId}`);
   }
-  await db.delete(users).where(and(eq(users.id, userId), eq(users.isDemo, true)));
 }

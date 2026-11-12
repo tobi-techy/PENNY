@@ -1365,6 +1365,8 @@ export class ApprovalService {
         expiresAt: row.expiresAt.toISOString(),
         status: row.status,
         ...(passkeys ? { passkeys } : {}),
+        // So a browser that enrolled a key but no passkey can sign with that key.
+        ...(device ? { deviceId: device.id } : {}),
         detail: toApprovalDto(row),
       },
     };
