@@ -96,6 +96,8 @@ export type SchedulerJobDeps = {
   commitmentFollowUps?: (now: Date) => Promise<unknown>;
   /** Notice apps the user just connected (after a connect link) and follow up. */
   checkConnections?: () => Promise<void>;
+  /** Delete expired /demo sessions and the throwaway users behind them. */
+  pruneDemoSessions?: (olderThan: Date) => Promise<unknown>;
 };
 
 /** Default Phase 1 jobs. Weekly reflection is weekly; the rest are hygiene. */
@@ -118,6 +120,14 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       run: async (now) => d.pruneIdempotency(new Date(now.getTime() - DAY)),
     },
   ];
+  if (d.pruneDemoSessions) {
+    const prune = d.pruneDemoSessions;
+    jobs.push({
+      name: 'prune_demo_sessions',
+      everyMs: HOUR,
+      run: async (now) => void (await prune(now)),
+    });
+  }
   if (d.refreshRelayed) {
     jobs.push({
       name: 'chain_status_poller',

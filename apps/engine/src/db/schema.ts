@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  serial,
   text,
   timestamp,
   uniqueIndex,
@@ -34,6 +35,11 @@ export const users = pgTable(
     enrolledDryRun: boolean('enrolled_dry_run').notNull().default(false),
     /** Set by "freeze": every approval fails until the user texts "unfreeze". */
     frozenAt: ts('frozen_at'),
+    /**
+     * A /demo session's throwaway user. Its account id is never created on chain, so
+     * chain writes are refused for it (ports/demo-chain.ts) and the sweeper deletes it.
+     */
+    isDemo: boolean('is_demo').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('users_handle_uq').on(t.handle), uniqueIndex('users_slug_uq').on(t.slug)],
@@ -671,6 +677,48 @@ export const connectWatches = pgTable(
   ],
 );
 
+/**
+ * Public demo (/demo). A judge's throwaway thread: it runs the real Guard, the real
+ * approval path and the real card renderer, but the account id is borrowed from
+ * PENNY_DEMO_ACCOUNT and the browser's device key is never added on chain, so an
+ * approval stops at "verified" and is never broadcast (ports/demo-chain.ts).
+ */
+export const demoSessions = pgTable(
+  'demo_sessions',
+  {
+    /** 43-char capability token. The browser holds it; every read is scoped to it. */
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    conversationId: text('conversation_id'),
+    /** Turns spent, so one session cannot run up an unbounded model bill. */
+    turns: integer('turns').notNull().default(0),
+    expiresAt: ts('expires_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('demo_sessions_expiry_idx').on(t.expiresAt)],
+);
+
+export const demoMessages = pgTable(
+  'demo_messages',
+  {
+    /** Monotonic: keeps send order inside the same millisecond. */
+    seq: serial('seq').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => demoSessions.id, { onDelete: 'cascade' }),
+    direction: text('direction', { enum: ['inbound', 'outbound'] }).notNull(),
+    kind: text('kind', { enum: ['text', 'card', 'typing'] }).notNull(),
+    text: text('text'),
+    /** /a/<token> for kind = card: the browser renders the same card the phone gets. */
+    url: text('url'),
+    cardId: text('card_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('demo_messages_session_idx').on(t.sessionId, t.seq)],
+);
+
 export const schema = {
   users,
   devices,
@@ -699,4 +747,6 @@ export const schema = {
   commitments,
   commitmentEvents,
   connectWatches,
+  demoSessions,
+  demoMessages,
 };

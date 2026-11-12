@@ -42,6 +42,8 @@ export type ApprovalView = {
   expiresAt: string;
   status: string;
   passkeys?: string[];
+  /** The enrolled device, so a browser with a key but no passkey can sign with it. */
+  deviceId?: string;
   detail: unknown;
 };
 

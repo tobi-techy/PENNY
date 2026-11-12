@@ -18,9 +18,12 @@ import { IntentsInvest } from './market/intents.ts';
 import { FakeInvest, type InvestPort } from './market/invest.ts';
 import { RealMarket } from './market/real-market.ts';
 import { type ChainPort, FakeChain } from './ports/chain.ts';
+import { DemoChain } from './ports/demo-chain.ts';
+import { DemoAwareMessaging, DemoMessaging } from './ports/demo-messaging.ts';
 import { FakeMessaging, type MessagingPort } from './ports/messaging.ts';
 import { RealChain } from './ports/real-chain.ts';
 import { SpectrumMessaging } from './ports/spectrum.ts';
+import { DemoRepo } from './repo/demo.ts';
 
 const env = loadEnv();
 const log = createLogger(env.LOG_LEVEL);
@@ -67,6 +70,12 @@ if (env.SPECTRUM_PROJECT_ID && env.SPECTRUM_PROJECT_SECRET && env.IMESSAGE_TEAM_
   messaging = fake;
 }
 
+// /demo: one engine serves both. Demo spaces (`demo;<session>`) are written to the
+// browser thread; every real iMessage space is untouched.
+if (env.PENNY_DEMO === '1') {
+  messaging = new DemoAwareMessaging(messaging, new DemoMessaging(new DemoRepo(dbh.db)));
+}
+
 const offline = (): LanguageModel =>
   new MockLanguageModelV4({
     doGenerate: async () => ({
@@ -107,19 +116,21 @@ const privacy =
 
 let engineRef: Engine | null = null;
 const relayerMaxDepositYocto = toBaseUnits(env.PENNY_RELAYER_MAX_DEPOSIT_NEAR, 24);
+/** The enrolled device key for an account: what the delegate action must be signed by. */
+const resolveDeviceKey = async (signerId: string): Promise<string | null> => {
+  if (!engineRef) return null;
+  const user = await engineRef.repos.users.byAccountId(signerId);
+  if (!user) return null;
+  const device = await engineRef.repos.users.activeDevice(user.id);
+  return device?.publicKey ?? null;
+};
 let chain: ChainPort;
 let market: MarketPort;
 let invest: InvestPort | undefined;
 let chainNetwork: 'mainnet' | 'testnet' = 'mainnet';
 if (env.NEAR_RPC_URL) {
   const adapter = chainAdapterFromEnv(process.env, {
-    resolveDeviceKey: async (signerId) => {
-      if (!engineRef) return null;
-      const user = await engineRef.repos.users.byAccountId(signerId);
-      if (!user) return null;
-      const device = await engineRef.repos.users.activeDevice(user.id);
-      return device?.publicKey ?? null;
-    },
+    resolveDeviceKey,
     relayerHardCeilingYocto: relayerMaxDepositYocto,
   });
   chain = new RealChain(adapter);
@@ -144,6 +155,18 @@ if (env.NEAR_RPC_URL) {
   chain = fake;
   market = new FakeMarket();
   invest = new FakeInvest(undefined, (quoteId, dep) => fake.investDeposits.set(quoteId, dep));
+}
+
+// /demo: demo accounts are never created on chain, so the decorator answers the
+// "is this key on this account" read from enrollment and refuses to broadcast.
+// Production accounts pass straight through to the real adapter.
+if (env.PENNY_DEMO === '1') {
+  chain = new DemoChain({
+    inner: chain,
+    isDemoAccount: async (accountId) =>
+      (await engineRef?.repos.users.isDemoAccount(accountId)) ?? false,
+    resolveDeviceKey,
+  });
 }
 
 const engine = createEngine({
@@ -181,6 +204,15 @@ const engine = createEngine({
   explorerBaseUrl:
     env.NEAR_NETWORK === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io',
   appAccountId: env.NEAR_APP_ACCOUNT_ID,
+  ...(env.PENNY_DEMO === '1'
+    ? {
+        demo: {
+          maxTurns: env.PENNY_DEMO_MAX_TURNS,
+          sessionsPerHour: env.PENNY_DEMO_SESSIONS_PER_HOUR,
+          ...(env.PENNY_GUARD_CONTRACT ? { guardContract: env.PENNY_GUARD_CONTRACT } : {}),
+        },
+      }
+    : {}),
   ...(env.PENNY_ENV === 'mainnet'
     ? {
         mainnetMaxPerTxUsd: env.PENNY_MAINNET_MAX_PER_TX_USD,

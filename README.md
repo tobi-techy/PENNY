@@ -59,6 +59,18 @@ Text Penny's number on iMessage. Everything Penny does or proposes shows up as a
 
 **2. Without the app (picture cards).** Just text Penny. Tap the setup link: your browser makes an approval key and a passkey behind Face ID. Cards arrive as picture links; tap one, then Approve with Face ID on the page. Penny checks the passkey on its server, sends the move, and sends a fresh card showing Sent or Blocked.
 
+**3. With nothing installed (the public demo).** `PENNY_DEMO=1` serves `/demo`: a judge-driven
+message thread that looks and behaves like the one Penny lives in. It renders the same cards the
+phone gets (the engine's own render, not a mock-up), and tapping one opens the real card page, so
+Face ID or a passkey, the signature check and the Guard decision all run live. The account behind it
+is a throwaway that is never created on chain, so the one simulated step is the broadcast, and the
+page says so next to the policy it enforces. The engine refuses to boot with the demo on mainnet.
+
+```sh
+bun run --cwd apps/web build   # the engine serves this build at /demo
+PENNY_DEMO=1 bun run dev       # then open http://localhost:8787/demo
+```
+
 Text **freeze** any time (or tap Not me on a Blocked card, which asks you to confirm first): every key Penny trusts for you is switched off and every open card is cancelled. Text **unfreeze** to start again: Penny sends an Unfreeze card, and only Face ID on it (with the key that was switched off) turns your keys back on. A text alone never does.
 
 Testnet only for now (`NEAR_NETWORK=testnet`). Proof of the approval path: `PROOF.md`, from a real run against the deployed engine on 10 Nov 2026. All checks green, including a settled `0.1 NEAR` transfer ([receipt](https://testnet.nearblocks.io/txns/6F6eTAyyQH9YdM82fUfDgm6cFgPZE2bC6FbV7RNy4kSD)) and TEE attestation `enforce` with `verified=true`.

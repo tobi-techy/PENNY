@@ -1,0 +1,564 @@
+/*
+ * The /demo thread, dressed as the place Penny actually lives: an iOS dark-mode
+ * Messages thread. Pure black, SF/system type, grouped grey and blue bubbles, a
+ * real status bar and home indicator, the way a screenshot of a phone looks.
+ * The cards are the engine's own render, the same picture iMessage unfurls.
+ */
+
+/* ---- the phone: full-bleed on a phone, a centred column on a laptop ---- */
+.im {
+  min-height: 100dvh;
+  display: flex;
+  justify-content: center;
+  background: #0a0a0b;
+  color: #fff;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.im-phone {
+  width: 100%;
+  max-width: 430px;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+}
+@media (min-width: 560px) and (min-height: 720px) {
+  .im {
+    padding: 22px 0;
+    align-items: flex-start;
+  }
+  .im-phone {
+    height: min(880px, calc(100dvh - 44px));
+    border-radius: 44px;
+    box-shadow:
+      0 0 0 10px #17171a,
+      0 0 0 12px #2a2a2e,
+      0 40px 90px rgba(0, 0, 0, 0.75);
+  }
+}
+
+/* ---- status bar ---- */
+.im-status {
+  flex: none;
+  height: 44px;
+  padding: 0 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: #fff;
+}
+.im-status::before,
+.im-status::after {
+  content: "";
+}
+.im-clock {
+  font-variant-numeric: tabular-nums;
+  min-width: 54px;
+}
+.im-status-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.im-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11px;
+}
+.im-bars i {
+  width: 3px;
+  border-radius: 1px;
+  background: #fff;
+}
+.im-bars i:nth-child(1) {
+  height: 4px;
+}
+.im-bars i:nth-child(2) {
+  height: 6px;
+}
+.im-bars i:nth-child(3) {
+  height: 8.5px;
+}
+.im-bars i:nth-child(4) {
+  height: 11px;
+}
+.im-wifi {
+  width: 15px;
+  height: 11px;
+  background: #fff;
+  clip-path: polygon(50% 100%, 0 30%, 12% 18%, 30% 8%, 50% 4%, 70% 8%, 88% 18%, 100% 30%);
+}
+.im-batt {
+  width: 25px;
+  height: 12px;
+  border: 1.2px solid rgba(255, 255, 255, 0.45);
+  border-radius: 3.5px;
+  position: relative;
+  padding: 1.5px;
+}
+.im-batt::after {
+  content: "";
+  position: absolute;
+  right: -3.5px;
+  top: 3.5px;
+  width: 2px;
+  height: 4px;
+  border-radius: 0 1px 1px 0;
+  background: rgba(255, 255, 255, 0.45);
+}
+.im-batt b {
+  display: block;
+  height: 100%;
+  width: 72%;
+  border-radius: 2px;
+  background: #fff;
+}
+
+/* ---- nav bar: chevron, avatar over name, FaceTime ---- */
+.im-head {
+  flex: none;
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: start;
+  padding: 2px 8px 8px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: saturate(160%) blur(18px);
+  -webkit-backdrop-filter: saturate(160%) blur(18px);
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.13);
+  z-index: 5;
+}
+.im-back {
+  width: 44px;
+  height: 34px;
+  border: 0;
+  background: none;
+  color: #0a84ff;
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 400;
+  padding: 0 0 8px 6px;
+  text-align: left;
+  cursor: pointer;
+}
+.im-who {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding-top: 3px;
+}
+.im-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: radial-gradient(120% 120% at 30% 20%, #ff8a4c 0%, #ff5f1f 55%, #e14a11 100%);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+  letter-spacing: -0.5px;
+  box-shadow: inset 0 -1px 3px rgba(0, 0, 0, 0.25);
+}
+.im-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+.im-name i {
+  font-style: normal;
+  color: #8e8e93;
+  font-size: 11px;
+}
+.im-actions {
+  justify-self: end;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  color: #0a84ff;
+}
+.im-actions svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* ---- thread ---- */
+.im-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 10px 14px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.im-stamp {
+  align-self: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: #8e8e93;
+  margin: 6px 0 10px;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+.im-stamp b {
+  font-weight: 600;
+  color: #98989d;
+}
+
+/* the demo's honesty note, dressed as iMessage system copy */
+.im-live {
+  align-self: center;
+  max-width: 36ch;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #8e8e93;
+  margin: 0 0 14px;
+}
+.im-live b {
+  color: #c7c7cc;
+  font-weight: 600;
+}
+.im-live a {
+  color: #5ac8fa;
+  text-decoration: none;
+  word-break: break-all;
+}
+.im-hint {
+  align-self: center;
+  max-width: 30ch;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #8e8e93;
+  margin: 2px 0 8px;
+}
+
+.im-row {
+  display: flex;
+  margin-top: 8px;
+}
+.im-row.in {
+  justify-content: flex-start;
+}
+.im-row.out {
+  justify-content: flex-end;
+}
+/* a run of bubbles from the same side sits tight, like Messages */
+.im-row.same {
+  margin-top: 2px;
+}
+.im-bubble {
+  max-width: 74%;
+  padding: 8px 13px;
+  font-size: 16.5px;
+  line-height: 1.3;
+  border-radius: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+  letter-spacing: -0.2px;
+}
+.im-row.in .im-bubble {
+  background: #26252a;
+  color: #fff;
+}
+.im-row.out .im-bubble {
+  background: linear-gradient(180deg, #1a90ff 0%, #0a84ff 100%);
+  color: #fff;
+}
+/* the tail corner belongs to the last bubble of a run only */
+.im-row.in.tail .im-bubble {
+  border-bottom-left-radius: 5px;
+}
+.im-row.out.tail .im-bubble {
+  border-bottom-right-radius: 5px;
+}
+.im-delivered {
+  align-self: flex-end;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #8e8e93;
+  margin: 3px 4px 2px 0;
+  letter-spacing: 0.01em;
+}
+
+/* three dots, the way Messages shows a recipient typing */
+.im-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4.5px;
+  padding: 13px 15px;
+}
+.im-typing i {
+  width: 7.5px;
+  height: 7.5px;
+  border-radius: 50%;
+  background: #8e8e93;
+  animation: im-blink 1.25s infinite ease-in-out;
+}
+.im-typing i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.im-typing i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+@keyframes im-blink {
+  0%,
+  60%,
+  100% {
+    opacity: 0.32;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ---- cards: the engine's own render, the picture Messages unfurls ---- */
+.im-card {
+  align-self: flex-start;
+  margin: 8px 0 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  width: min(300px, 76%);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.im-card img {
+  width: 100%;
+  display: block;
+  border-radius: 16px;
+  border: 0.5px solid #2f2f33;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+  transition: transform 120ms ease;
+}
+.im-card:active img {
+  transform: scale(0.985);
+}
+.im-card-tap {
+  font-size: 11.5px;
+  color: #0a84ff;
+  padding-left: 3px;
+}
+
+/* ---- quick replies, sitting where the prediction bar sits ---- */
+.im-quick {
+  flex: none;
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 7px 12px 5px;
+  background: #000;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.1);
+}
+.im-quick::-webkit-scrollbar {
+  display: none;
+}
+.im-chip {
+  flex: none;
+  /* the app-wide button rule is width: 100%, which would stack these */
+  width: auto;
+  font-family: inherit;
+  font-size: 12.5px;
+  letter-spacing: -0.1px;
+  color: #fff;
+  background: #1c1c1e;
+  border: 0.5px solid #3a3a3c;
+  border-radius: 999px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.im-chip:disabled {
+  opacity: 0.4;
+}
+
+/* ---- composer ---- */
+.im-composer {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 4px 12px 6px;
+  background: #000;
+}
+.im-plus {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 0;
+  background: #1c1c1e;
+  color: #8e8e93;
+  font-size: 22px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0 0 2px;
+  cursor: default;
+}
+.im-input {
+  flex: 1;
+  min-width: 0;
+  /* the app-wide input rule is uppercase and letter-spaced for phone numbers */
+  text-transform: none;
+  text-align: left;
+  height: auto;
+  font-family: inherit;
+  font-size: 16.5px;
+  color: #fff;
+  background: #000;
+  border: 1px solid #3a3a3c;
+  border-radius: 18px;
+  padding: 7px 14px 8px;
+  outline: none;
+  letter-spacing: -0.2px;
+}
+.im-input::placeholder {
+  color: #8e8e93;
+}
+.im-send {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 0;
+  background: #0a84ff;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    opacity 140ms ease;
+}
+.im-send svg {
+  width: 19px;
+  height: 19px;
+}
+.im-send:disabled {
+  background: #2c2c2e;
+  color: #6b6b70;
+  cursor: default;
+}
+
+.im-note {
+  flex: none;
+  font-size: 12px;
+  color: #ff9c9c;
+  text-align: center;
+  padding: 0 18px 6px;
+}
+
+/* ---- home indicator ---- */
+.im-home {
+  flex: none;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: #000;
+}
+.im-home i {
+  width: 134px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* ---- opening screen ---- */
+.im-intro {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  padding: 0 26px 40px;
+}
+.im-lead {
+  font-size: 17px;
+  line-height: 1.45;
+  color: #f2f2f7;
+  margin: 0;
+  letter-spacing: -0.2px;
+}
+.im-cta {
+  width: 100%;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: #0a84ff;
+  border: 0;
+  border-radius: 14px;
+  padding: 13px 20px;
+  cursor: pointer;
+}
+.im-cta:disabled {
+  opacity: 0.55;
+}
+.im-fine {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8e8e93;
+  margin: 0;
+}
+.im-film {
+  font-size: 13px;
+  color: #0a84ff;
+  text-decoration: none;
+}
+
+/* ---- card sheet: the real card page, over the thread ---- */
+.im-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow-y: auto;
+  background: #0b0e11;
+  padding: 54px 0 40px;
+}
+.im-close {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 60;
+  width: auto;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0a84ff;
+  background: rgba(28, 28, 30, 0.9);
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 15px;
+  cursor: pointer;
+}

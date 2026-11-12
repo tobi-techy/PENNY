@@ -6,6 +6,7 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
+      "@penny/shared": ["../../packages/shared/src/index.ts"],
       "@penny/shared/canonical": ["../../packages/shared/src/canonical.ts"]
     }
   },

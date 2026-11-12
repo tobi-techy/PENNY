@@ -22,6 +22,7 @@ import { CommitmentsService } from './commitments/service.ts';
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
+import { buildDemoRoutes } from './http/demo.ts';
 import { buildProveRoutes } from './http/prove.ts';
 import { buildRoutes } from './http/routes.ts';
 import {
@@ -47,6 +48,7 @@ import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import { CardsRepo, PasskeysRepo, RemindersRepo } from './repo/cards.ts';
 import { CommitmentsRepo } from './repo/commitments.ts';
 import { ConnectWatchesRepo } from './repo/connect-watches.ts';
+import { DemoRepo } from './repo/demo.ts';
 import { FollowUpRepo } from './repo/followup.ts';
 import {
   AttestChallengesRepo,
@@ -97,6 +99,11 @@ export type EngineDeps = {
   appAccountId?: string;
   /** Testnet proof routes (scripts/prove.ts). Only set from env on testnet. */
   proveSecret?: string;
+  /**
+   * Public /demo (PENNY_DEMO=1). Off unless set; refused on mainnet at boot.
+   * Demo users get a throwaway account that is never created on chain.
+   */
+  demo?: { maxTurns: number; sessionsPerHour: number; guardContract?: string };
   /** Test hook: no real waits between live-card edit retries. */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -129,6 +136,7 @@ export function createEngine(d: EngineDeps) {
     passkeys: new PasskeysRepo(d.db),
     reminders: new RemindersRepo(d.db),
     followup: new FollowUpRepo(d.db),
+    demo: new DemoRepo(d.db),
   };
   const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
   const cardSender = new CardSender({
@@ -339,6 +347,8 @@ export function createEngine(d: EngineDeps) {
   // The SPA needs its own bundle and stylesheet; the strict API CSP would block both.
   app.use('/setup', webPageCsp());
   app.use('/a/:id', webPageCsp());
+  app.use('/demo', webPageCsp());
+  app.use('/demo/*', webPageCsp());
   const renderPng =
     d.renderCardImage ??
     (async (card: import('@penny/shared').Card) => {
@@ -347,6 +357,34 @@ export function createEngine(d: EngineDeps) {
     });
   // /setup is a picture link card too (sent before the user has any app).
   const base = d.publicBaseUrl.replace(/\/$/, '');
+
+  // Public demo: the SPA shell. Its own page, not a card link: a judge opens it.
+  if (d.demo) {
+    app.get('/demo', async (c) => {
+      const index = join(webDist, 'index.html');
+      c.header('cache-control', 'no-store');
+      if (!existsSync(index)) {
+        return c.html(
+          '<!doctype html><meta name="robots" content="noindex"><h1>The demo is not built yet.</h1>',
+          503,
+        );
+      }
+      return c.html(await readFile(index, 'utf8'));
+    });
+    // Optional: the 60 s film, so a judge on a browser without a passkey still sees
+    // the flow. Copied by the web build from apps/web/public/; absent is fine.
+    app.get('/demo/film.mp4', async (c) => {
+      const film = join(webDist, 'demo-film.mp4');
+      if (!existsSync(film)) return c.json({ error: 'not_found' }, 404);
+      return new Response(await readFile(film), {
+        headers: {
+          'content-type': 'video/mp4',
+          'cache-control': 'public, max-age=3600',
+          'accept-ranges': 'none',
+        },
+      });
+    });
+  }
   app.get('/setup', async (c) => {
     const { linkPageHtml, SETUP_CARD } = await import('./cards/page.ts');
     const index = join(webDist, 'index.html');
@@ -527,6 +565,28 @@ export function createEngine(d: EngineDeps) {
     }),
   );
 
+  // Public demo: same pipeline, throwaway account, no broadcast. Mounted after the
+  // API routes so its own /v1/demo/* limiter applies first.
+  if (d.demo) {
+    app.route(
+      '/',
+      buildDemoRoutes({
+        demo: repos.demo,
+        users: repos.users,
+        enroll,
+        inbound: inboundDeps,
+        cards: cardSender,
+        cardsRepo: repos.cards,
+        log: d.log,
+        now,
+        maxTurns: d.demo.maxTurns,
+        sessionsPerHour: d.demo.sessionsPerHour,
+        ...(d.demo.guardContract ? { guardContract: d.demo.guardContract } : {}),
+        ...(d.explorerBaseUrl ? { explorerBaseUrl: d.explorerBaseUrl } : {}),
+      }),
+    );
+  }
+
   const reflection = new ReflectionService({ users: repos.users, bots: repos.bots, memory });
   const scheduler = new Scheduler(
     defaultJobs({
@@ -538,6 +598,7 @@ export function createEngine(d: EngineDeps) {
       reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
       pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
+      ...(d.demo ? { pruneDemoSessions: (now: Date) => repos.demo.prune(now) } : {}),
       weeklyReflection: async (now) => {
         await reflection.reflectWeekly(now);
       },

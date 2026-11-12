@@ -117,3 +117,12 @@ export const nearPublicKey = (raw: Uint8Array) => `ed25519:${toBase58(raw)}`;
 export function planApprovalMessage(approvalId: string, planHashValue: string): string {
   return `penny-approval:v1:${approvalId}:${planHashValue}`;
 }
+
+/**
+ * The message the device key signs to approve a money action. Mirrors
+ * approvalSignMessage() in packages/shared, which pulls node:crypto and cannot be
+ * bundled for the browser; the domain prefix keeps it from being read as a NEAR payload.
+ */
+export function approvalSignMessage(approvalHashValue: string, challenge: string): string {
+  return `penny-approval:v2:${approvalHashValue}:${challenge}`;
+}

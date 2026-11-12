@@ -116,6 +116,17 @@ const BaseEnv = z.object({
   /** Turns on the testnet proof routes for `bun run prove`. Refused on mainnet. */
   PENNY_PROVE_SECRET: optionalStr,
 
+  /**
+   * Serves the public /demo: a judge gets a throwaway thread that runs the real
+   * Guard and approval code against an account that is never created on chain.
+   * Refused on mainnet.
+   */
+  PENNY_DEMO: flag.default('0'),
+  /** Model turns per demo session. Caps what one visitor can spend. */
+  PENNY_DEMO_MAX_TURNS: z.coerce.number().int().positive().max(100).default(20),
+  /** Demo sessions opened per IP per hour. */
+  PENNY_DEMO_SESSIONS_PER_HOUR: z.coerce.number().int().positive().max(500).default(30),
+
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_PER_USER_PER_MIN: z.coerce.number().int().positive().default(30),
   MAX_BODY_BYTES: z.coerce.number().int().positive().max(1_048_576).default(65_536),
@@ -161,6 +172,15 @@ export const EnvSchema = BaseEnv.superRefine((env, ctx) => {
       code: 'custom',
       path: ['PENNY_PROVE_SECRET'],
       message: 'use at least 32 characters',
+    });
+  }
+  // The demo never moves money, but it does hand out approvals, and on mainnet
+  // that would mean real cards against a real policy. Keep it off mainnet.
+  if (env.PENNY_DEMO === '1' && env.PENNY_ENV === 'mainnet') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PENNY_DEMO'],
+      message: 'the public demo is refused on mainnet',
     });
   }
   // Card links and passkeys (origin + rpId) are built from PUBLIC_BASE_URL, never from a
