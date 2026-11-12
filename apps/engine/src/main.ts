@@ -11,7 +11,7 @@ import { createRegistry, FakeMarket } from './brain/tools.ts';
 import { LangfuseTracer, noopTracer } from './brain/tracing.ts';
 import { renderCardPng } from './cards/render.ts';
 import { ComposioConnector } from './connectors/composio.ts';
-import { createPgliteDb, createPostgresDb } from './db/client.ts';
+import { createPgliteDb, createPostgresDb, migratePostgres } from './db/client.ts';
 import { loadEnv } from './env.ts';
 import { createLogger } from './lib/logger.ts';
 import { IntentsInvest } from './market/intents.ts';
@@ -44,6 +44,13 @@ if (env.PENNY_ENV === 'mainnet') {
     log.fatal({ problems }, 'mainnet boot refused');
     process.exit(1);
   }
+}
+
+// Postgres migrations are explicit (a boot that migrates can race a rolling deploy),
+// so a container host that has no release step opts in with MIGRATE_ON_BOOT=1.
+if (env.MIGRATE_ON_BOOT === '1' && env.DATABASE_URL) {
+  log.warn('running pending migrations before boot');
+  await migratePostgres(env.DATABASE_URL);
 }
 
 const dbh = env.DATABASE_URL ? await createPostgresDb(env.DATABASE_URL) : await createPgliteDb();
