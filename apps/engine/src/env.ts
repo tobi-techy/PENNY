@@ -127,6 +127,12 @@ const BaseEnv = z.object({
   /** Demo sessions opened per IP per hour. */
   PENNY_DEMO_SESSIONS_PER_HOUR: z.coerce.number().int().positive().max(500).default(30),
 
+  /**
+   * Run pending Postgres migrations before boot. Off by default: a container host
+   * with no release step turns it on, and a rolling deploy races only itself.
+   */
+  MIGRATE_ON_BOOT: flag.default('0'),
+
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_PER_USER_PER_MIN: z.coerce.number().int().positive().default(30),
   MAX_BODY_BYTES: z.coerce.number().int().positive().max(1_048_576).default(65_536),
