@@ -4,7 +4,14 @@ import {
   verifySignedDelegateAction,
 } from '@penny/chain';
 import type { Approval, MoneyPlan, NearAction } from '@penny/shared';
-import type { BuiltActions, ChainPort, RelayResult, TxStatus, VerifyResult } from './chain.ts';
+import type {
+  BuiltActions,
+  ChainPort,
+  GuardView,
+  RelayResult,
+  TxStatus,
+  VerifyResult,
+} from './chain.ts';
 
 /**
  * ChainPort decorator for the public demo (/demo). Nothing here is a shortcut in
@@ -89,8 +96,15 @@ export class DemoChain implements ChainPort {
     return this.d.inner.buildActions(plan, signerId);
   }
 
-  guardFor(...args: Parameters<NonNullable<ChainPort['guardFor']>>) {
-    return this.d.inner.guardFor?.(...args);
+  /**
+   * Never the shared Guard contract. A throwaway owner can not hold an allowance in
+   * it, so asking would block every demo send for a reason the page never shows and
+   * the approval it exists to demonstrate would never appear. The policy numbers the
+   * page prints are the whole gate here.
+   */
+  async guardFor(ownerAccountId: string): Promise<GuardView | undefined> {
+    if (await this.d.isDemoAccount(ownerAccountId)) return undefined;
+    return this.d.inner.guardFor?.(ownerAccountId);
   }
 }
 

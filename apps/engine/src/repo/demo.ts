@@ -1,6 +1,32 @@
-import { and, asc, eq, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, getTableName, inArray, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { demoMessages, demoSessions } from '../db/schema.ts';
+import {
+  approvalEvents,
+  approvals,
+  bills,
+  bots,
+  cards,
+  commitmentEvents,
+  commitments,
+  connectWatches,
+  conversations,
+  demoMessages,
+  demoSessions,
+  devices,
+  enrollCodes,
+  followups,
+  guardDecisions,
+  guardPolicies,
+  ledgerEntries,
+  memories,
+  messages,
+  moods,
+  openLoops,
+  passkeys,
+  proactiveMessages,
+  reminders,
+  users,
+} from '../db/schema.ts';
 
 /** A demo thread lives for a day; the sweeper deletes it and the user it created. */
 export const DEMO_TTL_MS = 24 * 60 * 60_000;
@@ -124,18 +150,81 @@ export class DemoRepo {
   }
 
   /**
-   * Sweeper: drop expired sessions and everything they wrote. The user row stays:
-   * it holds no money, no chain account and no trusted key, and other tables
-   * (guard policy, device) reference it, so deleting it here would either leak a
-   * foreign key or force this file to know every table that ever points at a user.
-   * The growth that matters, the thread itself, cascades away with the session.
+   * Sweeper: drop expired sessions and everything the session created.
+   *
+   * The thread cascades with the session, but nothing else does: the user, its
+   * device, policy, conversation, messages, cards, approvals and ledger rows all
+   * point at each other through plain foreign keys. One session is only a handful
+   * of rows, but the endpoint is unauthenticated, so they are removed here rather
+   * than accumulating one session at a time.
    */
   async prune(now: Date): Promise<number> {
     const dead = await this.db
-      .select({ id: demoSessions.id })
+      .select({ id: demoSessions.id, userId: demoSessions.userId })
       .from(demoSessions)
       .where(lt(demoSessions.expiresAt, now));
-    for (const s of dead) await this.db.delete(demoSessions).where(eq(demoSessions.id, s.id));
+    for (const s of dead) {
+      // One transaction: the session row has to go before its user, and a half-done
+      // sweep would leave the user behind for good.
+      await this.db.transaction(async (tx) => {
+        await tx.delete(demoSessions).where(eq(demoSessions.id, s.id));
+        await deleteFootprint(tx, s.userId);
+      });
+    }
     return dead.length;
   }
+}
+
+/**
+ * Every table a demo session can write, children before the rows they point at, so
+ * the user row can be last. Named from the schema itself rather than spelled by hand.
+ */
+const OWNED = [
+  cards,
+  ledgerEntries,
+  guardDecisions,
+  reminders,
+  approvals,
+  conversations,
+  passkeys,
+  devices,
+  enrollCodes,
+  guardPolicies,
+  memories,
+  moods,
+  followups,
+  openLoops,
+  proactiveMessages,
+  bills,
+  commitmentEvents,
+  commitments,
+  connectWatches,
+  bots,
+];
+
+/** The transaction handle, so the wipe below runs inside the sweeper's transaction. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/** Delete everything one demo user created. The `is_demo` guard keeps this a demo-only path. */
+async function deleteFootprint(db: Tx, userId: string): Promise<void> {
+  // Two tables inherit their owner through the row they point at.
+  const approvalIds = (
+    await db.select({ id: approvals.id }).from(approvals).where(eq(approvals.userId, userId))
+  ).map((r) => r.id);
+  if (approvalIds.length > 0) {
+    await db.delete(approvalEvents).where(inArray(approvalEvents.approvalId, approvalIds));
+  }
+  const conversationIds = (
+    await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.userId, userId))
+  ).map((r) => r.id);
+  if (conversationIds.length > 0) {
+    await db.delete(messages).where(inArray(messages.conversationId, conversationIds));
+  }
+  for (const t of OWNED) {
+    await db.execute(sql`delete from ${sql.identifier(getTableName(t))} where user_id = ${userId}`);
+  }
+  await db.delete(users).where(and(eq(users.id, userId), eq(users.isDemo, true)));
 }

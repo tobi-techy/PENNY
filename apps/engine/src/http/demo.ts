@@ -163,6 +163,7 @@ export function buildDemoRoutes(d: DemoDeps): Hono<{ Variables: AppVars }> {
             : {}),
         },
         user.accountId,
+        user.id,
       );
       return c.json({ accountId: res.accountId, status: res.status });
     } catch (e) {

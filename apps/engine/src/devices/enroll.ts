@@ -202,8 +202,13 @@ export class EnrollService {
     const claim = await this.users.enrollCodeUser(codeHash, this.now());
     // unknown, used and expired all look the same
     if (!claim) throw new EnrollError(401, 'invalid_code');
+    const owner = await this.users.byId(claim.userId);
+    // A demo session's code is redeemed through /v1/demo/enroll, which never creates
+    // an account. This route would, so a code handed to an anonymous visitor must
+    // not be redeemable here.
+    if (owner?.isDemo) throw new EnrollError(401, 'invalid_code');
     // A frozen Penny stays frozen: linking a new key would get around the freeze.
-    if ((await this.users.byId(claim.userId))?.frozenAt) throw new EnrollError(409, 'frozen');
+    if (owner?.frozenAt) throw new EnrollError(409, 'frozen');
 
     const existing = await this.users.activeDevice(claim.userId);
     if (existing) {
@@ -309,7 +314,7 @@ export class EnrollService {
    * A passkey is optional here: a desktop browser without one still enrolls and
    * signs with its device key, so the demo never dead-ends at the best moment.
    */
-  async enrollDemo(body: EnrollBody, accountId: string): Promise<EnrollResult> {
+  async enrollDemo(body: EnrollBody, accountId: string, userId: string): Promise<EnrollResult> {
     const pk = Buffer.from(body.publicKeyEd25519, 'base64url');
     if (pk.length !== 32) throw new EnrollError(400, 'bad_public_key');
     // Mainnet needs a genuine App Attest build; a demo must never be a way around it.
@@ -319,6 +324,9 @@ export class EnrollService {
       body.passkey && body.passkeyChallengeId ? await this.verifyPasskey(body, codeHash) : null;
     const claim = await this.users.enrollCodeUser(codeHash, this.now());
     if (!claim) throw new EnrollError(401, 'invalid_code');
+    // The code must belong to the session's own user: a session can only ever enroll
+    // itself, never whoever else's live code it was handed.
+    if (claim.userId !== userId) throw new EnrollError(401, 'invalid_code');
 
     const existing = await this.users.activeDevice(claim.userId);
     if (existing) {

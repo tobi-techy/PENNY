@@ -64,8 +64,12 @@ export interface ChainPort {
    * Client for the configured shared Guard contract. Undefined when
    * PENNY_GUARD_CONTRACT is unset (the shared Guard check is off). The owner
    * account is passed to each owner-scoped call, not derived per user.
+   * May be async: the demo decides by looking its throwaway accounts up.
    */
-  guardFor?(ownerAccountId: string, ownerSigner?: TxSigner): GuardView | undefined;
+  guardFor?(
+    ownerAccountId: string,
+    ownerSigner?: TxSigner,
+  ): GuardView | undefined | Promise<GuardView | undefined>;
 }
 
 /** In-memory shared Guard for tests and DRY_RUN dev. Never touches a network. */

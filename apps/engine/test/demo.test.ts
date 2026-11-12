@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import type { Approval } from '@penny/shared';
+import { sql } from 'drizzle-orm';
 import { createPgliteDb, type DbHandle } from '../src/db/client.ts';
 import { sha256Hex } from '../src/lib/crypto.ts';
-import { FakeChain } from '../src/ports/chain.ts';
+import { FakeChain, FakeGuard } from '../src/ports/chain.ts';
 import { DemoChain } from '../src/ports/demo-chain.ts';
 import {
   cardTokenOf,
@@ -157,6 +158,21 @@ describe('demo chain: never a broadcast, never a real account', () => {
     const r = await chain().relay(approval(), 'AAAA');
     expect(r).toEqual({ ok: true, txHash: 'demo-apr_demo1', dryRun: true });
     expect(await chain().txStatus('demo-apr_demo1')).toBe('pending');
+  });
+
+  test('the shared Guard contract is never asked about a demo account', async () => {
+    // A throwaway owner can never hold an allowance in it, so asking would block the
+    // $5 send with "your guard has no allowance" and the approval card would never
+    // appear: the demo's one showcase.
+    const real = new FakeChain();
+    real.guard = new FakeGuard();
+    const demo = new DemoChain({
+      inner: real,
+      isDemoAccount: async (id) => id === ACCOUNT,
+      resolveDeviceKey: async () => publicKeyB64Url,
+    });
+    expect(await demo.guardFor(ACCOUNT)).toBeUndefined();
+    expect(await demo.guardFor('real.penny.near')).toBe(real.guard);
   });
 
   test('a real account is passed straight through to the adapter', async () => {
@@ -354,6 +370,129 @@ describe('/demo routes', () => {
       after.messages.filter((m) => m.kind === 'card' && tokenFromUrl(m.url ?? undefined) === token)
         .length,
     ).toBe(2);
+  }, 60_000);
+
+  test("a demo session's code is not redeemable on the real enroll route", async () => {
+    const s = (await (await start()).json()) as { sessionId: string; enrollCode: string };
+    const key = Buffer.from(ed25519.getPublicKey(new Uint8Array(32).fill(9))).toString('base64url');
+    // The live route would call createUserAccount: an anonymous visitor must not be
+    // able to turn a demo code into a real account and a real broadcast.
+    const real = await t.engine.app.request('/v1/devices/enroll', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'k'.repeat(20) },
+      body: JSON.stringify({ enrollCode: s.enrollCode, publicKeyEd25519: key }),
+    });
+    expect(real.status).toBe(401);
+    expect(t.chain.accounts.size).toBe(0);
+    // and the code was not burned: the demo route still takes it
+    const demo = await t.engine.app.request('/v1/demo/enroll', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: s.sessionId,
+        enrollCode: s.enrollCode,
+        publicKeyEd25519: key,
+      }),
+    });
+    expect(demo.status).toBe(200);
+  }, 60_000);
+
+  test("a session cannot enroll another user's code", async () => {
+    const first = (await (await start()).json()) as { sessionId: string; enrollCode: string };
+    const second = (await (await start()).json()) as { sessionId: string };
+    const key = Buffer.from(ed25519.getPublicKey(new Uint8Array(32).fill(7))).toString('base64url');
+    // Enrolling someone else's code here would hand this session their row, their
+    // account id, and their device key.
+    const crossed = await t.engine.app.request('/v1/demo/enroll', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: second.sessionId,
+        enrollCode: first.enrollCode,
+        publicKeyEd25519: key,
+      }),
+    });
+    expect(crossed.status).toBe(401);
+    // the first session still owns its own code
+    const own = await t.engine.app.request('/v1/demo/enroll', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: first.sessionId,
+        enrollCode: first.enrollCode,
+        publicKeyEd25519: key,
+      }),
+    });
+    expect(own.status).toBe(200);
+  }, 60_000);
+
+  test('the sweep takes the whole session with it', async () => {
+    const s = (await (await start()).json()) as { sessionId: string; enrollCode: string };
+    const key = Buffer.from(ed25519.getPublicKey(new Uint8Array(32).fill(6))).toString('base64url');
+    await t.engine.app.request('/v1/demo/enroll', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: s.sessionId,
+        enrollCode: s.enrollCode,
+        publicKeyEd25519: key,
+      }),
+    });
+    const user = await t.engine.repos.users.byAccountId(
+      `demo-${s.sessionId.slice(0, 20).toLowerCase()}.testnet`,
+    );
+    if (!user) throw new Error('demo user missing');
+    // A thread turn and a blocked send, so the session owns a conversation, messages,
+    // a card, an approval, a guard decision and a policy: everything the sweep must take.
+    await t.engine.app.request('/v1/demo/say', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: s.sessionId, text: 'hi' }),
+    });
+    await t.engine.services.approvals.createMoneyApproval({
+      userId: user.id,
+      bot: null,
+      plan: { kind: 'send', asset: 'USDC', amount: '400', to: 'new-wallet.testnet' },
+      space: { spaceId: demoSpaceId(s.sessionId), userHandle: `demo:${s.sessionId}` },
+    });
+
+    const count = async (q: ReturnType<typeof sql>) =>
+      Number(((await t.db.db.execute(q)) as unknown as { rows: { n: number }[] }).rows[0]?.n ?? 0);
+    const owned = (table: string) =>
+      count(
+        sql`select count(*)::int as n from ${sql.identifier(table)} where user_id = ${user.id}`,
+      );
+    expect(await owned('cards')).toBeGreaterThan(0);
+    expect(await owned('guard_decisions')).toBeGreaterThan(0);
+
+    // expire it the way a day would
+    await t.db.db.execute(
+      sql`update demo_sessions set expires_at = now() - interval '1 day' where id = ${s.sessionId}`,
+    );
+    expect(await t.engine.repos.demo.prune(new Date())).toBeGreaterThan(0);
+
+    // the thread, the user and everything hanging off it are gone, not just the session
+    expect(
+      await count(sql`select count(*)::int as n from demo_sessions where id = ${s.sessionId}`),
+    ).toBe(0);
+    expect(await t.engine.repos.users.byId(user.id)).toBeNull();
+    for (const table of [
+      'devices',
+      'conversations',
+      'cards',
+      'approvals',
+      'guard_decisions',
+      'guard_policies',
+      'enroll_codes',
+      'messages',
+    ]) {
+      const rows = await count(
+        table === 'messages'
+          ? sql`select count(*)::int as n from messages m join conversations c on c.id = m.conversation_id join users u on u.id = c.user_id where u.id = ${user.id}`
+          : sql`select count(*)::int as n from ${sql.identifier(table)} where user_id = ${user.id}`,
+      );
+      expect([table, rows]).toEqual([table, 0]);
+    }
   }, 60_000);
 
   test('the demo is off unless the engine was started with it', async () => {

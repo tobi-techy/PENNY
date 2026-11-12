@@ -561,7 +561,7 @@ export class ApprovalService {
     const owner = ownerAccountId ?? (await this.d.users.byId(userId))?.accountId;
     if (!owner) return [];
     try {
-      const guard = guardFor.call(this.d.chain, owner);
+      const guard = await guardFor.call(this.d.chain, owner);
       if (!guard) return [];
       const agentAccountId = guardAgentId(bot?.slug, this.d.appAccountId ?? 'penny.near');
       if (!agentAccountId) return [GUARD_UNREADABLE];
