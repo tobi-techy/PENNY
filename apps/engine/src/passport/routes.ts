@@ -91,49 +91,12 @@ export function passportRoutes(d: PassportDeps) {
     index(accept = ''): Response {
       const { config } = state();
       if (!config) return Response.json({ error: 'not_registered' }, { status: 404 });
-      const summary = {
-        network: config.network,
-        chainId: config.chainId,
-        ownerAccount: config.ownerAccount,
-        contracts: config.contracts,
-        agents: config.agents.map((a) => ({
-          slug: a.slug,
-          name: a.name,
-          tokenId: a.tokenId,
-          badge: a.badge,
-          cardUrl: a.cardUrl,
-          cardSha256: a.cardSha256,
-          verifyUrl: a.explorer.verify,
-        })),
-      };
       if (!accept.includes('text/html')) {
-        return Response.json(summary, { headers: { 'cache-control': 'public, max-age=300' } });
+        return Response.json(indexSummary(config), {
+          headers: { 'cache-control': 'public, max-age=300' },
+        });
       }
-      const items = config.agents
-        .map(
-          (a) => `      <li><a href="/agents/${esc(a.slug)}">${esc(a.name)}</a>
-        <span class="mono">${esc(a.badge)}</span></li>`,
-        )
-        .join('\n');
-      return htmlResponse(`<!doctype html>
-${head(`${config.agents.length} agents — verified by Concordium`, 'Penny crew')}
-<body>
-<main>
-  <div class="card">
-    <h1>The Penny crew</h1>
-    <p class="sub">${config.agents.length} agents, one owner, each with a Verified by Concordium badge.</p>
-    <ul class="crew">
-${items}
-    </ul>
-    <dl class="meta">
-      <dt>Owner</dt><dd>${esc(config.ownerAccount)}</dd>
-      <dt>Registry</dt><dd>CIS-8004 ${esc(config.contracts.cis8004)} on ${esc(config.network)}</dd>
-    </dl>
-    <p class="note">A badge proves the owner account published this card and controls it. It does not prove an agent is safe, correct, or honest, and it is not a payment guarantee.</p>
-  </div>
-</main>
-</body>
-</html>`);
+      return htmlResponse(indexHtml(config));
     },
 
     /** GET /agents/passport.css -> the one stylesheet the passport pages load. */
@@ -165,42 +128,9 @@ ${items}
     /** GET /agents/:slug -> a plain HTML passport page. Public, no PII. */
     page(slug: string): Response {
       const agent = bySlug(slug);
-      if (!agent) return notFoundHtml();
       const { config } = state();
-      if (!config) return notFoundHtml();
-      const rows: [string, string][] = [
-        ['Agent', agent.name],
-        ['Registry', `CIS-8004 ${config.contracts.cis8004} on ${config.network}`],
-        ['Token id', agent.tokenId],
-        ['Owner', config.ownerAccount],
-        ['Badge', agent.badge],
-        ['Card SHA-256', agent.cardSha256],
-        ['Registered', agent.registerTx],
-        ['Card pinned', agent.pinTx],
-      ];
-      return htmlResponse(`<!doctype html>
-${head(`${agent.name} — verified by Concordium`, `${agent.name} carries a Verified by Concordium badge in the CIS-8004 agent registry.`)}
-<body>
-<main>
-  <div class="card">
-    <h1>${esc(agent.name)}</h1>
-    <p class="sub">An agent in the Penny crew.</p>
-    <div class="badge">Verified by Concordium</div>
-    <dl>
-${rows.map(([k, v]) => `      <dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('\n')}
-    </dl>
-    <div class="links">
-      <a href="${esc(agent.explorer.verify)}">Check the badge</a>
-      <a href="/agents/${esc(agent.slug)}/agent-card.json">Agent Card</a>
-      <a href="${esc(agent.explorer.register)}">Registration</a>
-      <a href="${esc(agent.explorer.pin)}">Card pin</a>
-      <a href="/agents">The whole crew</a>
-    </div>
-    <p class="note">The badge proves the owner account published this card and controls it. It does not prove the agent is safe, correct, or honest, and it is not a payment guarantee.</p>
-  </div>
-</main>
-</body>
-</html>`);
+      if (!agent || !config) return notFoundHtml();
+      return htmlResponse(pageHtml(agent, config));
     },
 
     /** GET /agents/:slug/card.png -> the crew mark as a square PNG. */
@@ -233,7 +163,91 @@ ${rows.map(([k, v]) => `      <dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('\n')}
   };
 }
 
-const PASSPORT_CSS = `:root{color-scheme:light}
+/** The machine-readable crew summary, also written as /agents/index.json. */
+export function indexSummary(config: RegistryConfig) {
+  return {
+    network: config.network,
+    chainId: config.chainId,
+    ownerAccount: config.ownerAccount,
+    contracts: config.contracts,
+    agents: config.agents.map((a) => ({
+      slug: a.slug,
+      name: a.name,
+      tokenId: a.tokenId,
+      badge: a.badge,
+      cardUrl: a.cardUrl,
+      cardSha256: a.cardSha256,
+      verifyUrl: a.explorer.verify,
+    })),
+  };
+}
+
+export function indexHtml(config: RegistryConfig): string {
+  const items = config.agents
+    .map(
+      (a) => `      <li><a href="/agents/${esc(a.slug)}">${esc(a.name)}</a>
+        <span class="mono">${esc(a.badge)}</span></li>`,
+    )
+    .join('\n');
+  return `<!doctype html>
+${head(`${config.agents.length} agents — verified by Concordium`, 'Penny crew')}
+<body>
+<main>
+  <div class="card">
+    <h1>The Penny crew</h1>
+    <p class="sub">${config.agents.length} agents, one owner, each with a Verified by Concordium badge.</p>
+    <ul class="crew">
+${items}
+    </ul>
+    <dl class="meta">
+      <dt>Owner</dt><dd>${esc(config.ownerAccount)}</dd>
+      <dt>Registry</dt><dd>CIS-8004 ${esc(config.contracts.cis8004)} on ${esc(config.network)}</dd>
+    </dl>
+    <p class="note">A badge proves the owner account published this card and controls it. It does not prove an agent is safe, correct, or honest, and it is not a payment guarantee.</p>
+  </div>
+</main>
+</body>
+</html>`;
+}
+
+export function pageHtml(agent: RegisteredAgent, config: RegistryConfig): string {
+  const rows: [string, string][] = [
+    ['Agent', agent.name],
+    ['Registry', `CIS-8004 ${config.contracts.cis8004} on ${config.network}`],
+    ['Token id', agent.tokenId],
+    ['Owner', config.ownerAccount],
+    ['Badge', agent.badge],
+    ['Card SHA-256', agent.cardSha256],
+    ['Registered', agent.registerTx],
+    ['Card pinned', agent.pinTx],
+  ];
+  return `<!doctype html>
+${head(`${agent.name} — verified by Concordium`, `${agent.name} carries a Verified by Concordium badge in the CIS-8004 agent registry.`)}
+<body>
+<main>
+  <div class="card">
+    <h1>${esc(agent.name)}</h1>
+    <p class="sub">An agent in the Penny crew.</p>
+    <div class="badge">Verified by Concordium</div>
+    <dl>
+${rows.map(([k, v]) => `      <dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('\n')}
+    </dl>
+    <div class="links">
+      <a href="${esc(agent.explorer.verify)}">Check the badge</a>
+      <a href="/agents/${esc(agent.slug)}/agent-card.json">Agent Card</a>
+      <a href="${esc(agent.explorer.register)}">Registration</a>
+      <a href="${esc(agent.explorer.pin)}">Card pin</a>
+      <a href="/agents">The whole crew</a>
+    </div>
+    <p class="note">The badge proves the owner account published this card and controls it. It does not prove the agent is safe, correct, or honest, and it is not a payment guarantee.</p>
+  </div>
+</main>
+</body>
+</html>`;
+}
+
+/** Exported so the static exporter writes exactly the stylesheet the routes serve. */
+export const PASSPORT_CSS = `:root{color-scheme:light}
 *{box-sizing:border-box}
 body{margin:0;padding:40px 20px;font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:#f6f7f8;color:#111519}
 main{max-width:680px;margin:0 auto}
@@ -254,7 +268,8 @@ a{color:#111519;text-underline-offset:3px}
 .note{margin:24px 0 0;padding-top:20px;border-top:1px solid #e3e5e8;color:#5b6169;font-size:13px}`;
 
 function head(title: string, description: string): string {
-  return `<head>
+  return `<html lang="en">
+<head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${esc(title)}</title>

@@ -21,12 +21,11 @@ The card URL is inside the bytes that get hashed and pinned on chain. So hosting
 
 ## Phase 1: make the evidence true again (no new concepts)
 
-1. **Choose the permanent card host.** Options, in order of preference:
-   - `https://<engine-host>/agents/<slug>/agent-card.json` from the deployed engine. Best: same origin as the passport pages, one system to operate, and the card is served by the app rather than a laptop.
-   - `https://raw.githubusercontent.com/tobi-techy/PENNY/main/agents/<slug>/agent-card.json`. Cheapest, needs the push, and raw GitHub sends `content-type: text/plain` with no configurable headers.
-   - Long-lived tunnel with a reserved domain. Worst: still a laptop.
+1. **Choose the permanent card host.** Decided: **Vercel, static only.** See "Hosting" below for why the engine cannot go there. Run `bun run concordium:export` and deploy `apps/engine/public-static` as a static project.
 
-   Decision needed from you. My recommendation is the engine host, because it also gives the passport pages a stable home and removes the laptop from the loop.
+   The exporter writes the pinned card bytes verbatim, the passport pages, `agents/index.json`, `.well-known/agent-card.json`, and a `vercel.json` that sets `content-type: application/json` plus `access-control-allow-origin: *` on the card paths, because a verifier on another origin has to be able to read them. It refuses to write a card whose bytes do not hash to the pinned SHA-256, so a bad pin fails the build instead of silently invalidating a badge.
+
+   Automate the deploy with [`vercel build --prod` / `vercel deploy --prebuilt --prod`](https://vercel.com/docs/cli/deploy) so the exported directory is what ships. Vercel also serves `/agents/penny/agent-card.json` only if the file exists at that path, which is why the exporter writes both `agent-card.json` and `card.json`.
 
 2. **Set `CONCORDIUM_CARD_BASE_URL`** to the chosen base and rebuild all four cards.
 3. **Re-pin** all four with `bun run concordium:register pin <slug> <card-url>`, then re-run `bun run concordium:verify` and confirm `badge_valid: true` with zero issues for all four.
@@ -56,10 +55,36 @@ Done when: an approval card visibly carries the counterparty's badge verdict, an
 12. **Demo script pass.** Update `docs/CONCORDIUM.md` section 10 to the new URLs and the binding step.
 13. **Submission text.** Components used, CCDExplorer links, production paragraph.
 
+## Hosting
+
+**The split:** Vercel hosts the static accountability surface. It cannot host the engine.
+
+The engine is not serverless-shaped:
+
+- It keeps state in PGlite on local disk (`new PGlite()` in `apps/engine/src/db/client.ts`), which does not survive a Vercel function.
+- It is a long-lived process with rate limiters, an in-memory Concordium cache, and inbound iMessage webhooks that expect a stable origin (`PUBLIC_BASE_URL` also drives passkey `rpId`).
+- Moving it would mean Postgres plus a queue plus a key custody rethink. Not a hackathon week, and it touches money and keys.
+
+What Vercel is genuinely good for here: the four pinned Agent Cards and the passport pages. Those are pure reads over files in the repo. No database, no secrets, no money. That is exactly the slice that must be stable, because the card URL is inside the hashed bytes.
+
+Deployed layout:
+
+```
+/                                   crew index
+/agents/index.json                  machine-readable crew summary
+/agents/:slug/                       passport page
+/agents/:slug/agent-card.json        the pinned bytes (hashed on chain)
+/agents/:slug/card.json              same bytes, transport alias
+/agents/passport.css                 the one stylesheet
+/.well-known/agent-card.json         Penny, for A2A discovery
+```
+
+Re-pinning after a host change is expected, not a mistake: the URL is part of the hashed document. Budget one re-pin per host change and avoid host churn.
+
 ## What I need from you
 
 - **Push approval** for `droid/add-concordium`, whenever you are ready. Nothing is pushed yet.
-- **A hosting decision**: engine host, GitHub raw, or a reserved tunnel.
+- **A Vercel login** (`vercel login`). The CLI is installed but the stored token is invalid, so I cannot deploy or create the project. Once you are logged in I can run the export, deploy, then rebuild and re-pin the four cards against the deployed URL.
 - **A testnet ed25519 NEAR operator key** for the CIS-8 binding. If you would rather not hand a key over, say so and I will write the signing step as a snippet you run yourself.
 
 ## Review findings from this pass
@@ -73,3 +98,17 @@ Three bugs found in my own work and fixed:
 Also fixed: the passport cache ignored its config path, so two configs shared one cache entry.
 
 One thing I left alone on purpose: `/agents` is not in `isWebPagePath`, so it gets its own header policy (`passportHeaders`) and stays indexable, unlike the approval pages. A passport that cannot be found is not a passport.
+
+## Vercel assessment
+
+Answered: **yes for the cards and passports, no for the engine.**
+
+Implemented `scripts/concordium/export-static.mjs` (`bun run concordium:export`). It imports the same renderers the runtime routes use, so the static pages and the live pages cannot drift apart, and it writes only bytes that hash to the pinned values. 5 tests cover it:
+
+- every exported card matches its pinned SHA-256
+- `.well-known/agent-card.json` equals Penny's card byte for byte
+- pages and `agents/index.json` are written, with no inline style
+- `vercel.json` sets `application/json` and `access-control-allow-origin: *` on card paths
+- a tampered card makes the export exit 1 with `!= pinned` instead of writing a bad pin
+
+Verified over real HTTP: served bytes hash to `6f10957e…cb67`, matching the pin.

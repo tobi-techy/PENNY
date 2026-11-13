@@ -15,6 +15,7 @@
     "prove": "bun scripts/prove.ts",
     "concordium:register": "NODE_OPTIONS=--dns-result-order=ipv4first node scripts/concordium/register.mjs",
     "concordium:cards": "node scripts/concordium/build-cards.mjs",
+    "concordium:export": "bun scripts/concordium/export-static.mjs",
     "concordium:verify": "node scripts/concordium/verify.mjs"
   },
   "devDependencies": {
