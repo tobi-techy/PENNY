@@ -1,6 +1,17 @@
-import { type BadgeCheckResponse, BadgeCheckResponseSchema } from './schemas.ts';
-import type { BadgeCheck, ConcordiumNetwork, VerifyResult } from './types.ts';
+import {
+  AnyCheckResponseSchema,
+  type BadgeCheckResponse,
+  BadgeCheckResponseSchema,
+  type OwnerCheckResponse,
+} from './schemas.ts';
+import type { BadgeCheck, ConcordiumNetwork, OwnerVerifyResult, VerifyResult } from './types.ts';
 import { verdictOf } from './verdict.ts';
+
+/** True when the registry answered with an owner account's agent list. */
+export function isOwnerResponse(value: unknown): value is OwnerCheckResponse {
+  if (typeof value !== 'object' || value === null) return false;
+  return Array.isArray((value as { agents?: unknown }).agents);
+}
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -90,6 +101,85 @@ export class ConcordiumClient {
         check: emptyCheck(network),
         error: clientError.message,
       };
+    }
+  }
+
+  /**
+   * Check an owner account and every agent under it. The registry answers an
+   * account with `{account, agent_count, agents: [...]}`, not a single verdict,
+   * so the caller gets one row per agent plus a roll-up count.
+   */
+  async verifyOwner(
+    account: string,
+    network: ConcordiumNetwork = this.network,
+  ): Promise<OwnerVerifyResult> {
+    const checkedAt = new Date(this.now()).toISOString();
+    const failed = (error: string, verdict: 'unknown' | 'unavailable'): OwnerVerifyResult => ({
+      verdict,
+      badge: account,
+      account,
+      network,
+      checkedAt,
+      check: emptyCheck(network),
+      agents: [],
+      validCount: 0,
+      invalidCount: 0,
+      error,
+    });
+    try {
+      const payload = await this.getJson(
+        `/v1/check-badge/${encodeURIComponent(account)}?network=${network}`,
+      );
+      const parsed = AnyCheckResponseSchema.safeParse(payload);
+      if (!parsed.success) {
+        throw new ConcordiumClientError(
+          'invalid_response',
+          'owner check response did not match the expected shape',
+        );
+      }
+      if (!isOwnerResponse(parsed.data)) {
+        // An account-shaped query answered with a single badge: honour it.
+        const one = toBadgeCheck(parsed.data as BadgeCheckResponse);
+        return {
+          verdict: verdictOf(one),
+          badge: account,
+          account,
+          network,
+          checkedAt,
+          check: one,
+          agents: [one],
+          validCount: one.badgeValid ? 1 : 0,
+          invalidCount: one.badgeValid ? 0 : 1,
+        };
+      }
+      const owner = parsed.data;
+      const agents = owner.agents.map(toBadgeCheck);
+      const validCount = agents.filter((a) => a.badgeValid).length;
+      const invalidCount = agents.length - validCount;
+      // One bad agent among many is not "verified"; the account is only clean
+      // when every agent under it passes.
+      const verdict: OwnerVerifyResult['verdict'] =
+        agents.length === 0
+          ? 'unknown'
+          : agents.some((a) => verdictOf(a) === 'revoked')
+            ? 'revoked'
+            : validCount === agents.length
+              ? 'verified'
+              : 'invalid';
+      return {
+        verdict,
+        badge: account,
+        account,
+        network,
+        checkedAt,
+        check: agents[0] ?? emptyCheck(network),
+        agents,
+        validCount,
+        invalidCount,
+      };
+    } catch (error) {
+      const clientError = asClientError(error);
+      return failed(clientError.message, clientError.status === 404 ? 'unknown' : 'unavailable');
     }
   }
 

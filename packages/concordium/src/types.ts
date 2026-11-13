@@ -29,3 +29,12 @@ export type VerifyResult = {
   check: BadgeCheck;
   error?: string;
 };
+
+/** The verdict for one owner account, with each of its agents. */
+export type OwnerVerifyResult = VerifyResult & {
+  account: string;
+  /** Every agent the account owns, each checked independently. */
+  agents: BadgeCheck[];
+  validCount: number;
+  invalidCount: number;
+};

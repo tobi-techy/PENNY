@@ -119,21 +119,42 @@ export function builtinTools(): ToolDef<never>[] {
     input: VerifyAgentInput,
     execute: async (ctx, input) => {
       if (!ctx.concordium) return { ok: false, error: 'concordium verification is off' };
-      const subject = input.badge ?? input.account;
-      if (!subject) return { ok: false, error: 'give a badge or a Concordium account' };
-      const result = await ctx.concordium.verifyBadge(subject);
+      if (input.badge) {
+        const result = await ctx.concordium.verifyBadge(input.badge);
+        return {
+          ok: true,
+          verdict: result.verdict,
+          subject: result.badge,
+          network: result.network,
+          checkedAt: result.checkedAt,
+          owner: result.check.ownerAccount,
+          status: result.check.status,
+          agentUri: result.check.agentUri,
+          checks: result.check.checks,
+          issues: result.check.issues,
+          ...(result.error ? { error: result.error } : {}),
+        };
+      }
+      if (!input.account) return { ok: false, error: 'give a badge or a Concordium account' };
+      // An account answers with every agent it owns, so report the roll-up.
+      const owner = await ctx.concordium.verifyOwner(input.account);
       return {
         ok: true,
-        verdict: result.verdict,
-        badge: result.badge,
-        network: result.network,
-        checkedAt: result.checkedAt,
-        owner: result.check.ownerAccount,
-        status: result.check.status,
-        agentUri: result.check.agentUri,
-        checks: result.check.checks,
-        issues: result.check.issues,
-        ...(result.error ? { error: result.error } : {}),
+        verdict: owner.verdict,
+        subject: owner.account,
+        network: owner.network,
+        checkedAt: owner.checkedAt,
+        agentCount: owner.agents.length,
+        validCount: owner.validCount,
+        invalidCount: owner.invalidCount,
+        agents: owner.agents.map((a) => ({
+          tokenId: a.tokenId,
+          status: a.status,
+          agentUri: a.agentUri,
+          valid: a.badgeValid,
+          issues: a.issues,
+        })),
+        ...(owner.error ? { error: owner.error } : {}),
       };
     },
   });

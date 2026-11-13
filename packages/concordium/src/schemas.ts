@@ -33,3 +33,28 @@ export const BadgeCheckResponseSchema = z
   .loose();
 
 export type BadgeCheckResponse = z.infer<typeof BadgeCheckResponseSchema>;
+
+/**
+ * The same endpoint answers a badge with one verdict, but answers an owner
+ * account with an array of that account's agents. Both shapes are real, so both
+ * are parsed rather than treated as a malformed response.
+ */
+export const OwnerCheckResponseSchema = z
+  .object({
+    network: z.string().default('testnet'),
+    account: z.string(),
+    agent_count: z.number().optional(),
+    summary: z
+      .object({
+        valid: z.number().default(0),
+        invalid: z.number().default(0),
+      })
+      .loose()
+      .optional(),
+    agents: z.array(BadgeCheckResponseSchema).default([]),
+  })
+  .loose();
+
+export type OwnerCheckResponse = z.infer<typeof OwnerCheckResponseSchema>;
+
+export const AnyCheckResponseSchema = z.union([BadgeCheckResponseSchema, OwnerCheckResponseSchema]);

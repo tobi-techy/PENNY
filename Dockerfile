@@ -6,6 +6,8 @@ COPY packages ./packages
 COPY apps/engine ./apps/engine
 COPY apps/web ./apps/web
 COPY souls ./souls
+COPY config ./config
+COPY agents ./agents
 RUN bun install --frozen-lockfile
 RUN cd apps/web && bun run build
 ENV PORT=3000 NODE_ENV=production

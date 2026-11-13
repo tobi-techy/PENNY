@@ -75,6 +75,29 @@ export function isWebPagePath(path: string): boolean {
   return path === '/setup' || path.startsWith('/a/');
 }
 
+/**
+ * CSP for the public agent passport pages (/agents, /.well-known/agent-card.json).
+ * One same-origin stylesheet, no script at all, no framing.
+ */
+export const PASSPORT_CSP =
+  "default-src 'none'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'";
+
+export function isPassportPath(path: string): boolean {
+  return path === '/agents' || path.startsWith('/agents/') || path.startsWith('/.well-known/');
+}
+
+/** Passport pages hold no user data, so they are indexable and need no referrer. */
+export function passportHeaders(): MiddlewareHandler {
+  return async (c, next) => {
+    await next();
+    c.header('Content-Security-Policy', PASSPORT_CSP);
+    c.header('X-Frame-Options', 'DENY');
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('Cross-Origin-Resource-Policy', 'cross-origin');
+    c.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  };
+}
+
 /** Applies the SPA policy to the routes that serve the built web app. */
 export function webPageCsp(): MiddlewareHandler {
   return async (c, next) => {
@@ -102,6 +125,7 @@ export function securityMiddleware(opts: { maxBodyBytes: number }): MiddlewareHa
   // this one and get it from webPageCsp() instead.
   const conditionalHeaders: MiddlewareHandler = async (c, next) => {
     if (isWebPagePath(c.req.path)) return next();
+    if (isPassportPath(c.req.path)) return next();
     return headers(c, next);
   };
   return [

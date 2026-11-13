@@ -216,6 +216,28 @@ const files = (dir: string, ext: string) =>
     .map((f) => join(ROOT, dir, f));
 
 describe('no jargon in the web pages and the iOS UI', () => {
+  test('passport pages: the copy a judge reads on /agents/:slug', async () => {
+    const { passportRoutes } = await import('../src/passport/routes.ts');
+    const rs = passportRoutes({
+      configPath: join(ROOT, 'config/concordium-agents.json'),
+      agentsDir: join(ROOT, 'agents'),
+      log: { warn: () => {} },
+    });
+    const pages = await Promise.all(
+      ['penny', 'guard', 'invest', 'mail'].map((s) => rs.page(s).text()),
+    );
+    // Visible text only: strip tags, then look for jargon in what is left.
+    const visible = pages.flatMap((html) =>
+      html
+        .replace(/<(head|style|script)[\s\S]*?<\/\1>/g, '')
+        .replace(/<[^>]+>/g, '\n')
+        .split('\n')
+        .map((s) => s.trim()),
+    );
+    expect(visible.length).toBeGreaterThan(20);
+    expect(visible.map(clean).filter(Boolean)).toEqual([]);
+  });
+
   test('web: approval and setup pages', () => {
     const bad = files('apps/web/src', '.tsx').flatMap((f) =>
       literals(f).map(clean).filter(Boolean),

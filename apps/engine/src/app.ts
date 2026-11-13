@@ -28,6 +28,7 @@ import {
   accessLog,
   clientIp,
   errorHandler,
+  passportHeaders,
   RateLimiter,
   rateLimit,
   securityMiddleware,
@@ -38,6 +39,7 @@ import { sha256Hex } from './lib/crypto.ts';
 import type { Logger } from './lib/logger.ts';
 import type { InvestPort } from './market/invest.ts';
 import { OnboardingService } from './onboarding.ts';
+import { passportRoutes } from './passport/routes.ts';
 import type { ChainPort } from './ports/chain.ts';
 import type { MessagingPort } from './ports/messaging.ts';
 import { ApprovalsRepo } from './repo/approvals.ts';
@@ -63,6 +65,12 @@ export type EngineDeps = {
   embedder: Embedder;
   market: MarketPort;
   concordium?: ConcordiumClient;
+  /** Path to config/concordium-agents.json. Defaults to the repo copy. */
+  concordiumConfigPath?: string;
+  /** Directory holding agents/<slug>/agent-card.json. Defaults to the repo copy. */
+  agentsDir?: string;
+  /** false disables the public passport routes (tests that do not need them). */
+  passport?: boolean;
   registry: ToolRegistry;
   connectors?: ConnectorPort;
   attestAppId?: string;
@@ -104,6 +112,13 @@ const CONNECTED_HTML = `<!doctype html>
 <title>{{app}} connected · Penny</title>
 <style>body{font-family:-apple-system,system-ui,sans-serif;max-width:28rem;margin:18vh auto;padding:0 1.5rem;color:#111;line-height:1.5}h1{font-size:1.5rem;margin:0 0 .5rem}p{color:#555}</style>
 </head><body><h1>{{app}} connected</h1><p>You can close this and go back to Messages. Penny will text you in a moment.</p></body></html>`;
+
+/**
+ * Repo root, so the passport files resolve identically whether the engine runs
+ * from the repo (`bun --cwd apps/engine dev`), the root, or a container at /app.
+ * apps/engine/src/app.ts -> ../../..
+ */
+const repoRoot = join(import.meta.dir, '..', '..', '..');
 
 export function createEngine(d: EngineDeps) {
   const now = d.now ?? (() => new Date());
@@ -432,6 +447,24 @@ export function createEngine(d: EngineDeps) {
     const label = APP_LABELS[c.req.query('app') ?? ''] ?? 'Your app';
     return c.html(CONNECTED_HTML.replaceAll('{{app}}', label));
   });
+  // Public passports for the registered crew. Read-only, no user data.
+  if (d.passport !== false) {
+    const passport = passportRoutes({
+      configPath: d.concordiumConfigPath ?? join(repoRoot, 'config/concordium-agents.json'),
+      agentsDir: d.agentsDir ?? join(repoRoot, 'agents'),
+      log: d.log,
+    });
+    app.use('/agents', passportHeaders());
+    app.use('/agents/*', passportHeaders());
+    app.use('/.well-known/*', passportHeaders());
+    app.get('/agents', (c) => passport.index(c.req.header('accept') ?? ''));
+    app.get('/agents/passport.css', () => passport.css());
+    app.get('/agents/:slug', (c) => passport.page(c.req.param('slug')));
+    app.get('/agents/:slug/agent-card.json', (c) => passport.cardJson(c.req.param('slug')));
+    app.get('/agents/:slug/card.png', (c) => passport.image(c.req.param('slug')));
+    app.get('/.well-known/agent-card.json', () => passport.wellKnown());
+  }
+
   if (d.proveSecret) {
     app.route(
       '/',

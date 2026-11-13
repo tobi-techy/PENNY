@@ -47,7 +47,7 @@ describe('verify_agent', () => {
       verdict: 'verified',
       owner: OWNER,
       status: 'Active',
-      badge: BADGE,
+      subject: BADGE,
     });
   });
 
@@ -56,6 +56,42 @@ describe('verify_agent', () => {
     if (!tool) throw new Error('verify_agent missing');
     const out = await tool.execute(ctx(clientWith(valid)), { account: OWNER });
     expect(out).toMatchObject({ ok: true, verdict: 'verified' });
+  });
+
+  test('an account is answered with a roll-up across every agent it owns', async () => {
+    const tool = createRegistry().get('verify_agent');
+    if (!tool) throw new Error('verify_agent missing');
+    // The real account shape: four agents, one of them failing.
+    const owner = {
+      network: 'testnet',
+      account: OWNER,
+      agent_count: 4,
+      summary: { valid: 3, invalid: 1 },
+      agents: [0, 1, 2, 3].map((i) => ({
+        ...valid,
+        token_id: 1169 + i,
+        badge_valid: i < 3,
+        issues: i < 3 ? [] : [{ severity: 'error', field: 'card_fetch', message: '404' }],
+      })),
+    };
+    const out = await tool.execute(ctx(clientWith(owner)), { account: OWNER });
+    expect(out).toMatchObject({
+      ok: true,
+      verdict: 'invalid',
+      subject: OWNER,
+      agentCount: 4,
+      validCount: 3,
+      invalidCount: 1,
+    });
+    expect((out as { agents: unknown[] }).agents).toHaveLength(4);
+  });
+
+  test('a badge subject stays a single check, not an owner roll-up', async () => {
+    const tool = createRegistry().get('verify_agent');
+    if (!tool) throw new Error('verify_agent missing');
+    const out = await tool.execute(ctx(clientWith(valid)), { badge: BADGE });
+    expect(out).toMatchObject({ ok: true, verdict: 'verified', subject: BADGE });
+    expect(out).not.toHaveProperty('agentCount');
   });
 
   test('says verification is off when no client is configured', async () => {

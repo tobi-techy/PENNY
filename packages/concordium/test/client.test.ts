@@ -56,6 +56,106 @@ function check(overrides: Partial<BadgeCheck> = {}): BadgeCheck {
   };
 }
 
+describe('ConcordiumClient.verifyOwner', () => {
+  const ownerBody = (validCount: number, total = 2) => ({
+    network: 'testnet',
+    account: OWNER,
+    agent_count: total,
+    summary: { valid: validCount, invalid: total - validCount },
+    expected: { extension_uri: 'https://docs.concordium.com/a2a-extensions/concordium-badge/v1' },
+    agents: Array.from({ length: total }, (_, i) => ({
+      ...valid,
+      token_id: 1169 + i,
+      token_address: `badge${i}`,
+      badge_valid: i < validCount,
+      issues: i < validCount ? [] : [{ severity: 'error', field: 'card_fetch', message: '404' }],
+    })),
+  });
+
+  test('parses the account shape the registry really returns', async () => {
+    const client = new ConcordiumClient({
+      fetch: async () => json(ownerBody(2)),
+      now: () => 0,
+    });
+    const result = await client.verifyOwner(OWNER);
+
+    // Before this, the account shape fell through as invalid_response/unavailable.
+    expect(result.error).toBeUndefined();
+    expect(result.verdict).toBe('verified');
+    expect(result.account).toBe(OWNER);
+    expect(result.agents).toHaveLength(2);
+    expect(result.validCount).toBe(2);
+    expect(result.invalidCount).toBe(0);
+    expect(result.agents[0]?.tokenId).toBe(1169);
+  });
+
+  test('one bad agent makes the whole account invalid, not verified', async () => {
+    const client = new ConcordiumClient({ fetch: async () => json(ownerBody(1, 4)), now: () => 0 });
+    const result = await client.verifyOwner(OWNER);
+
+    expect(result.verdict).toBe('invalid');
+    expect(result.validCount).toBe(1);
+    expect(result.invalidCount).toBe(3);
+  });
+
+  test('an account with no agents is unknown, not verified', async () => {
+    const client = new ConcordiumClient({ fetch: async () => json(ownerBody(0, 0)), now: () => 0 });
+    const result = await client.verifyOwner(OWNER);
+    expect(result.verdict).toBe('unknown');
+    expect(result.agents).toEqual([]);
+  });
+
+  test('revoked anywhere in the account wins over invalid', async () => {
+    const body = ownerBody(1, 2);
+    const second = body.agents[1];
+    if (!second) throw new Error('fixture needs two agents');
+    second.on_chain = {
+      owner_account: OWNER,
+      status: 'Revoked',
+      agent_uri: CARD,
+      metadata_hash_hex: valid.on_chain.metadata_hash_hex,
+    };
+    const client = new ConcordiumClient({ fetch: async () => json(body), now: () => 0 });
+    const result = await client.verifyOwner(OWNER);
+    expect(result.verdict).toBe('revoked');
+  });
+
+  test('a single-badge answer to an account query is honoured, not discarded', async () => {
+    const client = new ConcordiumClient({ fetch: async () => json(valid), now: () => 0 });
+    const result = await client.verifyOwner(OWNER);
+    expect(result.verdict).toBe('verified');
+    expect(result.agents).toHaveLength(1);
+  });
+
+  test('a 404 is unknown, a 500 is unavailable', async () => {
+    const missing = new ConcordiumClient({
+      fetch: async () => json({ error: 'not_found' }, 404),
+      now: () => 0,
+      retryDelayMs: 0,
+    });
+    expect((await missing.verifyOwner(OWNER)).verdict).toBe('unknown');
+
+    const down = new ConcordiumClient({
+      fetch: async () => json({ error: 'boom' }, 503),
+      now: () => 0,
+      retryDelayMs: 0,
+    });
+    const out = await down.verifyOwner(OWNER);
+    expect(out.verdict).toBe('unavailable');
+    expect(out.error).toBeTruthy();
+  });
+
+  test('a malformed owner body is unavailable, never a silent pass', async () => {
+    const client = new ConcordiumClient({
+      fetch: async () => json({ agents: 'not an array' }),
+      now: () => 0,
+    });
+    const out = await client.verifyOwner(OWNER);
+    expect(out.verdict).toBe('unavailable');
+    expect(out.agents).toEqual([]);
+  });
+});
+
 describe('ConcordiumClient', () => {
   test('maps a valid badge check', async () => {
     const client = new ConcordiumClient({ fetch: async () => json(valid), now: () => 0 });
