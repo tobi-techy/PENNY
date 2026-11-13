@@ -19,5 +19,6 @@ node_modules/
 
 # Local tooling state, never committed
 .perch/
+.concordium/
 ios/PennyKit/.swiftpm/
 .swiftpm/

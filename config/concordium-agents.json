@@ -1,0 +1,75 @@
+{
+  "network": "testnet",
+  "chainId": "ccd:4221332d34e1694168c2a0c0b3fd0f27",
+  "ownerAccount": "3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+  "contracts": {
+    "cis8004": "12802.0",
+    "cis8": "12801.0"
+  },
+  "agents": [
+    {
+      "slug": "penny",
+      "name": "Penny",
+      "tokenId": "1169",
+      "badge": "JyP9Wd81dn3JwiAs6agks",
+      "cardUrl": "https://nonunified-melda-inflexionally.ngrok-free.dev/agent-card.json",
+      "cardSha256": "6f10957ecc9ab4dbbe8e0e85e49a76a0f55fd55ec794210fc9f0593c4633cb67",
+      "registerTx": "6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b",
+      "pinTx": "29997c451d723297c4e4d0ebabbdb83f771ef46aa94d5c6c782870625f4935d9",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b",
+        "pin": "https://ccdexplorer.io/testnet/transaction/29997c451d723297c4e4d0ebabbdb83f771ef46aa94d5c6c782870625f4935d9",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9Wd81dn3JwiAs6agks?network=testnet"
+      }
+    },
+    {
+      "slug": "guard",
+      "name": "Guard",
+      "tokenId": "1170",
+      "badge": "JyP9WeDVZoYEmqQfdWWtd",
+      "cardUrl": "https://nonunified-melda-inflexionally.ngrok-free.dev/agents/guard/agent-card.json",
+      "cardSha256": "073146dee5986e4e443e18c6e37571fb6a6479e44bd64ee7ac5e5bc0b707bdb5",
+      "registerTx": "c48114d5e1cc4b378ecd7eb38b4c8de997c8f16ccfa3d9aa69054b0080c6d634",
+      "pinTx": "111f4010276b420e86fce5f86339cc0f22701b6a6bebfc5f07362b120b3f8341",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/c48114d5e1cc4b378ecd7eb38b4c8de997c8f16ccfa3d9aa69054b0080c6d634",
+        "pin": "https://ccdexplorer.io/testnet/transaction/111f4010276b420e86fce5f86339cc0f22701b6a6bebfc5f07362b120b3f8341",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9WeDVZoYEmqQfdWWtd?network=testnet"
+      }
+    },
+    {
+      "slug": "invest",
+      "name": "Invest",
+      "tokenId": "1171",
+      "badge": "JyP9WfJyVq3AbxeVcM9Sp",
+      "cardUrl": "https://nonunified-melda-inflexionally.ngrok-free.dev/agents/invest/agent-card.json",
+      "cardSha256": "e5ee628c0c87ed65b37e25217d456dd6ce05614399f090d9bac6d8f66a7113eb",
+      "registerTx": "4c8578f65e304502c79d08567d4706f008378520205212acccf5da8c1573f6f7",
+      "pinTx": "ac550757aeb48d91e2312cbdfd931ba202066e92716f2c56b52bc4c3456ca003",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/4c8578f65e304502c79d08567d4706f008378520205212acccf5da8c1573f6f7",
+        "pin": "https://ccdexplorer.io/testnet/transaction/ac550757aeb48d91e2312cbdfd931ba202066e92716f2c56b52bc4c3456ca003",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9WfJyVq3AbxeVcM9Sp?network=testnet"
+      }
+    },
+    {
+      "slug": "mail",
+      "name": "Mail",
+      "tokenId": "1172",
+      "badge": "JyP9WgQTRrY6S5tFdiQi3",
+      "cardUrl": "https://nonunified-melda-inflexionally.ngrok-free.dev/agents/mail/agent-card.json",
+      "cardSha256": "c817c8f3f8b4ba1d9c7679c82ae1770aa69581d3051ed2a8312906ddb2767bf9",
+      "registerTx": "b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb",
+      "pinTx": "956931d2a7c2fed71a33ad1f068e6fd5bf4d4c0362e422f72a31eaaaa6fba400",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb",
+        "pin": "https://ccdexplorer.io/testnet/transaction/956931d2a7c2fed71a33ad1f068e6fd5bf4d4c0362e422f72a31eaaaa6fba400",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9WgQTRrY6S5tFdiQi3?network=testnet"
+      }
+    }
+  ]
+}

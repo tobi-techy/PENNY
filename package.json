@@ -12,10 +12,14 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "dev": "bun run --cwd apps/engine dev",
-    "prove": "bun scripts/prove.ts"
+    "prove": "bun scripts/prove.ts",
+    "concordium:register": "NODE_OPTIONS=--dns-result-order=ipv4first node scripts/concordium/register.mjs",
+    "concordium:cards": "node scripts/concordium/build-cards.mjs",
+    "concordium:verify": "node scripts/concordium/verify.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.5",
+    "@concordium/web-sdk": "9.2.0",
     "@noble/curves": "2.4.0",
     "@types/bun": "1.4.4",
     "typescript": "5.9.3"
