@@ -1,6 +1,6 @@
 # Penny on Concordium: accountability layer plan
 
-Status: **plan plus a completed registration spike**. The four badges are live on testnet. Engine integration (`verify_agent`, passport pages) is not built yet. This document does not change `ARCHITECTURE.md` or `SECURITY.md`. If implementation would change either contract, propose that doc change first.
+Status: **plan plus a completed registration spike**. The four badges are live on testnet. The engine has a read-only `verify_agent` tool, off by default (`CONCORDIUM_VERIFY=on` turns it on). Passport pages and approval-card facts are not built yet. This document does not change `ARCHITECTURE.md` or `SECURITY.md`. If implementation would change either contract, propose that doc change first.
 
 Hackathon: Concordium Trusted Agents (Encode Club), build window 19 Nov to 9 Dec 2026.
 Decision: NEAR remains the money rail. Concordium is the identity and accountability rail.
@@ -179,17 +179,18 @@ Implemented:
 - `schemas.ts`: zod response schemas, strict enough to reject a wrong shape and loose enough for new fields.
 - `verdict.ts`: `verified | invalid | revoked | unknown | unavailable`.
 - Tests: 15 tests covering mapping, each verdict, 404, 500 retry, 429 retry, cache expiry, timeout, malformed JSON, and wrong shape.
+- Engine: `verify_agent` in `apps/engine/src/brain/tools.ts`, risk `read`, input `{ badge?, account? }`. Wired through `ToolContext.concordium`, enabled by `CONCORDIUM_VERIFY=on`, and added to Penny and Guard. Returns the verdict plus owner, status, card URL, checks and issues; `unavailable` on a registry error. 5 engine tests.
 
 Planned:
 
 - `card.ts`: deterministic Agent Card builder, skills map, canonical JSON, SHA-256.
-- Engine wiring: `verify_agent` tool, approval-card facts, passport routes.
+- Approval-card facts, passport routes, `concordium_checks`.
 
 Engine surface:
 
-- `verify_agent` tool in `apps/engine/src/brain/registry.ts`. Input `{ badge?, agentUri?, account? }`, one of them required. Risk `read`. No Face ID. Added to Penny and Guard, and to any built-in that can talk to a counterparty. It never moves money.
-- Policy: add `verify_agent: false` to `APPROVAL_POLICY` in `apps/engine/src/cards/policy.ts`.
-- Tool behavior: if the MCP is unavailable, return `unavailable` and say so. Never say "verified" without a check.
+- `verify_agent` tool: input `{ badge?, account? }`, one required. Risk `read`. No Face ID. Done for Penny and Guard. It never moves money.
+- Policy: `verify_agent: false` in `APPROVAL_POLICY` (`apps/engine/src/cards/policy.ts`). Done.
+- Tool behavior: if the MCP is unavailable, return `unavailable` and say so. Never say "verified" without a check. Done.
 - Passport pages: `GET /agents/:slug` and `GET /agents/:slug/card.png`, plus `GET /agents` index and `GET /.well-known/agent-card.json` for Penny. HTML inline like the existing `/a/:token` pages, Penny brand `#111519`, no React. Public, no PII, `noindex` optional because these should be discoverable.
 - Card facts: when a counterparty badge is supplied, add `{ label: "Accountability", value: "verified by concordium · <badge>" }` to `approval.facts`. Do not add the badge to `IntentPlan`; `planHash` and the test vectors stay unchanged.
 - `concordium_checks` table, phase 2: append-only log of subject, badge, network, verdict, checks, owner, card URL, checked at. No migration in phase 1. `approval_events` already records the approval side.
@@ -199,7 +200,7 @@ Environment additions, all optional with safe defaults so the engine still boots
 ```
 CONCORDIUM_VERIFY=off            # on for the testnet demo
 CONCORDIUM_MCP_URL=https://agent-registry-mcp.concordium.com
-CONCORDIUM_AGENTS_CONFIG=config/concordium-agents.json
+CONCORDIUM_NETWORK=testnet
 ```
 
 The owner seed and NEAR private key are ops-script only. They are not read by the engine.

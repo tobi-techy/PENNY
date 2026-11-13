@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { chainAdapterFromEnv, OneClickClient, PriceFeed, toBaseUnits } from '@penny/chain';
+import { ConcordiumClient } from '@penny/concordium';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createEngine, type Engine } from './app.ts';
@@ -146,6 +147,14 @@ if (env.NEAR_RPC_URL) {
   invest = new FakeInvest(undefined, (quoteId, dep) => fake.investDeposits.set(quoteId, dep));
 }
 
+const concordium =
+  env.CONCORDIUM_VERIFY === 'on'
+    ? new ConcordiumClient({
+        baseUrl: env.CONCORDIUM_MCP_URL,
+        network: env.CONCORDIUM_NETWORK,
+      })
+    : undefined;
+
 const engine = createEngine({
   db: dbh.db,
   chain,
@@ -159,6 +168,7 @@ const engine = createEngine({
   ...(privacy ? { privacy } : {}),
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
   market,
+  ...(concordium ? { concordium } : {}),
   ...(invest ? { invest } : {}),
   relayerMaxDepositYocto,
   registry: createRegistry(),
@@ -211,6 +221,7 @@ log.info(
     dryRun: env.DRY_RUN,
     relayLive: env.relayLive,
     composio: Boolean(env.COMPOSIO_API_KEY),
+    concordium: Boolean(concordium),
     teeAttestation: env.NEARAI_ATTESTATION,
     port: env.PORT,
   },

@@ -1,3 +1,4 @@
+import type { ConcordiumClient } from '@penny/concordium';
 import { generateText, type LanguageModel, stepCountIs, type Tool, tool } from 'ai';
 import { z } from 'zod';
 import type { ApprovalService } from '../approvals/service.ts';
@@ -76,6 +77,7 @@ export type CrewDeps = {
   memory: MemoryService;
   mood: MoodService;
   market: MarketPort;
+  concordium?: ConcordiumClient;
   botOps: BotOps;
   everyday?: ToolContext['everyday'];
   tracer: Tracer;
@@ -251,6 +253,7 @@ export class Crew {
       memory: this.d.memory,
       mood: this.d.mood,
       market: this.d.market,
+      ...(this.d.concordium ? { concordium: this.d.concordium } : {}),
       botOps: this.d.botOps,
       ...(this.d.everyday ? { everyday: this.d.everyday } : {}),
     };

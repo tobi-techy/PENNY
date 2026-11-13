@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ConcordiumClient } from '@penny/concordium';
 import type { LanguageModel } from 'ai';
 import { Hono } from 'hono';
 import { ApprovalService, type Clock } from './approvals/service.ts';
@@ -61,6 +62,7 @@ export type EngineDeps = {
   models: { router: LanguageModel; chat: LanguageModel };
   embedder: Embedder;
   market: MarketPort;
+  concordium?: ConcordiumClient;
   registry: ToolRegistry;
   connectors?: ConnectorPort;
   attestAppId?: string;
@@ -247,6 +249,7 @@ export function createEngine(d: EngineDeps) {
     memory,
     mood,
     market: d.market,
+    ...(d.concordium ? { concordium: d.concordium } : {}),
     botOps: {
       draft: (u, p, s) => botService.draft(u, p, s),
       confirm: (u, s) => botService.confirm(u, s),

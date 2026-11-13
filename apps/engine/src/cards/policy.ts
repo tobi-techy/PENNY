@@ -13,6 +13,7 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   get_portfolios: false,
   quote_invest: false,
   check_guard: false,
+  verify_agent: false,
   propose_split: false, // a nudge card only; no money moves
   find_bills: false,
   list_bills: false,

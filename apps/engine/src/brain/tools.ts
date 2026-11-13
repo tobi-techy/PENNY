@@ -49,6 +49,15 @@ async function propose(ctx: ToolContext, plan: MoneyPlan) {
 
 const empty = z.object({}).strict();
 const InvestInput = z.object({ portfolioId: z.enum(INVEST_ASSETS), amountUsd: Decimal }).strict();
+const VerifyAgentInput = z
+  .object({
+    badge: z.string().min(1).optional(),
+    account: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((v) => Boolean(v.badge ?? v.account), {
+    message: 'give a badge or a Concordium account',
+  });
 /** Accepts both `2026-11-14T18:00:00+01:00` and minute precision `2026-11-14T18:00+01:00`. */
 const ReminderAt = z
   .string()
@@ -100,6 +109,32 @@ export function builtinTools(): ToolDef<never>[] {
     execute: async (ctx, plan) => {
       const g = await ctx.approvals.checkGuard(ctx.userId, plan, ctx.bot);
       return { decision: g.decision, reasons: g.reasons };
+    },
+  });
+  add({
+    id: 'verify_agent',
+    description:
+      'Check whether another agent carries a valid Verified by Concordium badge. Pass the badge string or the owner Concordium account. Returns verified, invalid, revoked, unknown, or unavailable with the public evidence. Read-only; never moves money.',
+    risk: 'read',
+    input: VerifyAgentInput,
+    execute: async (ctx, input) => {
+      if (!ctx.concordium) return { ok: false, error: 'concordium verification is off' };
+      const subject = input.badge ?? input.account;
+      if (!subject) return { ok: false, error: 'give a badge or a Concordium account' };
+      const result = await ctx.concordium.verifyBadge(subject);
+      return {
+        ok: true,
+        verdict: result.verdict,
+        badge: result.badge,
+        network: result.network,
+        checkedAt: result.checkedAt,
+        owner: result.check.ownerAccount,
+        status: result.check.status,
+        agentUri: result.check.agentUri,
+        checks: result.check.checks,
+        issues: result.check.issues,
+        ...(result.error ? { error: result.error } : {}),
+      };
     },
   });
   add({

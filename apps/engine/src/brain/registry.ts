@@ -1,3 +1,4 @@
+import type { ConcordiumClient } from '@penny/concordium';
 import type { ToolRisk } from '@penny/shared';
 import { type Tool, tool } from 'ai';
 import type { z } from 'zod';
@@ -41,6 +42,8 @@ export type ToolContext = {
   memory: MemoryService;
   mood: MoodService;
   market: MarketPort;
+  /** Read-only Concordium badge checks. Absent when CONCORDIUM_VERIFY is off. */
+  concordium?: ConcordiumClient;
   botOps: BotOps;
   /** Info-card jobs (reminders, drafts). Absent in some tests. */
   everyday?: {

@@ -20,6 +20,7 @@
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@penny/chain": "workspace:*",
+    "@penny/concordium": "workspace:*",
     "@penny/shared": "workspace:*",
     "@phala/dcap-qvl": "0.7.1",
     "@resvg/resvg-js": "2.6.2",
