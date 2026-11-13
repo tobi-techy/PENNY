@@ -171,12 +171,19 @@ Use `near:testnet` while the engine runs NEAR testnet. Production changes to `ne
 
 ## 6. Engine integration
 
-New package: `packages/concordium`.
+Package: `packages/concordium`.
+
+Implemented:
+
+- `client.ts`: typed REST client for `check-badge`, `verify-agent-card`, `get-badge-JSON`. 5 second timeout, one retry on 429 with `Retry-After`, 60 second in-memory cache, injected fetch and clock for tests.
+- `schemas.ts`: zod response schemas, strict enough to reject a wrong shape and loose enough for new fields.
+- `verdict.ts`: `verified | invalid | revoked | unknown | unavailable`.
+- Tests: 15 tests covering mapping, each verdict, 404, 500 retry, 429 retry, cache expiry, timeout, malformed JSON, and wrong shape.
+
+Planned:
 
 - `card.ts`: deterministic Agent Card builder, skills map, canonical JSON, SHA-256.
-- `client.ts`: MCP REST client for `check-badge`, `verify-agent-card`, `get-badge-JSON`. 5 second timeout, one retry on 429 with `Retry-After`, zod-validated responses, 60 second in-memory cache.
-- `verify.ts`: turns the raw checks into a verdict: `verified | invalid | revoked | unknown | unavailable`.
-- Tests: card determinism, hash stability, extension shape, verdict mapping, timeout, 429, malformed JSON, cache expiry.
+- Engine wiring: `verify_agent` tool, approval-card facts, passport routes.
 
 Engine surface:
 
