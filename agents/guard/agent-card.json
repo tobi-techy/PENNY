@@ -1,7 +1,7 @@
 {
   "name": "Guard",
   "description": "Guard is Penny's spending-policy agent. It checks every money plan against caps, allowlists, velocity, and new-recipient rules before a card is shown, and explains blocks in plain language.",
-  "url": "https://nonunified-melda-inflexionally.ngrok-free.dev/agents/guard/agent-card.json",
+  "url": "https://penny-passport.vercel.app/agents/guard/agent-card.json",
   "version": "1.0.0",
   "defaultInputModes": [
     "text/markdown",

@@ -1,7 +1,7 @@
 {
   "name": "Penny",
   "description": "Penny is the lead agent of a non-custodial money crew in iMessage. It routes plain-text asks to specialist agents, builds typed plans, and requires Face ID before any money moves.",
-  "url": "https://nonunified-melda-inflexionally.ngrok-free.dev/agent-card.json",
+  "url": "https://penny-passport.vercel.app/agents/penny/agent-card.json",
   "version": "1.0.0",
   "defaultInputModes": [
     "text/markdown",
@@ -18,7 +18,7 @@
     {
       "id": "send-money",
       "name": "Send money",
-      "description": "Send USDC or NEAR to a contact after Face ID approval.",
+      "description": "Prepare a USDC or NEAR send for Face ID approval.",
       "tags": [
         "payments",
         "near"
@@ -33,11 +33,27 @@
       ]
     },
     {
-      "id": "split-bill",
+      "id": "split-a-bill",
       "name": "Split a bill",
-      "description": "Split a total across people without moving money until approved.",
+      "description": "Prepare a split for approval without moving money first.",
       "tags": [
         "bills"
+      ]
+    },
+    {
+      "id": "review-bills",
+      "name": "Review bills",
+      "description": "Find, list, and close bills.",
+      "tags": [
+        "bills"
+      ]
+    },
+    {
+      "id": "reminders",
+      "name": "Manage reminders",
+      "description": "Set, list, and cancel reminders.",
+      "tags": [
+        "reminders"
       ]
     },
     {

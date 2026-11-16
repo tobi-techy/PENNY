@@ -1,7 +1,7 @@
 {
   "name": "Invest",
   "description": "Invest is Penny's portfolio agent. It reads balances and portfolios, quotes swaps, and prepares investments for Guard checks and Face ID approval.",
-  "url": "https://nonunified-melda-inflexionally.ngrok-free.dev/agents/invest/agent-card.json",
+  "url": "https://penny-passport.vercel.app/agents/invest/agent-card.json",
   "version": "1.0.0",
   "defaultInputModes": [
     "text/markdown",

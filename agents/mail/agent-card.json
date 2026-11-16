@@ -1,7 +1,7 @@
 {
   "name": "Mail",
   "description": "Mail is Penny's inbox and bills agent. It finds bills in mail, drafts replies, prepares payments, and sets reminders. Sending and paying still need the user's approval.",
-  "url": "https://nonunified-melda-inflexionally.ngrok-free.dev/agents/mail/agent-card.json",
+  "url": "https://penny-passport.vercel.app/agents/mail/agent-card.json",
   "version": "1.0.0",
   "defaultInputModes": [
     "text/markdown",
