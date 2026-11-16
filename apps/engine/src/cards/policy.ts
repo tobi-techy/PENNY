@@ -10,6 +10,8 @@ import type { ToolRisk } from '@penny/shared';
 export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   // read: look things up, nothing leaves Penny
   get_balances: false,
+  get_spend_summary: false,
+  add_money: false, // a deposit address that only receives; nothing leaves Penny
   get_portfolios: false,
   quote_invest: false,
   check_guard: false,

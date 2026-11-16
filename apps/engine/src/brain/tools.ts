@@ -146,6 +146,43 @@ export function builtinTools(): ToolDef<never>[] {
     },
   });
   add({
+    id: 'get_spend_summary',
+    description:
+      'What the user actually spent in the last N days (default 7) from settled moves only, plus the recipient that took the most. Read-only; use it to answer "what did I spend this week?" and "where is my money going?".',
+    risk: 'read',
+    input: z.object({ days: z.number().int().min(1).max(90).optional() }).strict(),
+    execute: async (ctx, i) => {
+      if (!ctx.finance) return { ok: false, error: 'spending is not set up' };
+      return { ok: true, ...(await ctx.finance.summary(ctx.userId, i.days ?? 7)) };
+    },
+  });
+  add({
+    id: 'add_money',
+    description:
+      'Give the user an address to move dollars into their Penny account from another chain, then Penny watches it land. Chains: base, ethereum, arbitrum, solana. Use it when they ask to add money, top up, fund or deposit. Sends a card and texts the address. Nothing leaves Penny; no approval is needed.',
+    risk: 'read', // an address that only receives; the user moves their own money
+    input: z
+      .object({ amountUsd: Decimal, chain: z.enum(['base', 'ethereum', 'arbitrum', 'solana']) })
+      .strict(),
+    execute: async (ctx, i) => {
+      if (!ctx.funding) return { ok: false, error: 'adding money is not set up' };
+      const r = await ctx.funding.start({
+        userId: ctx.userId,
+        space: ctx.space,
+        amountUsd: i.amountUsd,
+        chain: i.chain,
+      });
+      if (typeof r !== 'object' || !r || !('ok' in r) || r.ok !== true) return r;
+      // Never give the address back to the model: it is already in the card and
+      // the text, and a restated address would be a way to lose someone's money.
+      return {
+        ok: true,
+        sent: true,
+        note: 'the address is in the card and the text just sent. do not repeat it; say you sent it.',
+      };
+    },
+  });
+  add({
     id: 'list_bills',
     description:
       'List open bills Penny already knows about (no inbox read). Soonest due first. Use find_bills to check the inbox for new ones, and manage_commitments for the recurring obligations behind them.',

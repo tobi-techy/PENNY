@@ -47,6 +47,18 @@ export type ToolContext = {
     close(userId: string, id: string, status: 'done' | 'dropped'): Promise<boolean>;
   };
   market: MarketPort;
+  /** Finance's read-only spend summary ("what did I spend this week?"). */
+  finance?: import('../finance/summary.ts').FinancePort;
+  /** Adding dollars from another chain (NEAR Intents deposit address). */
+  funding?: {
+    chains(): Promise<string[]>;
+    start(input: {
+      userId: string;
+      space: SpaceRef;
+      amountUsd: string;
+      chain: import('../market/funding.ts').FundChain;
+    }): Promise<unknown>;
+  };
   botOps: BotOps;
   /** Info-card jobs (reminders, drafts). Absent in some tests. */
   everyday?: {

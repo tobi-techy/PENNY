@@ -2178,7 +2178,7 @@ export class ApprovalService {
 
   /** Before relaying an invest: quote still live and price within slippage, else re-card. */
   private async investPreflight(row: ApprovalRow, quoteId: string): Promise<void> {
-    const q = this.d.invest?.get(quoteId);
+    const q = await this.d.invest?.get(quoteId);
     // same bar as Guard: under 15 s left is too close to send; re-card instead
     if (!q || q.expiresAt.getTime() - this.d.now().getTime() < QUOTE_MIN_REMAINING_MS) {
       throw this.requotedError(await this.requote(row, 'expired'), 'expired');

@@ -19,7 +19,8 @@
     { "type": "done", "color": "#4FD57F", "tag": "✓ DONE", "settled": "Done" },
     { "type": "unfreeze", "color": "#F6A8F0", "tag": "◆ UNFREEZE", "settled": "Unfrozen" },
     { "type": "connect", "color": "#6EA1D6", "tag": "⇢ CONNECT", "settled": "Connected" },
-    { "type": "setup", "color": "#6EA1D6", "tag": "◈ SET UP", "settled": "Set up" }
+    { "type": "setup", "color": "#6EA1D6", "tag": "◈ SET UP", "settled": "Set up" },
+    { "type": "fund", "color": "#6EA1D6", "tag": "⇢ ADD MONEY", "settled": "Added" }
   ],
   "pills": {
     "ready": "Approve with Face ID",

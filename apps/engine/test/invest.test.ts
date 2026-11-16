@@ -75,7 +75,7 @@ describe('invest approval card', () => {
     const row = await t.engine.repos.approvals.get(r.approvalId);
     if (!row) throw new Error('no row');
     const plan = row.plan as { quoteId: string };
-    const q = t.invest.get(plan.quoteId);
+    const q = await t.invest.get(plan.quoteId);
     expect(q?.dry).toBe(false);
     const actions = row.actions as { methodName: string; args: unknown }[];
     expect(actions.map((a) => a.methodName)).toEqual(['storage_deposit', 'ft_transfer']);

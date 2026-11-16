@@ -99,6 +99,10 @@ export type CrewDeps = {
   /** Open loops and proactive calibration; absent in small unit tests. */
   followup?: FollowUpOps;
   market: MarketPort;
+  /** Finance's read-only spend summary; absent in small unit tests. */
+  finance?: import('../finance/summary.ts').FinancePort;
+  /** Adding dollars from another chain; absent in small unit tests. */
+  funding?: ToolContext['funding'];
   botOps: BotOps;
   everyday?: ToolContext['everyday'];
   tracer: Tracer;
@@ -344,6 +348,8 @@ export class Crew {
       memory: this.d.memory,
       mood: this.d.mood,
       market: this.d.market,
+      ...(this.d.finance ? { finance: this.d.finance } : {}),
+      ...(this.d.funding ? { funding: this.d.funding } : {}),
       botOps: this.d.botOps,
       ...(this.d.followup ? { followup: this.d.followup } : {}),
       ...(this.d.everyday ? { everyday: this.d.everyday } : {}),

@@ -120,6 +120,7 @@ Mood changes words, tapbacks and card art only. It never changes a limit, a rout
 | Errand | pink `#FA78B2` | yes |
 | Guard block | red `#FC5855` | "Not me" / "Allow once" |
 | Weekly check-in | mint `#8FE4CC` | no (read-only) |
+| Add money | blue `#6EA1D6` | no (an address that only receives) |
 | Write (post, email or message as you) | indigo `#8B8CF0` | yes |
 | New bot | amber `#E8C766` | yes if it has write or money tools |
 | Bills found | orange `#FEA247` | no (read-only) |

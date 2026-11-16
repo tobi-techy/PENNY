@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, lte } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { cards, passkeys, reminders } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
@@ -33,6 +33,20 @@ export class CardsRepo {
   async byApprovalId(approvalId: string): Promise<CardRow | null> {
     const [r] = await this.db.select().from(cards).where(eq(cards.approvalId, approvalId)).limit(1);
     return r ?? null;
+  }
+
+  /**
+   * When a card of this type was last sent to the user. The weekly check-in uses
+   * it as its watermark, so a restart or a re-run never texts the same week twice.
+   */
+  async lastOfType(userId: string, type: string): Promise<Date | null> {
+    const [r] = await this.db
+      .select({ createdAt: cards.createdAt })
+      .from(cards)
+      .where(and(eq(cards.userId, userId), eq(cards.type, type)))
+      .orderBy(desc(cards.createdAt))
+      .limit(1);
+    return r?.createdAt ?? null;
   }
 
   /** info -> approval, exactly once (a second Send press gets false). */

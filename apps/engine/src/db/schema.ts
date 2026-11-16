@@ -387,6 +387,75 @@ export const ledgerEntries = pgTable(
   (t) => [index('ledger_user_idx').on(t.userId, t.createdAt)],
 );
 
+/**
+ * Invest quotes, persisted. Before this, a quote lived in process memory only, so
+ * a restart between "card sent" and "approved" turned the tap into "price expired".
+ * The chain adapter rebuilds its cached ValidatedQuote from these rows on a miss
+ * (ChainAdapterOptions.loadInvestQuote). Only firm quotes are stored: a preview
+ * cannot be signed from.
+ */
+export const investQuotes = pgTable(
+  'invest_quotes',
+  {
+    quoteId: text('quote_id').primaryKey(),
+    asset: text('asset').notNull(),
+    amountUsd: text('amount_usd').notNull(),
+    userAccountId: text('user_account_id').notNull(),
+    /** Base units, decimal strings: bigint never goes through a float column. */
+    amountIn: text('amount_in').notNull(),
+    amountOut: text('amount_out').notNull(),
+    minAmountOut: text('min_amount_out').notNull(),
+    decimalsOut: integer('decimals_out').notNull(),
+    slippageBps: integer('slippage_bps').notNull(),
+    feeBps: integer('fee_bps').notNull(),
+    feeUsd: text('fee_usd').notNull(),
+    keyless: boolean('keyless').notNull().default(true),
+    depositAddress: text('deposit_address'),
+    depositMemo: text('deposit_memo'),
+    expiresAt: ts('expires_at').notNull(),
+    /** The full 1Click quote response, so the adapter can rebuild a ValidatedQuote. */
+    response: jsonb('response').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('invest_quotes_expiry_idx').on(t.expiresAt)],
+);
+
+/**
+ * A top-up the user started from another chain. The deposit address only
+ * receives; it lives outside Penny's control, and the poller follows the swap
+ * until the dollars land on the user's own NEAR account (or come back as a refund).
+ */
+export const fundingQuotes = pgTable(
+  'funding_quotes',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    cardId: text('card_id'),
+    chain: text('chain').notNull(),
+    amountUsd: text('amount_usd').notNull(),
+    amountIn: text('amount_in').notNull(),
+    depositAddress: text('deposit_address').notNull(),
+    depositMemo: text('deposit_memo'),
+    state: text('state', {
+      enum: ['open', 'processing', 'success', 'refunded', 'failed', 'expired'],
+    })
+      .notNull()
+      .default('open'),
+    amountOutDisplay: text('amount_out_display'),
+    expiresAt: ts('expires_at').notNull(),
+    lastCheckedAt: ts('last_checked_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('funding_quotes_user_idx').on(t.userId, t.createdAt),
+    index('funding_quotes_open_idx').on(t.state, t.expiresAt),
+    uniqueIndex('funding_quotes_address_uq').on(t.depositAddress),
+  ],
+);
+
 export const memories = pgTable(
   'memories',
   {
@@ -735,6 +804,8 @@ export const schema = {
   guardPolicies,
   guardDecisions,
   ledgerEntries,
+  investQuotes,
+  fundingQuotes,
   memories,
   moods,
   followups,

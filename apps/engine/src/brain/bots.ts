@@ -20,6 +20,8 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
     name: 'Penny',
     toolIds: [
       'get_balances',
+      'get_spend_summary',
+      'add_money',
       'check_guard',
       'propose_send',
       'propose_split',
@@ -84,6 +86,8 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
     name: 'Finance',
     toolIds: [
       'get_balances',
+      'get_spend_summary',
+      'add_money',
       'propose_split',
       'propose_send',
       'propose_pay_bill',

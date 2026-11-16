@@ -49,6 +49,17 @@ export type SwapStatusView = {
   refundReason?: string;
 };
 
+/**
+ * Where a firm quote lives so it survives a restart. Before this the quote was in
+ * process memory only, so an engine redeploy between "card sent" and "approved"
+ * turned the tap into "this expired". Previews are never stored: nothing can be
+ * signed from one.
+ */
+export type InvestQuoteStore = {
+  save(q: InvestQuote, v: import('@penny/chain').ValidatedQuote): Promise<void>;
+  get(quoteId: string): Promise<InvestQuote | null>;
+};
+
 export interface InvestPort {
   /** Dry quote for the preview. No deposit address; nothing can be signed from it. */
   preview(asset: InvestAsset, amountUsd: string, userAccountId: string): Promise<InvestQuote>;
@@ -57,7 +68,7 @@ export interface InvestPort {
    * build the deposit for plan.quoteId. A non-dry quote moves no money.
    */
   firm(asset: InvestAsset, amountUsd: string, userAccountId: string): Promise<InvestQuote>;
-  get(quoteId: string): InvestQuote | undefined;
+  get(quoteId: string): Promise<InvestQuote | undefined>;
   /**
    * Re-price an approved quote right before relay. price_moved when the fresh estimate
    * is below the approved quote's guaranteed minimum (i.e. beyond slippage).
@@ -170,7 +181,7 @@ export class FakeInvest implements InvestPort {
     return q;
   }
   get(id: string) {
-    return this.book.get(id);
+    return Promise.resolve(this.book.get(id));
   }
   async recheck(q: InvestQuote) {
     const fresh = this.quote(q.asset, q.amountUsd, q.userAccountId, true);
