@@ -169,6 +169,9 @@ public struct ApprovalIntent: Equatable, Sendable {
         case "write":
             guard let toolkit = s("toolkit"), let slug = s("toolSlug") else { return nil }
             return ApprovalIntent(type: "write", to: "\(toolkit):\(slug)", amount: "0", asset: "none")
+        case "grant_bot":
+            guard let slug = s("slug"), let toolId = s("toolId") else { return nil }
+            return ApprovalIntent(type: "grant_bot", to: "\(slug):\(toolId)", amount: "0", asset: "none")
         default:
             return nil
         }
@@ -235,6 +238,7 @@ public struct ApprovalTicket: Equatable, Sendable {
         case "errand": return "Approve paying for this errand"
         case "write": return "Approve: \(detail.title)"
         case "create_bot": return "Approve your new bot"
+        case "grant_bot": return "Approve \(detail.title)"
         default: return "Approve with Face ID"
         }
     }

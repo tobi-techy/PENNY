@@ -76,6 +76,10 @@ src/inbound.ts             verified webhook event -> onboarding or crew reply
 - any write or money tool → `pending_approval` + Face ID card (device signs `penny-approval:v1:<approvalId>:<planHash>` with its enrolled ed25519 key) → active
 - money tools need a user-granted cap ≤ the user's own limits; the registry also drops money tools from any custom bot without both caps at run time, and Guard enforces the bot's caps on every payment.
 
+A bot's tool list **is** its grant list, and the same list decides which apps the connector loads (`src/connectors/toolkits.ts`). A custom bot with `read_github` gets GitHub and nothing else; one with no app tools gets no connector tools. `read_github`, `read_x`, `post_x` and `github_comment` are grants, not calls (`ToolDef.capability`): granting one loads that app's real tools, writes still go through `propose_write` one Face ID card at a time.
+
+Every custom bot is made with `request_access`, so it can ask mid-task for the one tool it still needs. The ask is read-only; the answer is a `grant_bot` Face ID card, and on signature `BotService.onGrantApproved` appends the tool (`bots.add_tool`, guarded so a tool is never appended twice) and writes the change to `souls_changelog`. Money tools cannot be requested this way: caps belong to bot creation, so a widened spend right can never ride on a "let me use this tool" card. An expired grant card is not renewed; the bot asks again and the user gets a fresh yes.
+
 ## Verified external details (5 Nov 2026)
 
 - Photon (Stable): HMAC `v0=hex(HMAC_SHA256(secret, "v0:{ts}:{rawBody}"))`, 5-min tolerance, 400 on missing/stale, 401 on bad sig, dedupe on `X-Spectrum-Webhook-Id` + `message.id`. https://photon.codes/docs/webhooks/verifying-signatures.md · https://photon.codes/docs/webhooks/delivery.md · https://photon.codes/docs/webhooks/events.md

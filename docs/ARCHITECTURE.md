@@ -82,7 +82,7 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - `challenge`: 32 random bytes (base64url), single use, burned on the first approve attempt whatever its outcome.
 - Web passkey challenge (link page): base64url(sha256(`penny-approval:v2:<approvalHash>:<challenge>`)), so the passkey answer is tied to this exact action. The page recomputes the hashes before it asks.
 - A replaced approval (`reissued_from`) has at most one replacement (unique index).
-- Lifetime: 90 s for anything priced by a quote (invest), 10 min for plain sends, bills, errands, writes and new bots. The NEAR max block height is set to cover the lifetime.
+- Lifetime: 90 s for anything priced by a quote (invest), 10 min for plain sends, bills, errands, writes, new bots and tool grants. The NEAR max block height is set to cover the lifetime. A tool grant is never renewed on expiry: the bot asks again.
 - States reuse the approval state machine: card Ready = `pending`, Approving = `signed`/`relayed`, Sent = `settled`, Blocked = Guard `cancelled` (or no approval at all when Guard said no first), Expired = `expired`.
 
 ### Card (packages/shared `Card`)
@@ -111,7 +111,8 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 
 ## Crew brain
 - Model provider: NEAR AI Cloud OpenAI-compatible endpoint (base URL + key from env). Vercel AI SDK `generateText` with tools. Langfuse tracing (keys from env).
-- Tools are deterministic TS functions: `getBalances`, `getSpendSummary`, `getPortfolios` (Glider), `quoteInvest` (1Click dry quote), `addMoney` (1Click deposit address), `checkGuard`, `createApprovalCard`, `findBills` (Gmail read-only, later), `remember`, `setMood`.
+- Tools are deterministic TS functions: `getBalances`, `getSpendSummary`, `getPortfolios` (Glider), `quoteInvest` (1Click dry quote), `addMoney` (1Click deposit address), `checkGuard`, `createApprovalCard`, `findBills` (Gmail read-only, later), `requestAccess` (a bot asks for one more tool), `remember`, `setMood`.
+- App tools (`read_github`, `read_x`, `post_x`, `github_comment`) are grants, not calls: the bot row's tool list decides which Composio toolkits load, so a custom bot gets exactly the apps its grants name and nothing else.
 - Souls: `souls/<agent>.md` loaded into system prompts. Mood state per user (`idle|thinking|win|wink|blocked|paused|done`) stored in DB, set by events, drives tone + card art param.
 - Memory: `memories` table (userId, kind, text, embedding vector(1536), createdAt). After each turn a background learner extracts durable facts from what the user said (deduped; secrets and third-party instructions refused). Weekly reflection job writes `soul_changelog`.
 - Reply shape: the model is told to text in one or two sentences; `lib/reply.ts` also strips assistant filler and splits long answers at sentence boundaries into short bubbles (four at most). Links and code stay whole, and every word is kept.

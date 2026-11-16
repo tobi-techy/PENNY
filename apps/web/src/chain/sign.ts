@@ -22,7 +22,7 @@ export interface Signer {
 export type SubmitBody = { signedDelegateAction: string } | { planSignature: string };
 
 /** Kinds the engine settles from a plain device signature over the plan message. */
-const PLAN_SIGNED = new Set(['create_bot', 'write']);
+const PLAN_SIGNED = new Set(['create_bot', 'write', 'grant_bot']);
 
 /** What the passkey challenge binds to, computed before the prompt. */
 export async function approvalDigest(a: ApprovalForSigning, pub: Uint8Array): Promise<Uint8Array> {

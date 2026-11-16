@@ -10,9 +10,10 @@ public enum ApprovalKind: String, Sendable, CaseIterable {
     case errand
     case createBot = "create_bot"
     case write
+    case grantBot = "grant_bot"
 
     /// These approvals carry no NEAR actions; the device signs the plan message instead.
-    public var isPlanSigned: Bool { self == .createBot || self == .write }
+    public var isPlanSigned: Bool { self == .createBot || self == .write || self == .grantBot }
 }
 
 public enum ApprovalStatus: String, Sendable {
@@ -128,6 +129,7 @@ public struct Approval: Equatable, Sendable {
         case .errand: verb = "Hire for"
         case .createBot: verb = "Approve"
         case .write: verb = "Approve"
+        case .grantBot: verb = "Approve"
         }
         return "\(verb) \(amountDisplay) · \(title)"
     }

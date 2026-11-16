@@ -27,6 +27,14 @@ export interface MarketPort {
 export interface BotOps {
   draft(userId: string, plan: unknown, space: SpaceRef): Promise<unknown>;
   confirm(userId: string, slug: string): Promise<unknown>;
+  /** A running bot asks its user for one more tool (Face ID card, then a grant). */
+  requestTool(
+    userId: string,
+    bot: BotRow,
+    toolId: string,
+    why: string,
+    space: SpaceRef,
+  ): Promise<unknown>;
 }
 
 export type ToolContext = {
@@ -74,6 +82,12 @@ export type ToolDef<I = unknown> = {
   risk: ToolRisk;
   /** core-crew plumbing (draft_bot, confirm_bot); never grantable to custom bots */
   builtInOnly?: boolean;
+  /**
+   * A grant, not something to call. Granting it loads that app's real tools into
+   * the bot's turn (see connectors/toolkits.ts), so it is never offered to the
+   * model as a callable tool.
+   */
+  capability?: boolean;
   input: z.ZodType<I>;
   execute: (ctx: ToolContext, input: I) => Promise<unknown>;
 };
@@ -127,6 +141,9 @@ export class ToolRegistry {
   toAiTools(ctx: ToolContext): Record<string, Tool> {
     const set: Record<string, Tool> = {};
     for (const t of this.allowedFor(ctx.bot)) {
+      // A capability is a grant of an app's tools, not a tool to call: the real
+      // tools come from the connector for exactly this bot's grants.
+      if (t.capability) continue;
       set[t.id] = tool({
         description: t.description,
         inputSchema: t.input,

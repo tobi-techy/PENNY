@@ -158,7 +158,7 @@ export const approvals = pgTable(
       .references(() => users.id),
     botId: text('bot_id'),
     kind: text('kind', {
-      enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write'],
+      enum: ['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write', 'grant_bot'],
     }).notNull(),
     plan: jsonb('plan').notNull(),
     /** The bill a pay_bill card pays. A live-card partial unique index claims it. */

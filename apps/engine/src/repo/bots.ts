@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, not, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { bots, conversations, messages, moods, soulsChangelog } from '../db/schema.ts';
 import { newId } from '../lib/ids.ts';
@@ -70,6 +70,20 @@ export class BotsRepo {
   }
 
   /** CAS status change. Returns null if the bot was not in `from`. */
+  /**
+   * Append one granted tool to a bot, once. The guard is in SQL so two grants that
+   * land together cannot both append (which would have duplicated the id, and the
+   * registry de-dupes but the bot's own record should not lie).
+   */
+  async addTool(id: string, toolId: string): Promise<BotRow | null> {
+    const [r] = await this.db
+      .update(bots)
+      .set({ toolIds: sql`array_append(${bots.toolIds}, ${toolId})` })
+      .where(and(eq(bots.id, id), not(sql`${toolId} = any(${bots.toolIds})`)))
+      .returning();
+    return r ?? this.byId(id);
+  }
+
   async setStatus(id: string, from: BotStatus, to: BotStatus): Promise<BotRow | null> {
     const [r] = await this.db
       .update(bots)

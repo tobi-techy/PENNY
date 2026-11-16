@@ -369,6 +369,15 @@ public struct ActionSummary: Identifiable, Hashable, Sendable {
     public let lines: [String]
 
     public static func describe(_ approval: Approval) -> [ActionSummary] {
+        // A tool grant seals the plan, not a chain action: show the bot, the tool and why.
+        if approval.kind == .grantBot {
+            var lines = ["Bot: \(approval.plan["slug"]?.stringValue ?? "your bot")"]
+            lines.append("Tool: \(approval.plan["toolId"]?.stringValue ?? "?")")
+            if let why = approval.plan["why"]?.stringValue, !why.isEmpty {
+                lines.append("Why: \(PlainText.safe(why))")
+            }
+            return [ActionSummary(id: 0, title: approval.title, lines: lines)]
+        }
         // A write (or new bot) carries no NEAR actions: the signature seals the plan, so show
         // every argument in full, never just what fits on the card.
         if approval.kind.isPlanSigned {

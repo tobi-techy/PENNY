@@ -27,6 +27,7 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   set_mood: false,
   read_github: false,
   read_x: false,
+  request_access: false, // the ask itself; the grant it produces is a Face ID card
   draft_bot: false, // shows a draft; turning on a bot with write tools is create_bot below
   confirm_bot: false, // read-only bots only (BotService refuses others)
   // small changes inside Penny: info cards, Undo / Edit, no Face ID

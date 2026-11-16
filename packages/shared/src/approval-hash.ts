@@ -29,6 +29,9 @@ export function approvalActionOf(plan: IntentPlan): ApprovalAction {
       };
     case 'write':
       return { type: 'write', to: `${plan.toolkit}:${plan.toolSlug}`, amount: '0', asset: 'none' };
+    case 'grant_bot':
+      // No money and no chain action: the card is about one tool on one bot.
+      return { type: 'grant_bot', to: `${plan.slug}:${plan.toolId}`, amount: '0', asset: 'none' };
   }
 }
 

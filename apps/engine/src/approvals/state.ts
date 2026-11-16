@@ -17,10 +17,11 @@ const TRANSITIONS: Record<ApprovalStatus, readonly ApprovalStatus[]> = {
 };
 
 /**
- * create_bot approvals have no chain step: signed (device signature verified)
- * goes straight to settled. Money approvals can never skip the relay.
+ * create_bot, write and grant_bot approvals have no chain step: signed (device
+ * signature verified) goes straight to settled. Money approvals can never skip
+ * the relay.
  */
-const NO_CHAIN_KINDS: readonly ApprovalKind[] = ['create_bot', 'write'];
+const NO_CHAIN_KINDS: readonly ApprovalKind[] = ['create_bot', 'write', 'grant_bot'];
 
 export function canTransition(
   from: ApprovalStatus,
@@ -63,9 +64,11 @@ export function stepsFor(status: ApprovalStatus, kind: ApprovalKind = 'send'): S
       ? ['Approved with Face ID', 'Done in the app', 'Finished']
       : kind === 'create_bot'
         ? ['Approved with Face ID', 'Bot switched on', 'Finished']
-        : kind === 'invest'
-          ? ['Approved with Face ID', 'Sent', 'Done']
-          : ['Approved with Face ID', 'Sent to NEAR', 'Settled'];
+        : kind === 'grant_bot'
+          ? ['Approved with Face ID', 'Bot can use it', 'Finished']
+          : kind === 'invest'
+            ? ['Approved with Face ID', 'Sent', 'Done']
+            : ['Approved with Face ID', 'Sent to NEAR', 'Settled'];
   const doneCount: Record<ApprovalStatus, number> = {
     pending: 0,
     signed: 1,

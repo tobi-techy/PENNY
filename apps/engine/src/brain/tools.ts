@@ -9,6 +9,7 @@ import {
   PayBillPlan,
   SendPlan,
   SplitPlan,
+  ToolId,
   WritePlan,
 } from '@penny/shared';
 import { z } from 'zod';
@@ -488,6 +489,15 @@ export function builtinTools(): ToolDef<never>[] {
     execute: async (ctx, plan) => ctx.botOps.draft(ctx.userId, plan, ctx.space),
   });
   add({
+    id: 'request_access',
+    description:
+      'Ask the user to let this bot use one more tool it needs to finish the task. Name the tool id and why, in plain words. The user gets a Face ID card; the tool works from their next message. Only for a bot they made; money tools can never be added this way.',
+    risk: 'read',
+    input: z.object({ tool: ToolId, why: z.string().min(3).max(200) }).strict(),
+    execute: async (ctx, i) =>
+      ctx.botOps.requestTool(ctx.userId, ctx.bot, i.tool, i.why, ctx.space),
+  });
+  add({
     id: 'confirm_bot',
     description: 'Turn on a read-only bot the user just said yes to.',
     risk: 'read',
@@ -496,41 +506,45 @@ export function builtinTools(): ToolDef<never>[] {
     execute: async (ctx, i) => ctx.botOps.confirm(ctx.userId, i.slug),
   });
 
-  // ---- connector tools for custom bots (stubs until connectors exist) ----
-  const notConnected = async () => ({ ok: false, error: 'connector not set up yet' });
+  // ---- app capabilities for custom bots ----
+  // Each one is a grant, not a call: granting it loads that app's real tools into the
+  // bot's turn. Reads read; a write grant still proposes one Face ID card per action.
+  const grantOnly = async () =>
+    ({ ok: false, error: 'this is a grant of an app, not a tool to call' }) as const;
   add({
     id: 'read_github',
-    description: 'Read repos, issues and PRs on GitHub.',
+    description:
+      "Grant this bot the user's GitHub: read repos, issues and pull requests. Loads the GitHub tools; it is not called directly.",
     risk: 'read',
-    input: z.object({ query: z.string().max(200) }).strict(),
-    execute: notConnected,
+    capability: true,
+    input: empty,
+    execute: grantOnly,
   });
   add({
     id: 'read_x',
-    description: 'Read your X timeline and mentions.',
+    description: "Grant this bot the user's X: read timeline and mentions. Loads the X tools.",
     risk: 'read',
-    input: z.object({ query: z.string().max(200) }).strict(),
-    execute: notConnected,
+    capability: true,
+    input: empty,
+    execute: grantOnly,
   });
   add({
     id: 'post_x',
-    description: 'Post on X as the user.',
+    description:
+      'Grant this bot X posting, one Face ID card per post. Loads the X tools; the post itself is a propose_write.',
     risk: 'write',
-    input: z.object({ text: z.string().min(1).max(280) }).strict(),
-    execute: notConnected,
+    capability: true,
+    input: empty,
+    execute: grantOnly,
   });
   add({
     id: 'github_comment',
-    description: 'Comment on a GitHub issue or PR as the user.',
+    description:
+      'Grant this bot GitHub comments, one Face ID card per comment. Loads the GitHub tools; the comment itself is a propose_write.',
     risk: 'write',
-    input: z
-      .object({
-        repo: z.string().max(140),
-        number: z.number().int().positive(),
-        body: z.string().max(4000),
-      })
-      .strict(),
-    execute: notConnected,
+    capability: true,
+    input: empty,
+    execute: grantOnly,
   });
 
   return defs;

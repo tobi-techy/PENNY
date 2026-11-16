@@ -176,6 +176,14 @@ Guard card replaces the money card. "Not me" freezes the agent and asks you to r
 4. Read-only bots: "Create". Bots with write tools: "Create with Face ID". Money is off unless you set a cap.
 5. The new bot introduces itself in its own voice in the thread.
 
+### A bot asks for one more tool
+1. Mid-task, the bot hits something it cannot do: "I can read your repo, but I can't see X."
+2. It asks with `request_access`: the tool id and one plain line of why.
+3. Card: "Let Scout use read_x", with the bot, the tool, what it allows (read only / one Face ID per action) and the why. No money line, because a grant never moves money.
+4. Face ID: the tool is added once and works from the next message. "Not now": nothing changes.
+5. Money tools are refused here. A wider spend cap is a new bot with a cap, not a tool grant.
+6. An expired grant card is not renewed automatically: the bot asks again, so the yes is always fresh.
+
 ### Weekly check-in (Sunday)
 Mint card with the week in one sentence, one number, one suggestion. Penny adds a line about what it learned and links the soul changelog.
 

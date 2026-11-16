@@ -358,7 +358,10 @@ export class Crew {
     let connectorNote = '';
     if (this.d.connectors) {
       try {
-        const extra = await this.d.connectors.toolsFor(userId, bot.slug);
+        const extra = await this.d.connectors.toolsFor(userId, bot.slug, {
+          slug: bot.slug,
+          toolIds: bot.toolIds,
+        });
         Object.assign(tools, extra);
         connectorNote =
           '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app; it sends the card itself. Never paste a URL or a connect link into your reply. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';

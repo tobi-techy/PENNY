@@ -124,6 +124,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .errand: self = .errand
         case .createBot: self = .bot
         case .write: self = .write
+        case .grantBot: self = .bot
         }
     }
 }

@@ -83,6 +83,15 @@ export function intentOf(plan: Plan): Intent | null {
       return str(plan.toolkit) && str(plan.toolSlug)
         ? { type: 'write', to: `${plan.toolkit}:${plan.toolSlug}`, amount: '0', asset: 'none' }
         : null;
+    case 'grant_bot':
+      return str(plan.slug) && str(plan.toolId)
+        ? {
+            type: 'grant_bot',
+            to: `${plan.slug}:${plan.toolId}`,
+            amount: '0',
+            asset: 'none',
+          }
+        : null;
     default:
       return null;
   }
@@ -150,6 +159,8 @@ export function describe(c: CheckedApproval): string {
       return `Send in ${String(c.plan.toolkit)} as you`;
     case 'create_bot':
       return `Turn on the bot ${to}`;
+    case 'grant_bot':
+      return `Let ${to.split(':')[0]} use ${to.split(':')[1]}`;
     default:
       return 'Approve this';
   }

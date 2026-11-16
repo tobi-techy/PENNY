@@ -178,7 +178,7 @@ describe('no jargon in user copy', () => {
       ...CardState.options.map((s) => approvalPill(s) ?? ''),
       ...CardState.options.map((s) => trailingFor({ state: s }, new Date())),
       ...KNOWN_CARD_TYPES.map((k) => cardStyle(k).tag),
-      ...(['send', 'invest', 'write', 'create_bot'] as const).flatMap((k) =>
+      ...(['send', 'invest', 'write', 'create_bot', 'grant_bot'] as const).flatMap((k) =>
         (['pending', 'signed', 'relayed', 'settled', 'failed'] as const).flatMap((s) =>
           stepsFor(s, k).map((x) => x.label),
         ),

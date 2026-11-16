@@ -4,6 +4,7 @@ import { CreateBotPlan } from '@penny/shared';
 import type { ApprovalService } from '../approvals/service.ts';
 import { evaluateBotCreation } from '../guard/bot-policy.ts';
 import { newId } from '../lib/ids.ts';
+import type { Logger } from '../lib/logger.ts';
 import type { SpaceRef } from '../ports/messaging.ts';
 import type { BotRow, BotsRepo } from '../repo/bots.ts';
 import type { GuardDecisionsRepo } from '../repo/infra.ts';
@@ -149,6 +150,7 @@ export type BotServiceDeps = {
   guardDecisions: GuardDecisionsRepo;
   registry: ToolRegistry;
   mood: MoodService;
+  log?: Logger;
   approvals: () => ApprovalService; // late-bound (approvals calls back into us)
 };
 
@@ -189,7 +191,14 @@ export class BotService {
         ok: false,
         reasons: ["That bot draft wasn't valid. Let's try describing it again."],
       };
-    const plan = { ...parsed.data, soulMd: withMoneyRule(parsed.data.soulMd) };
+    const plan = {
+      ...parsed.data,
+      // Every bot the user makes can ask for the tools it still needs. It is
+      // read-only (it only asks) and the answer is a Face ID card, so it rides
+      // along without widening anything.
+      toolIds: [...new Set([...parsed.data.toolIds, 'request_access'])],
+      soulMd: withMoneyRule(parsed.data.soulMd),
+    };
     const policy = await this.d.users.policy(userId);
     const taken = await this.d.bots.allSlugsFor(userId);
     const g = evaluateBotCreation(plan, this.d.registry.info(), taken, policy);
@@ -261,6 +270,55 @@ export class BotService {
   private async pendingConfirm(userId: string, slug: string): Promise<BotRow | null> {
     const row = await this.d.bots.byOwnerSlug(userId, slug);
     return row && row.status === 'pending_confirm' ? row : null;
+  }
+
+  /**
+   * A running bot asks for one more tool it needs to finish its task. Nothing is
+   * granted here: a Face ID card goes out, and onGrantApproved appends the tool.
+   * Money tools are refused: a bot's spend caps are set when the bot is made, and
+   * widening them must not ride on a "let me use this tool" card.
+   */
+  async requestTool(
+    userId: string,
+    bot: BotRow,
+    toolId: string,
+    why: string,
+    space: SpaceRef,
+  ): Promise<{ ok: boolean; reason?: string; status?: string; approvalId?: string }> {
+    if (bot.builtIn) return { ok: false, reason: 'the built-in crew already has its tools' };
+    if (bot.status !== 'active') return { ok: false, reason: 'this bot is not on yet' };
+    const tool = this.d.registry.get(toolId);
+    if (!tool) return { ok: false, reason: `I don't have a tool called "${toolId}".` };
+    if (tool.builtInOnly)
+      return { ok: false, reason: `"${toolId}" is reserved for the core crew.` };
+    if (bot.toolIds.includes(toolId))
+      return { ok: false, reason: 'this bot already has that tool' };
+    if (tool.risk === 'money')
+      return {
+        ok: false,
+        reason:
+          'money tools are set when a bot is made, with its caps. ask penny to make a new bot for that.',
+      };
+    const card = await this.d.approvals().createGrantApproval({
+      userId,
+      bot,
+      plan: { kind: 'grant_bot', slug: bot.slug, toolId, why: why.slice(0, 200) },
+      space,
+      riskLabel: tool.risk === 'read' ? 'read only' : 'one Face ID per action',
+    });
+    if (!card) return { ok: false, reason: 'I could not send the card right now.' };
+    return { ok: true, status: 'pending_approval', approvalId: card.approvalId };
+  }
+
+  /** A grant card was signed: the bot keeps the tool from now on. */
+  async onGrantApproved(approvalId: string, toolId: string, botId: string | null): Promise<void> {
+    if (!botId) throw new Error('grant without a bot');
+    const bot = await this.d.bots.byId(botId);
+    if (!bot) throw new Error('grant for a bot that is gone');
+    const updated = await this.d.bots.addTool(bot.id, toolId);
+    if (updated)
+      await this.d.bots.logSoulChange(bot.id, bot.userId, `+${toolId}`, 'tool access approved');
+    this.d.log?.info({ bot: bot.slug, toolId, approvalId }, 'tool access granted');
   }
 
   async onApprovalSettled(approvalId: string): Promise<void> {

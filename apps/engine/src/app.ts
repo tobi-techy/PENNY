@@ -197,6 +197,7 @@ export function createEngine(d: EngineDeps) {
     guardDecisions: repos.guardDecisions,
     registry: d.registry,
     mood,
+    log: d.log,
     approvals: () => {
       if (!approvals) throw new Error('approvals not ready');
       return approvals;
@@ -232,12 +233,14 @@ export function createEngine(d: EngineDeps) {
             toolkit: string,
             slug: string,
             args: Record<string, unknown>,
+            grant?: { slug: string; toolIds: readonly string[] },
           ) =>
-            d.connectors?.executeWrite(userId, toolkit, slug, args) ??
+            d.connectors?.executeWrite(userId, toolkit, slug, args, grant) ??
             Promise.reject(new Error('no connector')),
         }
       : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
+    onGrantApproved: (id, toolId, botId) => botService.onGrantApproved(id, toolId, botId),
     onBillPaid: (userId, billId, receipt) => bills.markPaid(userId, billId, receipt),
     recheckBill: (userId, billId) => bills.recheckBill(userId, billId),
     onNeedsSetup: async (userId, space) => {
@@ -320,6 +323,7 @@ export function createEngine(d: EngineDeps) {
     botOps: {
       draft: (u, p, s) => botService.draft(u, p, s),
       confirm: (u, s) => botService.confirm(u, s),
+      requestTool: (u, b, tool, why, s) => botService.requestTool(u, b, tool, why, s),
     },
     everyday: { cards: cardSender, reminders: repos.reminders, now },
     tracer: d.tracer ?? noopTracer,
