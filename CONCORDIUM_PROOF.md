@@ -3,16 +3,16 @@
 Network: testnet (`ccd:4221332d34e1694168c2a0c0b3fd0f27`)
 Owner account: `3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT`
 Contracts: CIS-8004 `<12802,0>`, CIS-8 `<12801,0>`
-Checked: 2026-11-16T10:25:14.074Z
+Checked: 2026-11-16T12:35:26.334Z
 
 ## Badges
 
-| Agent | Token | Badge | Verified | Card hash | Owner | Verification block | Register | Pin |
-|---|---|---|---|---|---|---|---|---|
-| Penny | 1169 | `JyP9Wd81dn3JwiAs6agks` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b) | [pin](https://ccdexplorer.io/testnet/transaction/3d52e2e26098cef61dd818892bf182cfb842a4a3b6e7f8c3668b5fbf7f6a06e4) |
-| Guard | 1170 | `JyP9WeDVZoYEmqQfdWWtd` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/c48114d5e1cc4b378ecd7eb38b4c8de997c8f16ccfa3d9aa69054b0080c6d634) | [pin](https://ccdexplorer.io/testnet/transaction/6d91db5cad09a03de2a2da90506dcf9f797597d5105ec7694eab9799ca4a45af) |
-| Invest | 1171 | `JyP9WfJyVq3AbxeVcM9Sp` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/4c8578f65e304502c79d08567d4706f008378520205212acccf5da8c1573f6f7) | [pin](https://ccdexplorer.io/testnet/transaction/276456886bc419defe58d7ec7ba899d35d3c3b4b3be394ac61989a0e6b889db2) |
-| Mail | 1172 | `JyP9WgQTRrY6S5tFdiQi3` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb) | [pin](https://ccdexplorer.io/testnet/transaction/956931d2a7c2fed71a33ad1f068e6fd5bf4d4c0362e422f72a31eaaaa6fba400) |
+| Agent | Token | Badge | Verified | Card hash | Owner | Verification block | Pin evidence | Register | Pin |
+|---|---|---|---|---|---|---|---|---|---|
+| Penny | 1169 | `JyP9Wd81dn3JwiAs6agks` | yes | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b) | [pin](https://ccdexplorer.io/testnet/transaction/3d52e2e26098cef61dd818892bf182cfb842a4a3b6e7f8c3668b5fbf7f6a06e4) |
+| Guard | 1170 | `JyP9WeDVZoYEmqQfdWWtd` | yes | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/c48114d5e1cc4b378ecd7eb38b4c8de997c8f16ccfa3d9aa69054b0080c6d634) | [pin](https://ccdexplorer.io/testnet/transaction/6d91db5cad09a03de2a2da90506dcf9f797597d5105ec7694eab9799ca4a45af) |
+| Invest | 1171 | `JyP9WfJyVq3AbxeVcM9Sp` | yes | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/4c8578f65e304502c79d08567d4706f008378520205212acccf5da8c1573f6f7) | [pin](https://ccdexplorer.io/testnet/transaction/276456886bc419defe58d7ec7ba899d35d3c3b4b3be394ac61989a0e6b889db2) |
+| Mail | 1172 | `JyP9WgQTRrY6S5tFdiQi3` | yes | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb) | [pin](https://ccdexplorer.io/testnet/transaction/c917db85fae9b4da692cb1571944f425141e67012dc1c1eed5f13600bda50c97) |
 
 ## Card hashes
 
@@ -31,6 +31,13 @@ curl -s "https://agent-registry-mcp.concordium.com/v1/check-badge/<badge>?networ
 ```
 
 Every check above is computed from the registry MCP response and the served card bytes. The script does not trust the cards or the owner's local state.
+
+The **Pin evidence** column is an independent cross-check of the `pinTx` recorded in
+`config/concordium-agents.json`: the script pulls the registry's own `URIUpdated`
+event log for each token and asserts that the recorded transaction really is the
+latest one, that the URI it carried is the configured `cardUrl`, and that the
+SHA-256 it anchored is the configured `cardSha256`. A recorded hash can therefore
+never drift from chain unnoticed.
 
 ## Hosting
 

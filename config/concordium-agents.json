@@ -63,11 +63,11 @@
       "cardUrl": "https://penny-passport.vercel.app/agents/mail/agent-card.json",
       "cardSha256": "2832e329e65a1dbb584fd7792205cd70968e7d49f41d1218b6987430bc2f1dbe",
       "registerTx": "b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb",
-      "pinTx": "956931d2a7c2fed71a33ad1f068e6fd5bf4d4c0362e422f72a31eaaaa6fba400",
+      "pinTx": "c917db85fae9b4da692cb1571944f425141e67012dc1c1eed5f13600bda50c97",
       "explorer": {
         "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
         "register": "https://ccdexplorer.io/testnet/transaction/b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb",
-        "pin": "https://ccdexplorer.io/testnet/transaction/956931d2a7c2fed71a33ad1f068e6fd5bf4d4c0362e422f72a31eaaaa6fba400",
+        "pin": "https://ccdexplorer.io/testnet/transaction/c917db85fae9b4da692cb1571944f425141e67012dc1c1eed5f13600bda50c97",
         "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9WgQTRrY6S5tFdiQi3?network=testnet"
       }
     }

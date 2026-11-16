@@ -17,6 +17,70 @@ async function fetchWithTimeout(url, ms = 20000) {
   return fetch(url, { signal: AbortSignal.timeout(ms) });
 }
 
+// The recorded pinTx is human-maintained evidence, so it is exactly the kind of
+// fact that silently rots (it did once already: Mail's entry kept the original
+// ngrok pin after the card moved to the permanent host). Ask the registry for the
+// real event log instead of trusting the file.
+async function mcpTool(name, args) {
+  const res = await fetch(`${MCP}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    }),
+    signal: AbortSignal.timeout(25000),
+  });
+  if (!res.ok) throw new Error(`${name} HTTP ${res.status}`);
+  let raw = await res.text();
+  if (raw.startsWith('event:')) {
+    const dataLine = raw.split('\n').find((l) => l.startsWith('data: '));
+    if (!dataLine) throw new Error(`${name}: no SSE data line`);
+    raw = dataLine.slice(6);
+  }
+  const body = JSON.parse(raw);
+  if (body.error) throw new Error(`${name}: ${body.error.message}`);
+  const text = body.result?.content?.find((c) => c.type === 'text')?.text;
+  if (!text) throw new Error(`${name}: empty result`);
+  return JSON.parse(text);
+}
+
+// URIUpdated payload: tag, discriminator, token_id (u64 LE), flag, uri len (u32 LE),
+// uri, flag, then the 32-byte metadata hash the contract anchored.
+function decodeUriUpdated(rawHex) {
+  const tokenId = Buffer.from(rawHex.slice(4, 20), 'hex').readBigUInt64LE(0);
+  const uriLen = Buffer.from(rawHex.slice(22, 30), 'hex').readUInt32LE(0);
+  const uriStart = 30;
+  const uri = Buffer.from(rawHex.slice(uriStart, uriStart + uriLen * 2), 'hex').toString('utf8');
+  const hashStart = uriStart + uriLen * 2 + 2;
+  const hash = rawHex.slice(hashStart, hashStart + 64);
+  return { tokenId: tokenId.toString(), uri, hash };
+}
+
+async function auditPin(agent) {
+  const history = await mcpTool('agent_history', { network: 'testnet', token_id: agent.tokenId });
+  const updates = (history.events ?? []).filter((e) => e.event_name === 'URIUpdated');
+  if (updates.length === 0) return ['no URIUpdated event on chain'];
+  const latest = updates[updates.length - 1];
+  const decoded = decodeUriUpdated(latest.payload.raw_hex);
+  const issues = [];
+  if (latest.tx_hash !== agent.pinTx) {
+    issues.push(
+      `recorded pinTx ${agent.pinTx.slice(0, 16)}… != latest on chain ${latest.tx_hash.slice(0, 16)}…`,
+    );
+  }
+  if (decoded.uri !== agent.cardUrl)
+    issues.push(`on-chain uri ${decoded.uri} != config ${agent.cardUrl}`);
+  if (decoded.hash !== agent.cardSha256) {
+    issues.push(
+      `on-chain hash ${decoded.hash.slice(0, 16)}… != config ${agent.cardSha256.slice(0, 16)}…`,
+    );
+  }
+  return issues;
+}
+
 const results = [];
 let allOk = true;
 
@@ -25,6 +89,7 @@ for (const agent of config.agents) {
   let servedSha = 'unreachable';
   let check = null;
   let error = null;
+  let pinIssues = [];
   try {
     const cardResponse = await fetchWithTimeout(agent.cardUrl);
     if (!cardResponse.ok) throw new Error(`card HTTP ${cardResponse.status}`);
@@ -50,15 +115,25 @@ for (const agent of config.agents) {
   } catch (e) {
     error = e.message;
   }
+
+  try {
+    pinIssues = await auditPin(agent);
+  } catch (e) {
+    pinIssues = [`pin audit failed: ${e.message}`];
+  }
+  if (pinIssues.length > 0) ok = false;
+
+  if (!ok && !error) error = pinIssues.join('; ');
   if (!ok) allOk = false;
-  results.push({ agent, ok, servedSha, check, error });
+  results.push({ agent, ok, servedSha, check, error, pinIssues });
   console.log(`${ok ? 'PASS' : 'FAIL'} ${agent.slug} ${agent.badge}`);
+  for (const issue of pinIssues) console.log(`     pin: ${issue}`);
 }
 
 const badgeRows = results
-  .map(({ agent, ok, check }) => {
+  .map(({ agent, ok, check, pinIssues }) => {
     const c = check?.checks ?? {};
-    return `| ${agent.name} | ${agent.tokenId} | \`${agent.badge}\` | ${ok ? 'yes' : 'no'} | ${c.hash_matches_on_chain ? 'yes' : 'no'} | ${c.owner_matches ? 'yes' : 'no'} | ${c.verification_present ? 'yes' : 'no'} | [register](${agent.explorer.register}) | [pin](${agent.explorer.pin}) |`;
+    return `| ${agent.name} | ${agent.tokenId} | \`${agent.badge}\` | ${ok ? 'yes' : 'no'} | ${c.hash_matches_on_chain ? 'yes' : 'no'} | ${c.owner_matches ? 'yes' : 'no'} | ${c.verification_present ? 'yes' : 'no'} | ${pinIssues.length === 0 ? 'yes' : 'no'} | [register](${agent.explorer.register}) | [pin](${agent.explorer.pin}) |`;
   })
   .join('\n');
 
@@ -83,8 +158,8 @@ Checked: ${new Date().toISOString()}
 
 ## Badges
 
-| Agent | Token | Badge | Verified | Card hash | Owner | Verification block | Register | Pin |
-|---|---|---|---|---|---|---|---|---|
+| Agent | Token | Badge | Verified | Card hash | Owner | Verification block | Pin evidence | Register | Pin |
+|---|---|---|---|---|---|---|---|---|---|
 ${badgeRows}
 
 ## Card hashes
@@ -101,6 +176,13 @@ curl -s "https://agent-registry-mcp.concordium.com/v1/check-badge/<badge>?networ
 \`\`\`
 
 Every check above is computed from the registry MCP response and the served card bytes. The script does not trust the cards or the owner's local state.
+
+The **Pin evidence** column is an independent cross-check of the \`pinTx\` recorded in
+\`config/concordium-agents.json\`: the script pulls the registry's own \`URIUpdated\`
+event log for each token and asserts that the recorded transaction really is the
+latest one, that the URI it carried is the configured \`cardUrl\`, and that the
+SHA-256 it anchored is the configured \`cardSha256\`. A recorded hash can therefore
+never drift from chain unnoticed.
 
 ## Hosting
 
