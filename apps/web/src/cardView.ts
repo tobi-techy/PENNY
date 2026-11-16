@@ -68,6 +68,7 @@ const STYLE: Record<string, { color: string; tag: string }> = {
   unfreeze: { color: '#F6A8F0', tag: '◆ UNFREEZE' },
   connect: { color: '#6EA1D6', tag: '⇢ CONNECT' },
   setup: { color: '#6EA1D6', tag: '◈ SET UP' },
+  fund: { color: '#6EA1D6', tag: '⇢ ADD MONEY' },
 };
 
 export function styleFor(type: string): { color: string; tag: string; known: boolean } {
@@ -97,6 +98,8 @@ export function settledFor(type: string): string {
       return 'Connected';
     case 'setup':
       return 'Set up';
+    case 'fund':
+      return 'Added';
     case 'found':
       return 'Found';
     case 'guard_block':

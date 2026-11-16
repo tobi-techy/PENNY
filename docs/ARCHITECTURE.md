@@ -82,7 +82,7 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 - `challenge`: 32 random bytes (base64url), single use, burned on the first approve attempt whatever its outcome.
 - Web passkey challenge (link page): base64url(sha256(`penny-approval:v2:<approvalHash>:<challenge>`)), so the passkey answer is tied to this exact action. The page recomputes the hashes before it asks.
 - A replaced approval (`reissued_from`) has at most one replacement (unique index).
-- Lifetime: 90 s for anything priced by a quote (invest), 10 min for plain sends, bills, errands, writes and new bots. The NEAR max block height is set to cover the lifetime.
+- Lifetime: 90 s for anything priced by a quote (invest), 10 min for plain sends, bills, errands, writes, new bots and tool grants. The NEAR max block height is set to cover the lifetime. A tool grant is never renewed on expiry: the bot asks again.
 - States reuse the approval state machine: card Ready = `pending`, Approving = `signed`/`relayed`, Sent = `settled`, Blocked = Guard `cancelled` (or no approval at all when Guard said no first), Expired = `expired`.
 
 ### Card (packages/shared `Card`)
@@ -111,7 +111,8 @@ Canonical JSON = RFC 8785 (JCS). Both TS and Swift implement it; shared test vec
 
 ## Crew brain
 - Model provider: NEAR AI Cloud OpenAI-compatible endpoint (base URL + key from env). Vercel AI SDK `generateText` with tools. Langfuse tracing (keys from env).
-- Tools are deterministic TS functions: `getBalances`, `getPortfolios` (Glider), `quoteInvest` (1Click dry quote), `checkGuard`, `createApprovalCard`, `findBills` (Gmail read-only, later), `remember`, `setMood`.
+- Tools are deterministic TS functions: `getBalances`, `getSpendSummary`, `getPortfolios` (Glider), `quoteInvest` (1Click dry quote), `addMoney` (1Click deposit address), `checkGuard`, `createApprovalCard`, `findBills` (Gmail read-only, later), `requestAccess` (a bot asks for one more tool), `remember`, `setMood`.
+- App tools (`read_github`, `read_x`, `post_x`, `github_comment`) are grants, not calls: the bot row's tool list decides which Composio toolkits load, so a custom bot gets exactly the apps its grants name and nothing else.
 - Souls: `souls/<agent>.md` loaded into system prompts. Mood state per user (`idle|thinking|win|wink|blocked|paused|done`) stored in DB, set by events, drives tone + card art param.
 - Memory: `memories` table (userId, kind, text, embedding vector(1536), createdAt). After each turn a background learner extracts durable facts from what the user said (deduped; secrets and third-party instructions refused). Weekly reflection job writes `soul_changelog`.
 - Reply shape: the model is told to text in one or two sentences; `lib/reply.ts` also strips assistant filler and splits long answers at sentence boundaries into short bubbles (four at most). Links and code stay whole, and every word is kept.
@@ -138,7 +139,7 @@ Penny is allowed to text first, but only through a deterministic loop, never fro
 - **Boundaries.** Proactivity only sends text. It never creates an approval, moves money, retries a failed action or overrides Guard. A card, an approval and Face ID remain the only path to an action in the user's name. A follow-up never repeats an existing bill, commitment nudge, reminder or connect notification; those keep their existing jobs.
 
 ## Data model (Drizzle)
-users (frozenAt), devices (publicKey, platform ios_app|web_passkey, hasExtension, enrolledAt = createdAt, revokedAt, revokedReason), passkeys (credentialId, COSE publicKey, signCount, platform web_passkey), cards, reminders, enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, memories, moods, followups (score, quietStart, quietEnd, timezone), open_loops (kind, summary, status, dueAt, nudgeCount), proactive_messages (text, loopIds, sentAt, repliedAt, outcome), souls_changelog, idempotency_keys, webhook_events, bills (sourceKey, billerId, amount, dueOn, commitmentId), commitments (key, cadence, nextExpectedOn, seen/paid counts, paused), commitment_events (append-only obligation history).
+users (frozenAt), devices (publicKey, platform ios_app|web_passkey, hasExtension, enrolledAt = createdAt, revokedAt, revokedReason), passkeys (credentialId, COSE publicKey, signCount, platform web_passkey), cards, reminders, enroll_codes, conversations, messages, approvals, approval_events (append-only audit), guard_policies (per user: perTxUsd, dailyUsd, allowlist, blockNewRecipientsOverUsd), guard_decisions, ledger_entries, invest_quotes (firm quotes, survive a restart), funding_quotes (top-ups from other chains), memories, moods, followups (score, quietStart, quietEnd, timezone), open_loops (kind, summary, status, dueAt, nudgeCount), proactive_messages (text, loopIds, sentAt, repliedAt, outcome), souls_changelog, idempotency_keys, webhook_events, bills (sourceKey, billerId, amount, dueOn, commitmentId), commitments (key, cadence, nextExpectedOn, seen/paid counts, paused), commitment_events (append-only obligation history).
 
 ## Environments
 `PENNY_ENV=dev|mainnet`. Mainnet requires all secrets present at boot (zod env schema fails closed). A `DRY_RUN=1` flag makes relayer + Intents run quote/simulate only — default ON until Tobi says go.

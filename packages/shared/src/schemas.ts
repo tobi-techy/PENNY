@@ -155,6 +155,23 @@ export const WritePlan = z
   .strict();
 export type WritePlan = z.infer<typeof WritePlan>;
 
+/**
+ * A bot asking for one more tool it needs to finish a task: a Face ID card
+ * grants it, and the grant is appended to the bot's tool list. Read tools grant
+ * the ability to read that app; write tools still propose each write, so the
+ * card here widens what the bot may attempt, never what runs unattended.
+ */
+export const GrantBotPlan = z
+  .object({
+    kind: z.literal('grant_bot'),
+    slug: BotSlug,
+    toolId: ToolId,
+    /** The bot's own words for why it needs this, shown on the card. */
+    why: z.string().min(1).max(200),
+  })
+  .strict();
+export type GrantBotPlan = z.infer<typeof GrantBotPlan>;
+
 export const IntentPlan = z.discriminatedUnion('kind', [
   InvestPlan,
   SendPlan,
@@ -163,17 +180,20 @@ export const IntentPlan = z.discriminatedUnion('kind', [
   SplitPlan,
   CreateBotPlan,
   WritePlan,
+  GrantBotPlan,
 ]);
 export type IntentPlan = z.infer<typeof IntentPlan>;
 export type IntentKind = IntentPlan['kind'];
 
-/** Plans that move money. `split`, `create_bot` and `write` never move money. */
+/** Plans that move money. `split`, `create_bot`, `write` and `grant_bot` never move money. */
 export type MoneyPlan = Exclude<
   IntentPlan,
-  { kind: 'split' } | { kind: 'create_bot' } | { kind: 'write' }
+  { kind: 'split' } | { kind: 'create_bot' } | { kind: 'write' } | { kind: 'grant_bot' }
 >;
 export function isMoneyPlan(p: IntentPlan): p is MoneyPlan {
-  return p.kind !== 'split' && p.kind !== 'create_bot' && p.kind !== 'write';
+  return (
+    p.kind !== 'split' && p.kind !== 'create_bot' && p.kind !== 'write' && p.kind !== 'grant_bot'
+  );
 }
 
 /** USD-equivalent amount a plan moves, as a Decimal string. NEAR needs a price. */
@@ -251,7 +271,15 @@ export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
 
 export const Fact = z.object({ label: z.string().max(40), value: z.string().max(80) }).strict();
 
-export const ApprovalKind = z.enum(['invest', 'send', 'pay_bill', 'errand', 'create_bot', 'write']);
+export const ApprovalKind = z.enum([
+  'invest',
+  'send',
+  'pay_bill',
+  'errand',
+  'create_bot',
+  'write',
+  'grant_bot',
+]);
 export type ApprovalKind = z.infer<typeof ApprovalKind>;
 
 /**
@@ -305,11 +333,12 @@ export const Approval = z
   .strict()
   .refine(
     (a) =>
-      a.kind === 'create_bot' || a.kind === 'write'
+      a.kind === 'create_bot' || a.kind === 'write' || a.kind === 'grant_bot'
         ? a.actions.length === 0
         : a.actions.length >= 1,
     {
-      message: 'money approvals need at least one action; create_bot/write approvals carry none',
+      message:
+        'money approvals need at least one action; create_bot, write and grant_bot approvals carry none',
       path: ['actions'],
     },
   );

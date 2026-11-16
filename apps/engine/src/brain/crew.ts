@@ -99,6 +99,10 @@ export type CrewDeps = {
   /** Open loops and proactive calibration; absent in small unit tests. */
   followup?: FollowUpOps;
   market: MarketPort;
+  /** Finance's read-only spend summary; absent in small unit tests. */
+  finance?: import('../finance/summary.ts').FinancePort;
+  /** Adding dollars from another chain; absent in small unit tests. */
+  funding?: ToolContext['funding'];
   botOps: BotOps;
   everyday?: ToolContext['everyday'];
   tracer: Tracer;
@@ -344,6 +348,8 @@ export class Crew {
       memory: this.d.memory,
       mood: this.d.mood,
       market: this.d.market,
+      ...(this.d.finance ? { finance: this.d.finance } : {}),
+      ...(this.d.funding ? { funding: this.d.funding } : {}),
       botOps: this.d.botOps,
       ...(this.d.followup ? { followup: this.d.followup } : {}),
       ...(this.d.everyday ? { everyday: this.d.everyday } : {}),
@@ -352,7 +358,10 @@ export class Crew {
     let connectorNote = '';
     if (this.d.connectors) {
       try {
-        const extra = await this.d.connectors.toolsFor(userId, bot.slug);
+        const extra = await this.d.connectors.toolsFor(userId, bot.slug, {
+          slug: bot.slug,
+          toolIds: bot.toolIds,
+        });
         Object.assign(tools, extra);
         connectorNote =
           '\nConnected apps (via Composio): search and read freely. If an app is not connected, call connect_app; it sends the card itself. Never paste a URL or a connect link into your reply. Direct send/post/create/delete calls are blocked; to do one, call propose_write and the user gets a Face ID card. Never retry a blocked call directly.';

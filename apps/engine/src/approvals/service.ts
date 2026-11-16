@@ -11,6 +11,7 @@ import {
   Decimal,
   formatUsd,
   fromMicros,
+  type GrantBotPlan,
   type IntentPlan,
   type MoneyPlan,
   type NearAction,
@@ -152,10 +153,13 @@ export type ApprovalDeps = {
     toolkit: string,
     toolSlug: string,
     args: Record<string, unknown>,
+    grant?: { slug: string; toolIds: readonly string[] },
   ) => Promise<unknown>;
   /** called when a create_bot approval settles */
   onBotApproved?: (approvalId: string) => Promise<void>;
   onBotDeclined?: (approvalId: string) => Promise<void>;
+  /** called when a grant_bot approval settles: the tool is added to the bot */
+  onGrantApproved?: (approvalId: string, toolId: string, botId: string | null) => Promise<void>;
   /** a user without approvals set up tried something that needs one (texts the setup link) */
   onNeedsSetup?: (userId: string, space: SpaceRef) => Promise<void>;
   /** called when a pay_bill approval settles on chain (marks the bill paid, sends a receipt) */
@@ -262,6 +266,8 @@ function cardTitleFor(plan: IntentPlan): string {
       return `New bot · ${plan.name}`.slice(0, 80);
     case 'write':
       return plan.title.slice(0, 80);
+    case 'grant_bot':
+      return `Let ${plan.slug} use ${plan.toolId}`.slice(0, 80);
   }
 }
 
@@ -281,6 +287,8 @@ function titleFor(plan: IntentPlan): string {
       return `New bot · ${plan.name}`.slice(0, 80);
     case 'write':
       return plan.title.slice(0, 80);
+    case 'grant_bot':
+      return `Tool access · ${plan.toolId} for ${plan.slug}`.slice(0, 80);
   }
 }
 
@@ -301,6 +309,7 @@ export function isUniqueViolation(e: unknown): boolean {
 function cardTypeFor(kind: ApprovalRow['kind']): string {
   switch (kind) {
     case 'create_bot':
+    case 'grant_bot':
       return 'new_bot';
     default:
       return kind;
@@ -311,7 +320,7 @@ function agentFor(kind: ApprovalRow['kind'], bot: BotRow | null): string {
   if (bot && !bot.builtIn) return bot.slug;
   if (kind === 'invest') return 'invest';
   if (kind === 'pay_bill') return 'finance';
-  if (kind === 'write') return bot?.slug ?? 'mail';
+  if (kind === 'write' || kind === 'grant_bot') return bot?.slug ?? 'mail';
   return 'penny';
 }
 
@@ -1153,6 +1162,78 @@ export class ApprovalService {
   }
 
   /**
+   * Face ID card for one more tool on a bot: the bot asks mid-task, the user
+   * grants it. No NEAR actions, no money. On approval the tool is appended to the
+   * bot's grants (BotService.onGrantApproved); write tools still propose each
+   * write, so this widens what the bot may attempt, not what runs unattended.
+   */
+  async createGrantApproval(input: {
+    userId: string;
+    bot: BotRow;
+    plan: GrantBotPlan;
+    space: SpaceRef;
+    /** What the tool lets the bot do, in plain words ("Can read GitHub"). */
+    riskLabel: string;
+  }): Promise<{ approvalId: string; cardToken: string; url: string } | null> {
+    if (await this.frozen(input.userId)) return null;
+    const user = await this.d.users.byId(input.userId);
+    const device = user ? await this.d.users.activeDevice(input.userId) : null;
+    if (!user?.accountId || !device) {
+      await this.needsSetup(input.userId, input.space);
+      return null;
+    }
+    const now = this.d.now();
+    const { token, hash } = issueCardToken();
+    const id = newId('apr');
+    const actions: NearAction[] = [];
+    const facts = [
+      { label: 'Bot', value: input.bot.name.slice(0, 80) },
+      { label: 'Tool', value: input.plan.toolId.slice(0, 80) },
+      { label: 'Can', value: input.riskLabel.slice(0, 80) },
+      { label: 'Why', value: input.plan.why.slice(0, 80) },
+    ];
+    const expiresAt = new Date(now.getTime() + BOT_APPROVAL_TTL_MS);
+    const ph = planHash(input.plan, actions);
+    await this.d.approvals.create({
+      id,
+      userId: input.userId,
+      botId: input.bot.id,
+      kind: 'grant_bot',
+      plan: input.plan,
+      title: titleFor(input.plan),
+      amountDisplay: 'no money',
+      amountMicros: 0n,
+      facts,
+      signerId: user.accountId,
+      receiverId: user.accountId,
+      actions,
+      nonce: '0',
+      maxBlockHeight: '0',
+      expiresAt,
+      status: 'pending',
+      planHash: ph,
+      cardTokenHash: hash,
+      ...this.challengeFields(id, input.plan, expiresAt, ph),
+      reissuedFrom: null,
+    });
+    const url = await this.sendApprovalCard(
+      id,
+      input.space,
+      { token, hash },
+      {
+        userId: input.userId,
+        agent: input.bot.slug,
+        type: 'new_bot',
+        title: `Let ${input.bot.name} use ${input.plan.toolId}`.slice(0, 80),
+        lines: facts,
+        expiresAt,
+        subcaption: 'needs your Face ID',
+      },
+    );
+    return { approvalId: id, cardToken: token, url };
+  }
+
+  /**
    * Face ID card for a write in an outside app. No money, no NEAR actions.
    * The write itself runs in submit, after the device signature verifies.
    */
@@ -1175,7 +1256,12 @@ export class ApprovalService {
     if (!this.d.executeWrite) {
       return { decision: 'needs_more_info', reasons: ['That app is not connected yet.'] };
     }
-    const problem = writeTargetProblem(plan.toolkit, plan.toolSlug, bot?.slug ?? null);
+    const problem = writeTargetProblem(
+      plan.toolkit,
+      plan.toolSlug,
+      bot?.slug ?? null,
+      bot?.toolIds,
+    );
     if (problem) {
       await this.d.guardDecisions.record({
         userId,
@@ -1516,6 +1602,9 @@ export class ApprovalService {
       return r?.approvalId ?? null;
     }
     if (plan.kind === 'split') return null;
+    // A tool grant is not a price: an expired access card is not renewed behind the
+    // user's back. The bot asks again and the user gets a fresh card with a fresh yes.
+    if (plan.kind === 'grant_bot') return null;
     const price = this.nearUsdFromRow(row);
     const r = await this.createMoneyApproval({
       userId: row.userId,
@@ -1906,12 +1995,15 @@ export class ApprovalService {
     row: ApprovalRow,
     body: { signedDelegateAction: string } | { planSignature: string },
   ): Promise<{ status: string }> {
-    return row.kind === 'create_bot' || row.kind === 'write'
+    return row.kind === 'create_bot' || row.kind === 'write' || row.kind === 'grant_bot'
       ? this.submitPlanSigned(row, body)
       : this.submitMoney(row, body);
   }
 
-  /** create_bot and write approvals: plain device signature over the plan message, no chain. */
+  /**
+   * create_bot, write and grant_bot approvals: plain device signature over the plan
+   * message, no chain.
+   */
   private async submitPlanSigned(
     row: ApprovalRow,
     body: { signedDelegateAction: string } | { planSignature: string },
@@ -1964,6 +2056,32 @@ export class ApprovalService {
       await this.updateCard(row.id, 'done', 'live');
       return { status: 'settled' };
     }
+    if (row.kind === 'grant_bot') {
+      // The grant is the change: apply it BEFORE marking the approval settled, so a
+      // settled card never points at a tool the bot cannot use.
+      try {
+        const grant = row.plan as GrantBotPlan;
+        await this.d.onGrantApproved?.(row.id, grant.toolId, row.botId);
+      } catch (e) {
+        this.d.log.error({ approvalId: row.id, err: (e as Error).name }, 'grant apply failed');
+        await this.d.approvals.transition(
+          row.id,
+          row.kind,
+          'signed',
+          'failed',
+          'grant apply failed',
+          {},
+          { error: (e as Error).name },
+        );
+        await this.d.mood.on(row.userId, 'approval_failed');
+        await this.updateCard(row.id, 'failed', 'that did not go through. nothing was changed.');
+        return { status: 'failed' };
+      }
+      await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'grant applied');
+      await this.d.mood.on(row.userId, 'approval_settled');
+      await this.updateCard(row.id, 'done', 'allowed');
+      return { status: 'settled' };
+    }
     if (isUnfreeze(row)) {
       await this.unfreeze(row.userId);
       await this.d.approvals.transition(row.id, row.kind, 'signed', 'settled', 'unfrozen');
@@ -1973,9 +2091,18 @@ export class ApprovalService {
     }
     // write: execute in the outside app now, exactly once, after Face ID.
     const plan = row.plan as WritePlan;
+    // The bot's grants are checked again at execution: a revoked or never-granted
+    // app is refused here even if the card slipped through.
+    const writer = row.botId && this.d.bots ? await this.d.bots.byId(row.botId) : null;
     try {
       if (!this.d.executeWrite) throw new Error('connector unavailable');
-      await this.d.executeWrite(row.userId, plan.toolkit, plan.toolSlug, plan.arguments);
+      await this.d.executeWrite(
+        row.userId,
+        plan.toolkit,
+        plan.toolSlug,
+        plan.arguments,
+        writer ? { slug: writer.slug, toolIds: writer.toolIds } : undefined,
+      );
     } catch (e) {
       await this.d.approvals.transition(
         row.id,
@@ -2178,7 +2305,7 @@ export class ApprovalService {
 
   /** Before relaying an invest: quote still live and price within slippage, else re-card. */
   private async investPreflight(row: ApprovalRow, quoteId: string): Promise<void> {
-    const q = this.d.invest?.get(quoteId);
+    const q = await this.d.invest?.get(quoteId);
     // same bar as Guard: under 15 s left is too close to send; re-card instead
     if (!q || q.expiresAt.getTime() - this.d.now().getTime() < QUOTE_MIN_REMAINING_MS) {
       throw this.requotedError(await this.requote(row, 'expired'), 'expired');

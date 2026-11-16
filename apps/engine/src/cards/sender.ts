@@ -146,6 +146,7 @@ export class CardSender {
       channel: 'link',
       space: input.space,
       expiresAt: null,
+      createdAt: now,
     });
     this.remember(row.id, token);
     return { token, url: `${this.d.publicBaseUrl.replace(/\/$/, '')}/c/${token}`, cardId: row.id };
@@ -189,6 +190,9 @@ export class CardSender {
       channel,
       space: input.space,
       expiresAt: input.expiresAt ?? null,
+      // The engine's clock, not the database's: watermarks (the weekly check-in)
+      // compare card times with the same clock that decides "this week".
+      createdAt: now,
     });
     const card = toCardDto(row);
     const url = this.url(tok.token);

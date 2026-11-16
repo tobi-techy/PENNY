@@ -10,6 +10,7 @@ import {
   type InvestAsset,
   type InvestPort,
   type InvestQuote,
+  type InvestQuoteStore,
   mapSwapStatus,
   type SwapStatusView,
 } from './invest.ts';
@@ -18,6 +19,8 @@ export type IntentsInvestOptions = {
   adapter: ChainAdapter;
   slippageBps?: number;
   now?: () => Date;
+  /** Durable store for firm quotes, so a restart does not lose an open card's quote. */
+  quotes?: InvestQuoteStore;
 };
 
 /** "0.997062547700" -> micro-USD, truncating past 6 dp. null when not a plain decimal. */
@@ -52,13 +55,13 @@ export class IntentsInvest implements InvestPort {
     };
   }
 
-  private toQuote(
+  private async toQuote(
     quoteId: string,
     asset: InvestAsset,
     amountUsd: string,
     user: string,
     v: ValidatedQuote,
-  ): InvestQuote {
+  ): Promise<InvestQuote> {
     const dec = CHAIN_ASSETS[asset].decimals;
     const inUsd = usdToMicros(v.response.quote.amountInUsd);
     const outUsd = usdToMicros(v.response.quote.amountOutUsd);
@@ -109,11 +112,20 @@ export class IntentsInvest implements InvestPort {
       quoteId,
     });
     if (!v.depositAddress) throw new Error('firm quote without deposit address');
-    return this.toQuote(quoteId, asset, amountUsd, user, v);
+    const q = await this.toQuote(quoteId, asset, amountUsd, user, v);
+    // Persist before the card goes out: the tap may land on another process.
+    await this.o.quotes?.save(q, v);
+    return q;
   }
 
-  get(quoteId: string) {
-    return this.book.get(quoteId);
+  async get(quoteId: string) {
+    const cached = this.book.get(quoteId);
+    if (cached) return cached;
+    const stored = await this.o.quotes?.get(quoteId);
+    if (!stored) return undefined;
+    // Re-cache so the rest of the approval path sees the same object as a fresh quote.
+    this.book.set(quoteId, stored);
+    return stored;
   }
 
   async recheck(q: InvestQuote) {

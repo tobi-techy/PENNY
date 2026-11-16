@@ -39,7 +39,7 @@ final class CardKindTests: XCTestCase {
         XCTAssertEqual(CardKind(cardType: "unfreeze"), .unfreeze)
         for type in ["invest", "pick", "send", "pay_bill", "request", "errand", "guard_block",
                      "checkin", "write", "new_bot", "reminder", "email_draft", "plan", "found",
-                     "done", "unfreeze", "connect", "setup"] {
+                     "done", "unfreeze", "connect", "setup", "fund"] {
             XCTAssertNotEqual(CardKind(cardType: type), .plain, type)
         }
     }

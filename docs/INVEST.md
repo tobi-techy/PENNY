@@ -76,7 +76,7 @@ Needs Tobi's explicit yes and these, for one tiny real invest:
 3. Env: `PENNY_ENV=mainnet`, `DRY_RUN=0`, `NEAR_NETWORK=mainnet`, `NEAR_RPC_URL` (mainnet), `PENNY_TESTNET_E2E_OK=1`, `APP_ATTEST_APP_ID`, plus the existing mainnet-required keys (DB, Spectrum, NEAR AI). Optional `ONECLICK_API_KEY` or `ONECLICK_JWT` to drop the 0.2% fee. Keep `PENNY_MAINNET_MAX_PER_TX_USD` and `PENNY_MAINNET_MAX_DAILY_USD` low for the first run.
 
 Known limits (open review items, not fixed in PR #5):
-- invest quotes live in process memory: an engine restart mid-card turns the next tap into "Price expired. Ask Penny again.";
+- invest quotes are persisted in `invest_quotes`; a restart keeps an open card's quote usable, and the chain adapter rebuilds its cached quote from the row (`ChainAdapterOptions.loadInvestQuote`). Rows are pruned an hour after expiry;
 - the approval deadline is checked before relay, not re-checked inside the relayer's broadcast step;
 - the status transition and the ledger release are two writes, not one transaction;
 - on a refund, the whole reservation is released even if 1Click kept a small refund fee;

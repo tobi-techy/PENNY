@@ -91,6 +91,11 @@ export interface ChainAdapterOptions {
   glider?: GliderClient;
   /** Enrolled device key for a NEAR account (from the devices table). When set, verify requires an exact match. */
   resolveDeviceKey?: (signerId: string) => Promise<string | null>;
+  /**
+   * Rebuild a cached invest quote after a restart. The quote lives in memory, so
+   * without this an approval minted before a redeploy could not build its actions.
+   */
+  loadInvestQuote?: (quoteId: string) => Promise<ValidatedQuote | null>;
   verifyPolicy?: VerifyPolicy;
   /** Relayer inner-deposit cap for calls with no approval-derived limit (yocto). */
   relayerMaxInnerDepositYocto?: bigint;
@@ -340,7 +345,11 @@ export class ChainAdapter {
           ],
         };
       case 'invest': {
-        const q = this.investQuotes.get(plan.quoteId);
+        let q = this.investQuotes.get(plan.quoteId);
+        if (!q && this.o.loadInvestQuote) {
+          q = (await this.o.loadInvestQuote(plan.quoteId)) ?? undefined;
+          if (q) this.investQuotes.set(plan.quoteId, q);
+        }
         if (!q) throw new Error(`unknown quote ${plan.quoteId}; call quoteInvestForPlan first`);
         const dep = await this.buildInvestDeposit(q);
         return { receiverId: dep.receiverId, actions: dep.actions };

@@ -10,6 +10,8 @@ import type { ToolRisk } from '@penny/shared';
 export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   // read: look things up, nothing leaves Penny
   get_balances: false,
+  get_spend_summary: false,
+  add_money: false, // a deposit address that only receives; nothing leaves Penny
   get_portfolios: false,
   quote_invest: false,
   check_guard: false,
@@ -25,6 +27,7 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   set_mood: false,
   read_github: false,
   read_x: false,
+  request_access: false, // the ask itself; the grant it produces is a Face ID card
   draft_bot: false, // shows a draft; turning on a bot with write tools is create_bot below
   confirm_bot: false, // read-only bots only (BotService refuses others)
   // small changes inside Penny: info cards, Undo / Edit, no Face ID

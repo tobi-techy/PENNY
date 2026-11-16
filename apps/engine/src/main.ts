@@ -14,7 +14,9 @@ import { ComposioConnector } from './connectors/composio.ts';
 import { createPgliteDb, createPostgresDb, migratePostgres } from './db/client.ts';
 import { loadEnv } from './env.ts';
 import { createLogger } from './lib/logger.ts';
+import type { FundingPort } from './market/funding.ts';
 import { IntentsInvest } from './market/intents.ts';
+import { IntentsFunding } from './market/intents-funding.ts';
 import { FakeInvest, type InvestPort } from './market/invest.ts';
 import { RealMarket } from './market/real-market.ts';
 import { type ChainPort, FakeChain } from './ports/chain.ts';
@@ -134,11 +136,16 @@ const resolveDeviceKey = async (signerId: string): Promise<string | null> => {
 let chain: ChainPort;
 let market: MarketPort;
 let invest: InvestPort | undefined;
+let funding: FundingPort | undefined;
 let chainNetwork: 'mainnet' | 'testnet' = 'mainnet';
 if (env.NEAR_RPC_URL) {
   const adapter = chainAdapterFromEnv(process.env, {
     resolveDeviceKey,
     relayerHardCeilingYocto: relayerMaxDepositYocto,
+    // The quote cache lives in memory; after a redeploy, rebuild it from the row
+    // the firm quote wrote, so an open card can still build its actions.
+    loadInvestQuote: async (quoteId) =>
+      engineRef ? engineRef.repos.investQuotes.validated(quoteId) : null,
   });
   chain = new RealChain(adapter);
   chainNetwork = adapter.mode.network === 'testnet' ? 'testnet' : 'mainnet';
@@ -153,9 +160,20 @@ if (env.NEAR_RPC_URL) {
   market = new RealMarket(adapter, prices);
   // 1Click has no testnet and quotes mainnet USDC: Invest runs only against a mainnet RPC.
   if (adapter.mode.network === 'mainnet') {
-    invest = new IntentsInvest({ adapter, slippageBps: env.INVEST_SLIPPAGE_BPS });
+    invest = new IntentsInvest({
+      adapter,
+      slippageBps: env.INVEST_SLIPPAGE_BPS,
+      // Late-bound: the engine (and its repos) exist only after createEngine.
+      quotes: {
+        save: (q, v) => (engineRef ? engineRef.repos.investQuotes.save(q, v) : Promise.resolve()),
+        get: (id) => (engineRef ? engineRef.repos.investQuotes.get(id) : Promise.resolve(null)),
+      },
+    });
+    // Top-ups from other chains: 1Click quotes mainnet assets only.
+    funding = new IntentsFunding({ adapter });
   } else {
     log.info('invest off: NEAR_RPC_URL is testnet and 1Click is mainnet-only');
+    log.info('funding off: NEAR_RPC_URL is testnet and 1Click is mainnet-only');
   }
 } else {
   const fake = new FakeChain();
@@ -190,6 +208,7 @@ const engine = createEngine({
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
   market,
   ...(invest ? { invest } : {}),
+  ...(funding ? { funding } : {}),
   relayerMaxDepositYocto,
   registry: createRegistry(),
   ...(env.COMPOSIO_API_KEY

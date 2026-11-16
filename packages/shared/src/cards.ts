@@ -29,6 +29,7 @@ export const KNOWN_CARD_TYPES = [
   'unfreeze',
   'connect',
   'setup',
+  'fund',
 ] as const;
 export type KnownCardType = (typeof KNOWN_CARD_TYPES)[number];
 
@@ -135,6 +136,8 @@ const STYLE: Record<KnownCardType, { color: string; tag: string }> = {
   unfreeze: { color: '#F6A8F0', tag: '◆ UNFREEZE' },
   connect: { color: '#6EA1D6', tag: '⇢ CONNECT' },
   setup: { color: '#6EA1D6', tag: '◈ SET UP' },
+  // Getting ready to use Penny (setup, connect, fund) shares the blue family.
+  fund: { color: '#6EA1D6', tag: '⇢ ADD MONEY' },
 };
 const PLAIN = { color: '#B1C3D8', tag: '● PENNY' };
 
@@ -190,6 +193,8 @@ export function settledPill(type: string): string {
       return 'Connected';
     case 'setup':
       return 'Set up';
+    case 'fund':
+      return 'Added';
     case 'found':
       return 'Found';
     case 'guard_block':

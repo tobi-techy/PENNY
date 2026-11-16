@@ -37,6 +37,8 @@ export function actionOf(plan: Plan): ApprovalAction | null {
     }
     case 'write':
       return { type: 'write', to: `${s('toolkit')}:${s('toolSlug')}`, amount: '0', asset: 'none' };
+    case 'grant_bot':
+      return { type: 'grant_bot', to: `${s('slug')}:${s('toolId')}`, amount: '0', asset: 'none' };
     default:
       return null;
   }
@@ -93,6 +95,8 @@ export function describeAction(x: ApprovalAction): string {
       return `Turn on the bot ${x.to}`;
     case 'write':
       return x.to === 'penny:PENNY_UNFREEZE' ? 'Unfreeze Penny' : `Act in ${x.to.split(':')[0]}`;
+    case 'grant_bot':
+      return `Let ${x.to.split(':')[0]} use ${x.to.split(':')[1]}`;
     default:
       return `${x.type} ${x.amount} ${x.asset} to ${x.to}`;
   }

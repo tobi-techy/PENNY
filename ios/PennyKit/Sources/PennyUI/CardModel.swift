@@ -7,7 +7,7 @@ import SwiftUI
 public enum CardKind: String, CaseIterable, Sendable {
     case invest, send, bill, split, errand, guardBlock, pick, weekly, write, bot
     case reminder, emailDraft, plan, found, done, plain
-    case connect, setup, unfreeze
+    case connect, setup, unfreeze, fund
 
     public var palette: CardPalette {
         switch self {
@@ -26,6 +26,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .done: return .green
         case .connect: return .blue
         case .setup: return .blue
+        case .fund: return .blue
         case .unfreeze: return .guardPink
         case .plain: return .muted
         }
@@ -34,7 +35,7 @@ public enum CardKind: String, CaseIterable, Sendable {
     public var crew: Crew {
         switch self {
         case .invest, .pick: return .invest
-        case .send, .split, .errand, .write, .bot, .reminder, .plan, .done, .plain, .connect, .setup: return .penny
+        case .send, .split, .errand, .write, .bot, .reminder, .plan, .done, .plain, .connect, .setup, .fund: return .penny
         case .bill, .emailDraft, .found: return .mail
         case .guardBlock, .unfreeze: return .guardian
         case .weekly: return .finance
@@ -60,6 +61,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .done: return "✓ DONE"
         case .connect: return "⇢ CONNECT"
         case .setup: return "◈ SET UP"
+        case .fund: return "⇢ ADD MONEY"
         case .unfreeze: return "◆ UNFREEZE"
         case .plain: return "● PENNY"
         }
@@ -77,6 +79,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .unfreeze: return "Unfrozen"
         case .connect: return "Connected"
         case .setup: return "Set up"
+        case .fund: return "Added"
         case .found: return "Found"
         case .guardBlock: return "Blocked"
         default: return "Done"
@@ -103,6 +106,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case "done": self = .done
         case "connect": self = .connect
         case "setup": self = .setup
+        case "fund": self = .fund
         case "unfreeze": self = .unfreeze
         default: self = .plain
         }
@@ -120,6 +124,7 @@ public enum CardKind: String, CaseIterable, Sendable {
         case .errand: self = .errand
         case .createBot: self = .bot
         case .write: self = .write
+        case .grantBot: self = .bot
         }
     }
 }

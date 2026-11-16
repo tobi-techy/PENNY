@@ -19,7 +19,8 @@ export type IdPrefix =
   | 'pky'
   | 'rmd'
   | 'loop'
-  | 'pct';
+  | 'pct'
+  | 'fnd';
 
 export function newId<P extends IdPrefix>(prefix: P): `${P}_${string}` {
   return `${prefix}_${ulid()}`;

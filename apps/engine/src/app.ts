@@ -22,6 +22,8 @@ import { CommitmentsService } from './commitments/service.ts';
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
+import { FinanceCheckinService } from './finance/checkin.ts';
+import { FundingService } from './funding/service.ts';
 import { buildDemoRoutes } from './http/demo.ts';
 import { buildProveRoutes } from './http/prove.ts';
 import { buildRoutes } from './http/routes.ts';
@@ -38,6 +40,7 @@ import {
 import { handleInbound } from './inbound.ts';
 import { sha256Hex } from './lib/crypto.ts';
 import type { Logger } from './lib/logger.ts';
+import type { FundingPort } from './market/funding.ts';
 import type { InvestPort } from './market/invest.ts';
 import { OnboardingService } from './onboarding.ts';
 import type { ChainPort } from './ports/chain.ts';
@@ -50,12 +53,14 @@ import { CommitmentsRepo } from './repo/commitments.ts';
 import { ConnectWatchesRepo } from './repo/connect-watches.ts';
 import { DemoRepo } from './repo/demo.ts';
 import { FollowUpRepo } from './repo/followup.ts';
+import { FundingRepo } from './repo/funding.ts';
 import {
   AttestChallengesRepo,
   GuardDecisionsRepo,
   IdempotencyRepo,
   WebhookEventsRepo,
 } from './repo/infra.ts';
+import { InvestQuotesRepo } from './repo/invest-quotes.ts';
 import { LedgerRepo } from './repo/ledger.ts';
 import { UsersRepo } from './repo/users.ts';
 import { defaultJobs, Scheduler } from './scheduler.ts';
@@ -77,6 +82,8 @@ export type EngineDeps = {
   mainnetMaxDailyUsd?: string;
   relayerMaxDepositYocto?: bigint;
   invest?: InvestPort;
+  /** Adding dollars from another chain (NEAR Intents). Absent = the rail is off. */
+  funding?: FundingPort;
   webhookSecret: string | undefined;
   limits: { perIpPerMin: number; perUserPerMin: number; maxBodyBytes: number };
   tracer?: Tracer;
@@ -129,6 +136,7 @@ export function createEngine(d: EngineDeps) {
     attestChallenges: new AttestChallengesRepo(d.db),
     idempotency: new IdempotencyRepo(d.db),
     guardDecisions: new GuardDecisionsRepo(d.db),
+    investQuotes: new InvestQuotesRepo(d.db),
     bills: new BillsRepo(d.db),
     commitments: new CommitmentsRepo(d.db),
     connectWatches: new ConnectWatchesRepo(d.db),
@@ -136,6 +144,7 @@ export function createEngine(d: EngineDeps) {
     passkeys: new PasskeysRepo(d.db),
     reminders: new RemindersRepo(d.db),
     followup: new FollowUpRepo(d.db),
+    funding: new FundingRepo(d.db),
     demo: new DemoRepo(d.db),
   };
   const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
@@ -151,6 +160,25 @@ export function createEngine(d: EngineDeps) {
   });
   const mood = new MoodService(repos.moods);
   const memory = new MemoryService(d.db, d.embedder);
+  const financeCheckin = new FinanceCheckinService({
+    users: repos.users,
+    ledger: repos.ledger,
+    cards: cardSender,
+    cardsRepo: repos.cards,
+    log: d.log,
+    now,
+    timeZone,
+  });
+  const funding = new FundingService({
+    users: repos.users,
+    cards: cardSender,
+    messaging: d.messaging,
+    repo: repos.funding,
+    log: d.log,
+    now,
+    timeZone,
+    ...(d.funding ? { funding: d.funding } : {}),
+  });
   const proactive = new ProactiveService({
     followup: repos.followup,
     users: repos.users,
@@ -169,6 +197,7 @@ export function createEngine(d: EngineDeps) {
     guardDecisions: repos.guardDecisions,
     registry: d.registry,
     mood,
+    log: d.log,
     approvals: () => {
       if (!approvals) throw new Error('approvals not ready');
       return approvals;
@@ -204,12 +233,14 @@ export function createEngine(d: EngineDeps) {
             toolkit: string,
             slug: string,
             args: Record<string, unknown>,
+            grant?: { slug: string; toolIds: readonly string[] },
           ) =>
-            d.connectors?.executeWrite(userId, toolkit, slug, args) ??
+            d.connectors?.executeWrite(userId, toolkit, slug, args, grant) ??
             Promise.reject(new Error('no connector')),
         }
       : {}),
     onBotApproved: (id) => botService.onApprovalSettled(id),
+    onGrantApproved: (id, toolId, botId) => botService.onGrantApproved(id, toolId, botId),
     onBillPaid: (userId, billId, receipt) => bills.markPaid(userId, billId, receipt),
     recheckBill: (userId, billId) => bills.recheckBill(userId, billId),
     onNeedsSetup: async (userId, space) => {
@@ -287,9 +318,12 @@ export function createEngine(d: EngineDeps) {
     mood,
     followup: proactive,
     market: d.market,
+    finance: financeCheckin,
+    funding,
     botOps: {
       draft: (u, p, s) => botService.draft(u, p, s),
       confirm: (u, s) => botService.confirm(u, s),
+      requestTool: (u, b, tool, why, s) => botService.requestTool(u, b, tool, why, s),
     },
     everyday: { cards: cardSender, reminders: repos.reminders, now },
     tracer: d.tracer ?? noopTracer,
@@ -598,10 +632,13 @@ export function createEngine(d: EngineDeps) {
       reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
       pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
+      pruneInvestQuotes: (olderThan) => repos.investQuotes.prune(olderThan),
       ...(d.demo ? { pruneDemoSessions: (now: Date) => repos.demo.prune(now) } : {}),
       weeklyReflection: async (now) => {
         await reflection.reflectWeekly(now);
       },
+      weeklyCheckin: (now) => financeCheckin.run(now),
+      fundingStatus: (now) => funding.poll(now),
       ...(d.connectors
         ? {
             scanBills: async () => {
@@ -634,6 +671,8 @@ export function createEngine(d: EngineDeps) {
       memory,
       proactive,
       reflection,
+      financeCheckin,
+      funding,
       scheduler,
     },
   };

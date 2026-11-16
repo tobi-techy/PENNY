@@ -89,7 +89,13 @@ export type SchedulerJobDeps = {
   reconcileStuckSigned?: () => Promise<unknown>;
   pruneWebhookEvents: (olderThan: Date) => Promise<void>;
   pruneIdempotency: (olderThan: Date) => Promise<void>;
+  /** Drop invest quotes no open card can point at any more. */
+  pruneInvestQuotes?: (olderThan: Date) => Promise<void>;
   weeklyReflection?: (now: Date) => Promise<void>;
+  /** Finance's weekly check-in card (once per user per seven days). */
+  weeklyCheckin?: (now: Date) => Promise<unknown>;
+  /** Follow open top-ups from other chains until the dollars land (or expire). */
+  fundingStatus?: (now: Date) => Promise<unknown>;
   /** Check connected inboxes for new bills and tell the user. */
   scanBills?: () => Promise<void>;
   /** One quiet check when an expected bill has not arrived. */
@@ -120,6 +126,15 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       run: async (now) => d.pruneIdempotency(new Date(now.getTime() - DAY)),
     },
   ];
+  if (d.pruneInvestQuotes) {
+    const prune = d.pruneInvestQuotes;
+    jobs.push({
+      name: 'prune_invest_quotes',
+      // An hour past expiry: no card can be signed from a quote that old.
+      everyMs: HOUR,
+      run: async (now) => prune(new Date(now.getTime() - HOUR)),
+    });
+  }
   if (d.pruneDemoSessions) {
     const prune = d.pruneDemoSessions;
     jobs.push({
@@ -187,6 +202,25 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       everyMs: HOUR,
       anchorOnStart: true,
       run: d.weeklyReflection,
+    });
+  }
+  if (d.weeklyCheckin) {
+    // Checked hourly; the last check-in card per user is the watermark.
+    const checkin = d.weeklyCheckin;
+    jobs.push({
+      name: 'weekly_checkin',
+      everyMs: HOUR,
+      anchorOnStart: true,
+      run: async (now) => void (await checkin(now)),
+    });
+  }
+  if (d.fundingStatus) {
+    // A deposit usually lands in a minute or two; no model call on this path.
+    const poll = d.fundingStatus;
+    jobs.push({
+      name: 'funding_status',
+      everyMs: 60_000,
+      run: async (now) => void (await poll(now)),
     });
   }
   return jobs;

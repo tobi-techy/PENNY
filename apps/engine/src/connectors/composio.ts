@@ -3,6 +3,7 @@ import { VercelProvider } from '@composio/vercel';
 import type { ToolSet } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
+import { ALL_TOOLKITS, toolkitsForBot } from './toolkits.ts';
 
 /**
  * Composio Platform is Penny's connector layer: users connect their own
@@ -27,8 +28,12 @@ export type ConnectResult =
 
 export interface ConnectorPort {
   readonly name: string;
-  /** AI SDK tools for this user + bot, already gated. */
-  toolsFor(userId: string, botSlug: string): Promise<ToolSet>;
+  /**
+   * AI SDK tools for this user + bot, already gated. `grant.toolIds` is the bot's
+   * grant list: it decides which apps are loaded (a custom bot gets exactly the
+   * apps its granted tools name).
+   */
+  toolsFor(userId: string, botSlug: string, grant?: ConnectorGrant): Promise<ToolSet>;
   /**
    * Connected already, or a Connect Link for the user to authorize. `callbackUrl`
    * is where the browser lands after authorizing.
@@ -42,6 +47,7 @@ export interface ConnectorPort {
     botSlug: string,
     slug: string,
     args: Record<string, unknown>,
+    grant?: ConnectorGrant,
   ): Promise<unknown>;
   /** Execute one write tool in a toolkit. Only ApprovalService calls this, after approval. */
   executeWrite(
@@ -49,23 +55,16 @@ export interface ConnectorPort {
     toolkit: string,
     slug: string,
     args: Record<string, unknown>,
+    grant?: ConnectorGrant,
   ): Promise<unknown>;
 }
 
-/** Explicit toolkits per bot. Bots not listed get the default pair; null = no connector tools. */
-const TOOLKITS_BY_BOT: Record<string, string[] | null> = {
-  penny: ['gmail', 'github'],
-  mail: ['gmail'],
-  finance: ['gmail'],
-  errand: ['gmail', 'github'],
-  invest: null,
-  guard: null,
-};
-const DEFAULT_TOOLKITS = ['gmail', 'github'];
+/** Explicit toolkits per bot live in toolkits.ts; re-exported for callers that only know a slug. */
+export { ALL_TOOLKITS, TOOLKIT_FOR_TOOL, toolkitsForTools } from './toolkits.ts';
+export { toolkitsForBot };
 
-export function toolkitsForBot(botSlug: string): string[] | null {
-  return botSlug in TOOLKITS_BY_BOT ? (TOOLKITS_BY_BOT[botSlug] ?? null) : DEFAULT_TOOLKITS;
-}
+/** A bot's grants, when the caller has the row: they decide which apps are loaded. */
+export type ConnectorGrant = { slug?: string; toolIds?: readonly string[] };
 
 const READ_SEGMENTS = new Set([
   'GET',
@@ -170,23 +169,20 @@ export function blockedSlugIn(name: string, args: unknown): string | null {
   return null;
 }
 
-/** Every toolkit some bot may use. A write outside this set is never approvable. */
-const ALL_TOOLKITS = new Set(
-  [...Object.values(TOOLKITS_BY_BOT), DEFAULT_TOOLKITS].flatMap((t) => t ?? []),
-);
-
 /**
  * Why a write target may not be approved or executed, or null when it may.
  * Checked when the card is created and again right before execution:
  * - never a meta tool or a removed (sandbox) tool, never a read slug;
  * - the slug must belong to the named toolkit (GMAIL_* for gmail), so the
  *   card's "App" fact cannot disagree with what actually runs;
- * - the toolkit must be one the proposing bot may use (any bot's, at execution).
+ * - the toolkit must be one the proposing bot may use. The bot's grant list
+ *   decides that when the caller has it; without a bot, any known toolkit.
  */
 export function writeTargetProblem(
   toolkit: string,
   slug: string,
   botSlug?: string | null,
+  toolIds?: readonly string[],
 ): string | null {
   const s = slug.toUpperCase();
   if (s.startsWith('COMPOSIO_') || REMOVED_TOOLS.has(s))
@@ -195,7 +191,7 @@ export function writeTargetProblem(
   const prefix = `${toolkit.toUpperCase().replace(/-/g, '_')}_`;
   if (!s.startsWith(prefix)) return `action ${s} does not belong to ${toolkit}`;
   const allowed =
-    botSlug === undefined ? [...ALL_TOOLKITS] : (toolkitsForBot(botSlug ?? 'penny') ?? []);
+    botSlug === undefined ? [...ALL_TOOLKITS] : (toolkitsForBot(botSlug, toolIds) ?? []);
   if (!allowed.includes(toolkit)) return `${toolkit} is not enabled for this bot`;
   return null;
 }
@@ -300,8 +296,7 @@ export class ComposioConnector implements ConnectorPort {
     this.firewall = opts.firewall ?? false;
   }
 
-  private sessionFor(userId: string, botSlug: string): Promise<SessionLike> | null {
-    const toolkits = toolkitsForBot(botSlug);
+  private sessionFor(userId: string, toolkits: string[] | null): Promise<SessionLike> | null {
     if (!toolkits) return null;
     const key = `${userId}:${toolkits.join(',')}`;
     const cached = this.sessions.get(key);
@@ -325,8 +320,8 @@ export class ComposioConnector implements ConnectorPort {
     return pending;
   }
 
-  async toolsFor(userId: string, botSlug: string): Promise<ToolSet> {
-    const session = this.sessionFor(userId, botSlug);
+  async toolsFor(userId: string, botSlug: string, grant?: ConnectorGrant): Promise<ToolSet> {
+    const session = this.sessionFor(userId, toolkitsForBot(botSlug, grant?.toolIds));
     if (!session) return {};
     return gateComposioTools(await (await session).tools());
   }
@@ -337,7 +332,9 @@ export class ComposioConnector implements ConnectorPort {
     opts: { callbackUrl?: string } = {},
   ): Promise<ConnectResult> {
     try {
-      const session = this.sessionFor(userId, 'penny');
+      // A session for this one app: connecting X should not require the x toolkit
+      // to already be granted to some bot.
+      const session = this.sessionFor(userId, [toolkit]);
       if (!session) return { status: 'unavailable', toolkit, reason: 'connectors off' };
       const s = await session;
       const state = await s.toolkits();
@@ -358,7 +355,7 @@ export class ComposioConnector implements ConnectorPort {
 
   async isConnected(userId: string, toolkit: string): Promise<boolean> {
     try {
-      const session = this.sessionFor(userId, 'penny');
+      const session = this.sessionFor(userId, [toolkit]);
       if (!session) return false;
       const state = await (await session).toolkits();
       return Boolean(state.items.find((i) => i.slug === toolkit)?.connection?.isActive);
@@ -372,9 +369,10 @@ export class ComposioConnector implements ConnectorPort {
     botSlug: string,
     slug: string,
     args: Record<string, unknown>,
+    grant?: ConnectorGrant,
   ): Promise<unknown> {
     if (!isReadSlug(slug)) throw new Error(`executeRead refused non-read slug ${slug}`);
-    const session = this.sessionFor(userId, botSlug);
+    const session = this.sessionFor(userId, toolkitsForBot(botSlug, grant?.toolIds));
     if (!session) throw new Error('connectors off for this bot');
     return (await session).execute(slug, args);
   }
@@ -384,10 +382,12 @@ export class ComposioConnector implements ConnectorPort {
     toolkit: string,
     slug: string,
     args: Record<string, unknown>,
+    grant?: ConnectorGrant,
   ): Promise<unknown> {
-    const problem = writeTargetProblem(toolkit, slug);
+    const problem = writeTargetProblem(toolkit, slug, grant?.slug, grant?.toolIds);
     if (problem) throw new Error(`executeWrite refused: ${problem}`);
-    const session = this.sessionFor(userId, toolkit === 'gmail' ? 'mail' : 'penny');
+    // The write names its own app, so the session needs exactly that toolkit.
+    const session = this.sessionFor(userId, [toolkit]);
     if (!session) throw new Error('connectors off for this toolkit');
     return (await session).execute(slug, args);
   }
@@ -398,9 +398,12 @@ export class FakeConnector implements ConnectorPort {
   readonly name = 'fake';
   readonly searched: string[] = [];
   readonly writes: { slug: string; args: Record<string, unknown> }[] = [];
+  /** Toolkits the last toolsFor call asked for, so tests can see what a grant loaded. */
+  toolkits: string[] = [];
   private readonly connected = new Set<string>();
 
-  async toolsFor(_userId: string, _botSlug: string): Promise<ToolSet> {
+  async toolsFor(_userId: string, botSlug: string, grant?: ConnectorGrant): Promise<ToolSet> {
+    this.toolkits = toolkitsForBot(botSlug, grant?.toolIds) ?? [];
     return gateComposioTools({
       fake_search_mail: tool({
         description: 'Search connected mail (fake).',
@@ -440,6 +443,7 @@ export class FakeConnector implements ConnectorPort {
     _botSlug: string,
     slug: string,
     args: Record<string, unknown>,
+    _grant?: ConnectorGrant,
   ): Promise<unknown> {
     if (!isReadSlug(slug)) throw new Error(`executeRead refused non-read slug ${slug}`);
     this.searched.push(String(args.query ?? ''));
@@ -462,8 +466,9 @@ export class FakeConnector implements ConnectorPort {
     toolkit: string,
     slug: string,
     args: Record<string, unknown>,
+    grant?: ConnectorGrant,
   ): Promise<unknown> {
-    const problem = writeTargetProblem(toolkit, slug);
+    const problem = writeTargetProblem(toolkit, slug, grant?.slug, grant?.toolIds);
     if (problem) throw new Error(`executeWrite refused: ${problem}`);
     this.writes.push({ slug, args });
     return { successful: true, data: { id: 'fake-write-1' } };
