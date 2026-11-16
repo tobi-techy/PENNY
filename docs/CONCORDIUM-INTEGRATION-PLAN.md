@@ -1,6 +1,8 @@
 # Deep Concordium integration: plan
 
-Status as of 13 Nov 2026. Supersedes the engine sections of `docs/CONCORDIUM.md` where they disagree.
+## Status (16 Nov 2026)
+
+Phase 1 complete: cards rebuilt against `https://penny-passport.vercel.app`, deployed, re-pinned (pin TXs in `CONCORDIUM_PROOF.md`), all four badges green. Nothing pushed yet; the plan's Phase 1.4 (CI drift check) and the Phase 2/3 items below are next.
 
 ## Where we actually are
 

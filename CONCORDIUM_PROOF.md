@@ -3,13 +3,13 @@
 Network: testnet (`ccd:4221332d34e1694168c2a0c0b3fd0f27`)
 Owner account: `3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT`
 Contracts: CIS-8004 `<12802,0>`, CIS-8 `<12801,0>`
-Checked: 2026-11-16T10:21:32.101Z
+Checked: 2026-11-16T10:25:14.074Z
 
 ## Badges
 
 | Agent | Token | Badge | Verified | Card hash | Owner | Verification block | Register | Pin |
 |---|---|---|---|---|---|---|---|---|
-| Penny | 1169 | `JyP9Wd81dn3JwiAs6agks` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b) | [pin](https://ccdexplorer.io/testnet/transaction/5693430951b8594cafa486704f21ade2e2658a20796bea85fc21b089d94effa0) |
+| Penny | 1169 | `JyP9Wd81dn3JwiAs6agks` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b) | [pin](https://ccdexplorer.io/testnet/transaction/3d52e2e26098cef61dd818892bf182cfb842a4a3b6e7f8c3668b5fbf7f6a06e4) |
 | Guard | 1170 | `JyP9WeDVZoYEmqQfdWWtd` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/c48114d5e1cc4b378ecd7eb38b4c8de997c8f16ccfa3d9aa69054b0080c6d634) | [pin](https://ccdexplorer.io/testnet/transaction/6d91db5cad09a03de2a2da90506dcf9f797597d5105ec7694eab9799ca4a45af) |
 | Invest | 1171 | `JyP9WfJyVq3AbxeVcM9Sp` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/4c8578f65e304502c79d08567d4706f008378520205212acccf5da8c1573f6f7) | [pin](https://ccdexplorer.io/testnet/transaction/276456886bc419defe58d7ec7ba899d35d3c3b4b3be394ac61989a0e6b889db2) |
 | Mail | 1172 | `JyP9WgQTRrY6S5tFdiQi3` | yes | yes | yes | yes | [register](https://ccdexplorer.io/testnet/transaction/b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb) | [pin](https://ccdexplorer.io/testnet/transaction/956931d2a7c2fed71a33ad1f068e6fd5bf4d4c0362e422f72a31eaaaa6fba400) |
@@ -32,14 +32,20 @@ curl -s "https://agent-registry-mcp.concordium.com/v1/check-badge/<badge>?networ
 
 Every check above is computed from the registry MCP response and the served card bytes. The script does not trust the cards or the owner's local state.
 
-## Hosting caveat
+## Hosting
 
-During this spike the cards are served from a temporary ngrok tunnel. The on-chain pins are correct, but the URLs stop resolving when the tunnel closes. Before submission, rebuild the cards against the stable base URL and re-pin each hash:
+Cards and passport pages are served from the permanent static host
+`https://penny-passport.vercel.app` (source: `apps/engine/public-static`,
+regenerated with `bun run concordium:export`). The card URL is part of the
+hashed, on-chain-pinned bytes, so a host change requires rebuilding the cards
+with the new `CONCORDIUM_CARD_BASE_URL`, re-pin, and redeploy:
 
 ```bash
-CONCORDIUM_CARD_BASE_URL=https://raw.githubusercontent.com/tobi-techy/PENNY/main \
+CONCORDIUM_CARD_BASE_URL=https://penny-passport.vercel.app \
   node scripts/concordium/build-cards.mjs penny guard invest mail
-node scripts/concordium/register.mjs pin penny https://raw.githubusercontent.com/tobi-techy/PENNY/main/agents/penny/agent-card.json
+bun run concordium:export
+cd apps/engine/public-static && vercel --yes --prod
+node scripts/concordium/register.mjs pin penny https://penny-passport.vercel.app/agents/penny/agent-card.json
 # repeat pin for guard, invest, and mail
 ```
 

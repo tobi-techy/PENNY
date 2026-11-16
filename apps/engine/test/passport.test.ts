@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -118,7 +119,14 @@ describe('passport pages', () => {
       expect(card.status).toBe(200);
       const raw = await card.text();
       const digest = new Bun.CryptoHasher('sha256').update(raw).digest('hex');
-      expect(digest).toBe('6f10957ecc9ab4dbbe8e0e85e49a76a0f55fd55ec794210fc9f0593c4633cb67');
+      // The pin comes from the config, not a literal, so a host change does not
+      // break this test: the route must serve bytes that hash to the pin.
+      const pinned = JSON.parse(readFileSync(configPath, 'utf8')) as {
+        agents: { slug: string; cardSha256: string }[];
+      };
+      const pennyPin = pinned.agents.find((a) => a.slug === 'penny')?.cardSha256;
+      if (!pennyPin) throw new Error('penny missing from concordium config');
+      expect(digest).toBe(pennyPin);
 
       const page = await t.engine.app.request('/agents/penny');
       expect(page.status).toBe(200);

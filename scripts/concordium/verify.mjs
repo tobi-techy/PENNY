@@ -102,14 +102,20 @@ curl -s "https://agent-registry-mcp.concordium.com/v1/check-badge/<badge>?networ
 
 Every check above is computed from the registry MCP response and the served card bytes. The script does not trust the cards or the owner's local state.
 
-## Hosting caveat
+## Hosting
 
-During this spike the cards are served from a temporary ngrok tunnel. The on-chain pins are correct, but the URLs stop resolving when the tunnel closes. Before submission, rebuild the cards against the stable base URL and re-pin each hash:
+Cards and passport pages are served from the permanent static host
+\`https://penny-passport.vercel.app\` (source: \`apps/engine/public-static\`,
+regenerated with \`bun run concordium:export\`). The card URL is part of the
+hashed, on-chain-pinned bytes, so a host change requires rebuilding the cards
+with the new \`CONCORDIUM_CARD_BASE_URL\`, re-pin, and redeploy:
 
 \`\`\`bash
-CONCORDIUM_CARD_BASE_URL=https://raw.githubusercontent.com/tobi-techy/PENNY/main \\
+CONCORDIUM_CARD_BASE_URL=https://penny-passport.vercel.app \\
   node scripts/concordium/build-cards.mjs penny guard invest mail
-node scripts/concordium/register.mjs pin penny https://raw.githubusercontent.com/tobi-techy/PENNY/main/agents/penny/agent-card.json
+bun run concordium:export
+cd apps/engine/public-static && vercel --yes --prod
+node scripts/concordium/register.mjs pin penny https://penny-passport.vercel.app/agents/penny/agent-card.json
 # repeat pin for guard, invest, and mail
 \`\`\`
 

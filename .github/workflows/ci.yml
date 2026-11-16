@@ -3,6 +3,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The card URL is inside the hashed, on-chain-pinned bytes, so a dead card
+  # host silently turns four valid badges invalid. Re-verify on a schedule so
+  # that fails loudly instead of surfacing in a judge's browser.
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -58,3 +64,13 @@ jobs:
         with:
           scan-args: --lockfile=bun.lock
         continue-on-error: true
+  concordium-badges:
+    runs-on: ubuntu-latest
+    # Badge liveness against the public registry. No secrets; reads only
+    # config/concordium-agents.json and the deployed card host.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --dns-result-order=ipv4first scripts/concordium/verify.mjs

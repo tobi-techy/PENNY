@@ -13,16 +13,15 @@ Owner account: `3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT`, created by 
 
 | Agent | Token | Badge | Card SHA-256 |
 |---|---|---|---|
-| Penny | 1169 | `JyP9Wd81dn3JwiAs6agks` | `6f10957ecc9ab4dbbe8e0e85e49a76a0f55fd55ec794210fc9f0593c4633cb67` |
-| Guard | 1170 | `JyP9WeDVZoYEmqQfdWWtd` | `073146dee5986e4e443e18c6e37571fb6a6479e44bd64ee7ac5e5bc0b707bdb5` |
-| Invest | 1171 | `JyP9WfJyVq3AbxeVcM9Sp` | `e5ee628c0c87ed65b37e25217d456dd6ce05614399f090d9bac6d8f66a7113eb` |
-| Mail | 1172 | `JyP9WgQTRrY6S5tFdiQi3` | `c817c8f3f8b4ba1d9c7679c82ae1770aa69581d3051ed2a8312906ddb2767bf9` |
+| Penny | 1169 | `JyP9Wd81dn3JwiAs6agks` | `3484d6ce155fac839e27dceaf9ff6e98f6df71ec6af5b1f1c2131dc245f25e44` |
+| Guard | 1170 | `JyP9WeDVZoYEmqQfdWWtd` | `8414adfb9dc5c6e71e55f284a9690ac09e60e87160ee76522221cf32c2e41ffb` |
+| Invest | 1171 | `JyP9WfJyVq3AbxeVcM9Sp` | `526367d2c3d51e52cdf6540acd8cc640780c3bd97fc4607aceb8e1cef1ea3497` |
+| Mail | 1172 | `JyP9WgQTRrY6S5tFdiQi3` | `2832e329e65a1dbb584fd7792205cd70968e7d49f41d1218b6987430bc2f1dbe` |
 
-Every badge returns `badge_valid: true` with zero issues, including `hash_matches_on_chain`, `owner_matches`, `verification_present`, and `verify_url_matches`. Public facts live in `config/concordium-agents.json`; the generated evidence is in `CONCORDIUM_PROOF.md`; the reproof command is `node scripts/concordium/verify.mjs`.
+Every badge returns `badge_valid: true` with zero issues, including `hash_matches_on_chain`, `owner_matches`, `verification_present`, and `verify_url_matches`. Cards are served from the permanent Vercel host `https://penny-passport.vercel.app` (re-pinned 16 Nov 2026; pin TXs in `CONCORDIUM_PROOF.md`). Public facts live in `config/concordium-agents.json`; the generated evidence is in `CONCORDIUM_PROOF.md`; the reproof command is `node scripts/concordium/verify.mjs`.
 
-Two caveats:
+One caveat:
 
-- The cards are currently served from a temporary ngrok tunnel. Rebuild them against the repository URL and re-pin each hash before submission.
 - CIS-8 is not bound yet because no operator NEAR key is present in this environment.
 
 ## 1. What we are building
@@ -147,7 +146,7 @@ For each agent, in order: Penny, Guard, Invest, Mail.
 5. `build_agent_card` with the token id, name, description, skills, owner account, and card URL. The result includes the badge extension and a `metadata_hash_hex`.
 6. Post-process deterministically: add `type`, `image`, `active: true`, `x402Support: false`, `documentationUrl`. Do not add timestamps or random values.
 7. Write the exact UTF-8 bytes to `agents/<slug>/agent-card.json`. Compute SHA-256 locally. This is the hash that must be pinned.
-8. Host the file. For the hackathon, `https://raw.githubusercontent.com/tobi-techy/PENNY/main/agents/<slug>/agent-card.json` is the `agent_uri`. The engine also serves the same bytes at `/agents/<slug>/agent-card.json` for production.
+8. Host the file. The permanent host is the static export at `https://penny-passport.vercel.app/agents/<slug>/agent-card.json` (regenerated with `bun run concordium:export` and deployed from `apps/engine/public-static`). The engine also serves the same bytes at `/agents/<slug>/agent-card.json`.
 9. Fetch the hosted URL and confirm the served SHA-256 equals the local hash. Do not pin a hash you have not seen served.
 10. `build_set_agent_uri` with the token id, `agent_uri`, `metadata_hash_hex`, and sender. The web-sdk `setAgentURI` parameter uses the double-nested newtype shape `{ Some: [[...32 bytes]] }`. Sign, submit, wait.
 11. `check-badge` on the badge. Require `badge_valid`, `status_active`, `hash_matches_on_chain`, `owner_matches`, `extension_conformant`, `contracts_match`, and `verification_present`.
