@@ -281,22 +281,27 @@ Phase 1 is informational. Phase 2, if time: when a badge is explicitly claimed f
 
 ## 10. Demo script, 3 minutes
 
+Current as of 16 Nov 2026. Beats marked **[built]** are demonstrated, not described. The x402 beat is marked **[partial]** and must be recorded as such until the three-account provisioning lands (see `docs/CONCORDIUM-AGENT-PAYMENTS.md`).
+
 | Time | Beat |
 |---|---|
-| 0:00 to 0:10 | Penny is a crew in iMessage that already moves money. The missing piece is proof of who is accountable. |
-| 0:10 to 0:35 | Text: "send $25 to amara.testnet for the tap fix." Penny routes, Guard checks limits, the card appears. |
-| 0:35 to 1:00 | Face ID. The card flips to Sent. Show the NearBlocks testnet receipt. The key never left the phone. |
-| 1:00 to 1:25 | Text: "who's behind you?" Penny sends the passport link. Show Penny, Guard, Invest, Mail, badge strings, owner account. |
-| 1:25 to 1:50 | Open the MCP `check-badge` result. Show `badge_valid: true`, `owner_matches`, `hash_matches_on_chain`. |
-| 1:50 to 2:20 | Text: "check amara's agent before I pay her." Penny calls `verify_agent` and returns the verdict in the thread. |
-| 2:20 to 2:40 | Architecture: NEAR is the money rail, Concordium is the accountability rail. One owner, four agents. |
-| 2:40 to 3:00 | Production path: mainnet owner identity, mainnet registry, badge check before deals, grants programme. |
+| 0:00–0:10 | Penny is a crew in iMessage that already moves money. The missing piece is proof of who is accountable. |
+| 0:10–0:35 | **[built]** Text: "send $25 to amara.testnet for the tap fix." Penny routes, Guard checks limits, the card appears. |
+| 0:35–0:55 | **[built]** Face ID. The card flips to Sent. Show the NearBlocks testnet receipt. The key never left the phone. |
+| 0:55–1:20 | **[built]** Text: "who's behind you?" Penny sends `https://penny-passport.vercel.app/agents/penny`. Show the badge, owner, card hash, and the pin link. |
+| 1:20–1:45 | **[built]** Hit the registry directly: `check-badge` returns `badge_valid: true`, `owner_matches`, `hash_matches_on_chain`, `verification_present`. Then re-fetch the card and hash the served bytes to prove they match the pin. |
+| 1:45–2:05 | **[built]** Text: "check amara's agent before I pay her." `verify_agent` answers in the thread with a verdict and evidence. |
+| 2:05–2:30 | **[built]** CIS-8. Open `penny-passport.vercel.app/agents/penny` and point at "Also answers to penny-tobi.testnet". The NEAR address resolves to token 1169 — no website required to believe it. |
+| 2:30–2:50 | **[partial]** x402. `curl` the paid endpoint: 402 with a price, `payTo` taken from Guard's on-chain wallet. Retry as an agent with no badge and show it refused *before* being charged. Say plainly that settlement needs three distinct accounts and is not claimed yet. |
+| 2:50–3:00 | Architecture: NEAR is the money rail, Concordium is the accountability rail. One owner, four agents. |
 
-Record a backup take. Do not rely on live model latency for the money card; pre-warm the conversation and keep the prompts short.
+Rules for recording: do not rely on live model latency for the money card; pre-warm the conversation and keep prompts short. Record a backup take. Never show a terminal containing a seed, key, or `.env`.
 
 ## 11. Path to production paragraph
 
-Penny already runs a multi-agent crew in iMessage with non-custodial NEAR accounts, Face ID approvals, Guard spending limits, and TEE-attested inference. This build adds Concordium as the accountability rail: four core agents are registered in CIS-8004 on Concordium testnet, each with a public Agent Card and a Verified by Concordium badge that any counterparty can resolve on-chain or through the Agent Registry MCP service. Production means one mainnet owner account created with a production Concordium identity, the same cards pinned to `<10082,0>`, and a badge check before any agent-to-agent deal. NEAR remains the settlement rail; no user funds or keys move to Concordium. The remaining work is operational: a mainnet registration run, key management for the owner account, resolver monitoring, and a policy that blocks a false badge claim. We will not claim EU AI Act compliance; the append-only approval and Guard records are designed to support Article 12 record-keeping, and we will map them with counsel before making that claim.
+Penny already runs a multi-agent crew in iMessage with non-custodial NEAR accounts, Face ID approvals, Guard spending limits, and TEE-attested inference. This build adds Concordium as the accountability rail: four core agents are registered in CIS-8004 on testnet, each with a public Agent Card whose bytes are pinned on chain and a Verified by Concordium badge any counterparty can resolve directly, over MCP, or from an HTTPS URL. Penny's NEAR operator key is bound through CIS-8, so the address it already uses resolves back to token 1169 without trusting a web page. An x402 payment path is built and verified up to settlement: a self-hosted facilitator that sponsors the fee, a seller whose `payTo` comes from the registry rather than a constant, and a gate that refuses buyers without a badge before charging them.
+
+Production means one mainnet owner account created with a production Concordium identity provider — the testnet credential here is a test artefact and is described as one — the same cards pinned to `<10082,0>`, the key binding on `<10081,0>`, and owner key material moved from a local `0600` file into a managed signer with rotation. The registration scripts take only signatures, so the operator key never has to share a machine with the signing flow. Badge checks sit inside a payment path, so the resolver must be monitored and must fail closed; that policy is implemented and needs alerting. Closing the three-account gap turns the x402 path into a real settled agent-to-agent payment. NEAR remains the settlement rail for user money and no user funds or keys move to Concordium. We do not claim EU AI Act compliance: the append-only approval and Guard records are designed to support Article 12 record-keeping, and we will map them with counsel before making that claim.
 
 ## 12. Risks and mitigations
 
