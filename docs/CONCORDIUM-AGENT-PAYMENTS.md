@@ -159,3 +159,15 @@ and set Guard's `payTo` to the third account, ideally as a real CIS-8004 `setAge
 
 Each stage needs its own faucet drop. Until that is done, the loop is verified up to the point of settlement and no further.
 
+### Attempted 16 Nov: two routes, both blocked
+
+**Route 1 — new identities from a scratch directory. Fails at issuance.** `issueIdentity()` pins `ipIdentity === 0` in two places (`register.mjs:245`, and `deployCredential` around `:315`), and that provider is the one every account so far was issued under. On 16 Nov its host was intermittently unreachable:
+`id-service.testnet.concordium.com` failed DNS (`ENOTFOUND`, `curl` code `000`) at first, then answered `500`. The two other testnet providers listed by `wallet-proxy/v1/ip_info` are alive — ipIdentity 3 (`concordium.staging.digitaltrustsolutions.nl/entry/v1/stg`) and ipIdentity 5 (`api.dataspike.io/api/concordium/testnet/identity`) — both answer `400` to a bare `GET`, which is the expected response for a POST endpoint. Using them means parameterising the provider (currently hardcoded) **and** completing that provider's own onboarding; Dataspike's flow expects an API key. Not attempted.
+
+**Route 2 — extra credentials from the existing identity. Implemented, rejected by the network.** A Concordium identity can hold several accounts, and no identity provider is involved in deploying another credential, so this avoids the dead provider entirely. `scripts/concordium/register.mjs extra --cred 1` builds the credential from the seed already on disk plus `state.idObject`, deploys it, and funds it; results land under `state.extra` so the owner account in `state.json` is never touched.
+
+It is rejected by the node with `RpcError: The credential deployment contained invalid signatures` (`SendBlockItem`, `INVALID_ARGUMENT`). Both plausible signing-key derivations were tried — `getAccountSigningKey(0, 0, 0)` and `getAccountSigningKey(0, credNumber, 0)` for `credNumber = 1` — and the node rejected each. The credential's declared `verifyKey` is masked as `*****` by the SDK, so the mismatch could not be read off directly. Unresolved; the stage is left in place because it is additive and correct as far as it goes, but it is **not** a working provisioning path and should not be described as one.
+
+Practical consequence: the three-account setup is not available on testnet through the tooling in this repo today. A demo that must show a settled x402 payment needs either a working identity provider configuration or an account funded from outside this repo.
+
+

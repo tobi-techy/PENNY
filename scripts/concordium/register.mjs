@@ -351,6 +351,104 @@ async function deployCredential(state, seed, signingKey) {
   assertOk(json, 'credential deployment');
 }
 
+// A second (or third) account from the SAME identity.
+//
+// Concordium identities allow many accounts, and the credential's keys are
+// derived from the seed plus a credential number, so no new identity is needed.
+// That matters right now: issueIdentity pins testnet ipIdentity 0, and that
+// provider's host no longer resolves, so minting a fresh identity is impossible.
+// Deploying another credential does not touch the provider's web host at all.
+//
+// Deliberately does not reuse deployCredential(), which overwrites the owner
+// account in state.json. These accounts are recorded under state.extra instead.
+async function deployExtraCredential(state, seed, signingKey, credNumber) {
+  const provs = await (
+    await fetch(`${WP}/v1/ip_info`, { signal: AbortSignal.timeout(20000) })
+  ).json();
+  const p0 = provs.find((x) => x.ipInfo?.ipIdentity === 0);
+  if (!p0) throw new Error('testnet ipIdentity 0 not found');
+  const gp = await client.getCryptographicParameters();
+  const ars = [];
+  for await (const a of client.getAnonymityRevokers()) ars.push(a);
+  const arsInfos = Object.fromEntries(ars.map((a) => [String(a.arIdentity), a]));
+  const expiry = sdk.TransactionExpiry.fromDate(new Date(Date.now() + 60 * 60 * 1000));
+  const cdt = sdk.createCredentialTransaction(
+    {
+      ipInfo: {
+        ...p0.ipInfo,
+        ipRealName: p0.ipInfo.ipDescription?.name ?? 'Concordium testnet identity provider',
+      },
+      globalContext: gp,
+      arsInfos,
+      idObject: state.idObject.value ?? state.idObject,
+      revealedAttributes: [],
+      credNumber,
+      seedAsHex: seed,
+      net: 'Testnet',
+      identityIndex: 0,
+    },
+    expiry,
+  );
+  const signature = await sdk.signCredentialTransaction(cdt, signingKey);
+  const payload = sdk.serializeCredentialDeploymentPayload([signature], cdt);
+  const credId = cdt.unsignedCdi.values?.credId ?? cdt.unsignedCdi.credId;
+  const address = sdk.AccountAddress.toBase58(sdk.getAccountAddress(credId));
+  log(`account ${credNumber} (precomputed):`, address);
+  const txHash = sdk.TransactionHash.toHexString(
+    await client.sendCredentialDeploymentTransaction(payload, expiry),
+  );
+  log(`credential ${credNumber} deployment sent`, txHash, EXPLORER(txHash));
+  const { json } = await finalize(txHash, `cred${credNumber}`);
+  assertOk(json, `credential ${credNumber}`);
+  state.extra = { ...(state.extra ?? {}), [credNumber]: { address, credTx: txHash } };
+  saveState(state);
+  return address;
+}
+
+async function fundAddress(state, address) {
+  for (let i = 0; i < MAX_DROPS; i++) {
+    const bal = await balance(address);
+    if (bal >= MIN_BALANCE) {
+      log(`${address} balance CCD:`, Number(bal) / 1e6);
+      return bal;
+    }
+    const r = await fetch(`${WP}/v0/testnetGTUDrop/${address}`, {
+      method: 'PUT',
+      signal: AbortSignal.timeout(20000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.submissionId) throw new Error(`faucet: ${r.status} ${JSON.stringify(j).slice(0, 200)}`);
+    log('GTU drop sent', j.submissionId);
+    await finalize(j.submissionId, 'drop').catch((e) => log('drop wait:', e.message));
+    await new Promise((r2) => setTimeout(r2, 2000));
+  }
+  const bal = await balance(address);
+  if (bal < MIN_BALANCE) throw new Error(`balance ${bal} below ${MIN_BALANCE}`);
+  log(`${address} balance CCD:`, Number(bal) / 1e6);
+  return bal;
+}
+
+// node scripts/concordium/register.mjs extra --cred 1
+async function stageExtra(flags) {
+  const state = loadState();
+  const seed = loadSeed();
+  if (!seed) throw new Error('no .concordium/seed.txt; run the account stage first');
+  if (!state.idObject) throw new Error('no identity; run the account stage first');
+  const credNumber = Number(flags.cred ?? 1);
+  if (!Number.isInteger(credNumber) || credNumber < 1) throw new Error('--cred must be an integer >= 1');
+
+  const wallet = sdk.ConcordiumHdWallet.fromHex(seed, 'Testnet');
+  // Each credential has its own key path: identityIndex / credNumber / keyIndex.
+  // Signing credential 1 with credential 0's key is rejected as invalid signatures.
+  const signingKey = wallet.getAccountSigningKey(0, credNumber, 0).toString('hex');
+
+  const existing = state.extra?.[credNumber]?.address;
+  const address = existing ?? (await deployExtraCredential(state, seed, signingKey, credNumber));
+  log('account:', address);
+  log('explorer:', `https://ccdexplorer.io/testnet/account/${address}`);
+  await fundAddress(state, address);
+}
+
 async function readChain(state) {
   const cs = await client.getConsensusStatus();
   const json = JSON.stringify(cs, (_k, v) => (typeof v === 'bigint' ? String(v) : v));
@@ -753,13 +851,14 @@ async function main() {
   else if (stage === 'verify') await stageVerify(slug);
   else if (stage === 'cis8') await stageCis8(flags);
   else if (stage === 'extref') await stageExternalRef(flags);
+  else if (stage === 'extra') await stageExtra(flags);
   else if (stage === 'all') {
     await stageAccount();
     await stageRegister(slug);
     await stageVerify(slug);
   } else {
     console.error(
-      'usage: node scripts/concordium/register.mjs account|register|pin|verify|cis8|extref|all [slug] [card-url]',
+      'usage: node scripts/concordium/register.mjs account|register|pin|verify|cis8|extref|extra|all [slug] [card-url]',
     );
     process.exitCode = 1;
   }
