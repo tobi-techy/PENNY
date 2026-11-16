@@ -121,6 +121,10 @@ const BaseEnv = z.object({
   CONCORDIUM_MCP_URL: z.url().default('https://agent-registry-mcp.concordium.com'),
   CONCORDIUM_NETWORK: z.enum(['testnet', 'mainnet']).default('testnet'),
 
+  /** Agent-to-agent service prices over x402. off = no quote_agent_service tool. */
+  X402_QUOTE: z.enum(['on', 'off']).default('off'),
+  X402_SERVICE_URL: z.url().default('http://localhost:4020/guard/review'),
+
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_PER_USER_PER_MIN: z.coerce.number().int().positive().default(30),
   MAX_BODY_BYTES: z.coerce.number().int().positive().max(1_048_576).default(65_536),

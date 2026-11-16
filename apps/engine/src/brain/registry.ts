@@ -44,6 +44,8 @@ export type ToolContext = {
   market: MarketPort;
   /** Read-only Concordium badge checks. Absent when CONCORDIUM_VERIFY is off. */
   concordium?: ConcordiumClient;
+  /** x402 price checks on a peer agent's paid service. Absent when X402_QUOTE is off. */
+  x402?: { quote: (url: string) => Promise<import('./x402.ts').ServiceQuote>; serviceUrl: string };
   botOps: BotOps;
   /** Info-card jobs (reminders, drafts). Absent in some tests. */
   everyday?: {

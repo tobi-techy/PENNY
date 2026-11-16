@@ -22,6 +22,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'get_balances',
       'check_guard',
       'verify_agent',
+      'quote_agent_service',
       'propose_send',
       'propose_split',
       'remember',

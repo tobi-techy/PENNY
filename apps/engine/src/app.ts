@@ -65,6 +65,11 @@ export type EngineDeps = {
   embedder: Embedder;
   market: MarketPort;
   concordium?: ConcordiumClient;
+  /** x402 price checks on a peer agent's paid service. Absent when X402_QUOTE is off. */
+  x402?: {
+    quote: (url: string) => Promise<import('./brain/x402.ts').ServiceQuote>;
+    serviceUrl: string;
+  };
   /** Path to config/concordium-agents.json. Defaults to the repo copy. */
   concordiumConfigPath?: string;
   /** Directory holding agents/<slug>/agent-card.json. Defaults to the repo copy. */
@@ -265,6 +270,7 @@ export function createEngine(d: EngineDeps) {
     mood,
     market: d.market,
     ...(d.concordium ? { concordium: d.concordium } : {}),
+    ...(d.x402 ? { x402: d.x402 } : {}),
     botOps: {
       draft: (u, p, s) => botService.draft(u, p, s),
       confirm: (u, s) => botService.confirm(u, s),

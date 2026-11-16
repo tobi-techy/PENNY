@@ -77,8 +77,11 @@ Built in `services/x402/`, outside the Bun workspace so `@concordium/web-sdk` 12
 - A **badge-gated seller**. `GET /guard/review` answers `402` with correct requirements — 500,000 atomic CCD, `payTo` resolved from Guard's on-chain `agentWallet` rather than a constant, `feePayer` set to the sponsor.
 - The **badge gate**, observed refusing an unverified payer before any payment is processed, and failing closed when the registry is unreachable.
 - A **paying client** that signs a sponsored transfer, enforces its own per-payment cap, and never broadcasts.
+- **`quote_agent_service` inside the conversation.** Penny can ask a peer agent what it charges and say so in plain words, by doing the real 402 handshake against the running seller. Read-only, so it is safe on any turn. Gated by `X402_QUOTE` (default off) and offered to Penny only. On the live seller it reports: 0.5 CCD, payer pays Guard's on-chain wallet, "Guard reviews a plan, a contract, or a counterparty and returns a risk note."
 
 **Not yet settled.** Settlement returns `sponsor_as_sender`: x402's rule 9 requires the sponsor to be neither payer nor payee, and our testnet setup has one account acting as sponsor, payer and `payTo`. That is a provisioning gap, not a design one, and it needs three distinct funded accounts. Until it is closed we make no claim that a payment has settled.
+
+Paying from inside the conversation is deliberately **not** wired. Every money move in Penny goes Guard → approval card → NEP-366 delegate action, and x402 has no plan kind in that model yet. Adding a spend path that skipped Guard would have made the demo look better and broken the rule that the model never moves money. Both routes to a second account are documented as blocked in `docs/CONCORDIUM-AGENT-PAYMENTS.md`.
 
 We are stating this rather than showing a curated 402 and calling it a payment. `docs/CONCORDIUM-AGENT-PAYMENTS.md` carries the full design and the precise blocker.
 
@@ -112,7 +115,8 @@ On regulation: we do **not** claim EU AI Act compliance. Penny's append-only app
 | --- | --- |
 | `packages/concordium` | Typed registry client: badge, owner, card verification, retry and cache |
 | `apps/engine/src/passport/` | Public passport routes; serves pinned bytes or refuses |
-| `apps/engine/src/brain/tools.ts` | `verify_agent` tool, available to Penny and Guard |
+| `apps/engine/src/brain/tools.ts` | `verify_agent` and `quote_agent_service` tools |
+| `apps/engine/src/brain/x402.ts` | Reads a peer agent's price from a real 402 challenge |
 | `scripts/concordium/` | Register, pin, CIS-8 bind, export, verify |
 | `services/x402/` | Facilitator, seller, paying client |
 | `agents/<slug>/agent-card.json` | The pinned card bytes |

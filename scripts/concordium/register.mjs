@@ -405,7 +405,7 @@ async function deployExtraCredential(state, seed, signingKey, credNumber) {
   return address;
 }
 
-async function fundAddress(state, address) {
+async function fundAddress(address) {
   for (let i = 0; i < MAX_DROPS; i++) {
     const bal = await balance(address);
     if (bal >= MIN_BALANCE) {
@@ -435,7 +435,8 @@ async function stageExtra(flags) {
   if (!seed) throw new Error('no .concordium/seed.txt; run the account stage first');
   if (!state.idObject) throw new Error('no identity; run the account stage first');
   const credNumber = Number(flags.cred ?? 1);
-  if (!Number.isInteger(credNumber) || credNumber < 1) throw new Error('--cred must be an integer >= 1');
+  if (!Number.isInteger(credNumber) || credNumber < 1)
+    throw new Error('--cred must be an integer >= 1');
 
   const wallet = sdk.ConcordiumHdWallet.fromHex(seed, 'Testnet');
   // Each credential has its own key path: identityIndex / credNumber / keyIndex.
@@ -446,7 +447,7 @@ async function stageExtra(flags) {
   const address = existing ?? (await deployExtraCredential(state, seed, signingKey, credNumber));
   log('account:', address);
   log('explorer:', `https://ccdexplorer.io/testnet/account/${address}`);
-  await fundAddress(state, address);
+  await fundAddress(address);
 }
 
 async function readChain(state) {

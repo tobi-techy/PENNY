@@ -10,6 +10,7 @@ import { NearAiEmbedder, nearAiModels } from './brain/model.ts';
 import type { MarketPort } from './brain/registry.ts';
 import { createRegistry, FakeMarket } from './brain/tools.ts';
 import { LangfuseTracer, noopTracer } from './brain/tracing.ts';
+import { quoteService } from './brain/x402.ts';
 import { renderCardPng } from './cards/render.ts';
 import { ComposioConnector } from './connectors/composio.ts';
 import { createPgliteDb, createPostgresDb } from './db/client.ts';
@@ -155,6 +156,12 @@ const concordium =
       })
     : undefined;
 
+// Price checks only. Paying a peer agent is not wired yet; see brain/x402.ts.
+const x402 =
+  env.X402_QUOTE === 'on'
+    ? { quote: (url: string) => quoteService(url), serviceUrl: env.X402_SERVICE_URL }
+    : undefined;
+
 const engine = createEngine({
   db: dbh.db,
   chain,
@@ -169,6 +176,7 @@ const engine = createEngine({
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
   market,
   ...(concordium ? { concordium } : {}),
+  ...(x402 ? { x402 } : {}),
   ...(invest ? { invest } : {}),
   relayerMaxDepositYocto,
   registry: createRegistry(),

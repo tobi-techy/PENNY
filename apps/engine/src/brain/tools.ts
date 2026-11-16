@@ -112,6 +112,30 @@ export function builtinTools(): ToolDef<never>[] {
     },
   });
   add({
+    id: 'quote_agent_service',
+    description:
+      'Ask another agent what it charges for its paid service, and say so in plain words. Reads the price only; never pays. Use before offering to buy anything from another agent.',
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) => {
+      if (!ctx.x402) return { ok: false, error: 'agent payments are off' };
+      const q = await ctx.x402.quote(ctx.x402.serviceUrl);
+      if (!q.ok) return q;
+      if (!q.needsPayment) return { ok: true, free: true };
+      return {
+        ok: true,
+        free: false,
+        priceCcd: q.amountCcd,
+        priceAtomic: q.amountAtomic,
+        asset: q.asset,
+        payTo: q.payTo,
+        network: q.network,
+        ...(q.description ? { what: q.description } : {}),
+        note: 'Read-only price check. Nothing has been paid.',
+      };
+    },
+  });
+  add({
     id: 'verify_agent',
     description:
       'Check whether another agent carries a valid Verified by Concordium badge. Pass the badge string or the owner Concordium account. Returns verified, invalid, revoked, unknown, or unavailable with the public evidence. Read-only; never moves money.',

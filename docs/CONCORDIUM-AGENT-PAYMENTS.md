@@ -170,4 +170,24 @@ It is rejected by the node with `RpcError: The credential deployment contained i
 
 Practical consequence: the three-account setup is not available on testnet through the tooling in this repo today. A demo that must show a settled x402 payment needs either a working identity provider configuration or an account funded from outside this repo.
 
+### In the conversation: `quote_agent_service`
+
+Penny can read a peer agent's price during a conversation. `apps/engine/src/brain/x402.ts` does the real 402 handshake and stops there, so the tool is `risk: 'read'` and safe on any turn. It is gated by `X402_QUOTE` (default `off`) with `X402_SERVICE_URL`, and offered to Penny only.
+
+Against the running seller it returns the price, the payee, the network, and what the service does — enough for Penny to say "Guard charges 0.5 CCD for that" without anything being spent.
+
+The wire format was not what the docs suggest, and mocking it would have hidden that. `@x402/concordium` puts the amount at the top level of each entry as `amount`, not in `price`, and describes the resource in a **top-level** `resource` object rather than per entry:
+
+```json
+{ "x402Version": 2, "error": "Payment required",
+  "resource": { "url": "...", "description": "Guard reviews a plan...", "mimeType": "application/json" },
+  "accepts": [{ "scheme": "exact", "network": "ccd:4221...", "amount": "500000",
+                "asset": "CCD", "payTo": "3ewJ...", "maxTimeoutSeconds": 300,
+                "extra": { "feePayer": "3ewJ..." } }] }
+```
+
+The parser accepts `amount`, `price` (string or `{amount, asset}`), and the older `maxAmountRequired`, so it reads both this server and other x402 servers. The two tests that matter were written from captured real output, and both caught bugs: the first live run returned "I couldn't read that agent's price" until the shape was corrected.
+
+Paying from the conversation is not wired, on purpose. See the closing note in `brain/x402.ts`.
+
 
