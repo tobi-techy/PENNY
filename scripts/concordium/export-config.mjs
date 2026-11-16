@@ -13,7 +13,7 @@ const ORDER = ['penny', 'guard', 'invest', 'mail'];
 const state = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
 const agents = ORDER.filter((slug) => state.agents?.[slug]?.badge).map((slug) => {
   const agent = state.agents[slug];
-  return {
+  const base = {
     slug,
     name: NAMES[slug],
     tokenId: agent.tokenId,
@@ -29,6 +29,18 @@ const agents = ORDER.filter((slug) => state.agents?.[slug]?.badge).map((slug) =>
       verify: `https://agent-registry-mcp.concordium.com/v1/check-badge/${agent.badge}?network=testnet`,
     },
   };
+  if (agent.externalReference) {
+    const sameNamespace = state.cis8?.namespace === agent.externalReference.namespace;
+    base.externalReference = {
+      namespace: agent.externalReference.namespace,
+      keyType: agent.externalReference.keyType,
+      publicKeyHex: agent.externalReference.publicKeyHex,
+      ...(sameNamespace && state.cis8?.nearAccount ? { nearAccount: state.cis8.nearAccount } : {}),
+      txHash: agent.externalReference.txHash,
+      explorer: `https://ccdexplorer.io/testnet/transaction/${agent.externalReference.txHash}`,
+    };
+  }
+  return base;
 });
 
 const config = {
@@ -36,6 +48,18 @@ const config = {
   chainId: `ccd:${state.chainId}`,
   ownerAccount: state.address,
   contracts: { cis8004: '12802.0', cis8: '12801.0' },
+  ...(state.cis8
+    ? {
+        cis8Binding: {
+          namespace: state.cis8.namespace,
+          keyType: state.cis8.keyType,
+          publicKeyHex: state.cis8.publicKeyHex,
+          nearAccount: state.cis8.nearAccount,
+          txHash: state.cis8.txHash,
+          explorer: `https://ccdexplorer.io/testnet/transaction/${state.cis8.txHash}`,
+        },
+      }
+    : {}),
   agents,
 };
 

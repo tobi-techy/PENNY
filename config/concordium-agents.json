@@ -6,6 +6,14 @@
     "cis8004": "12802.0",
     "cis8": "12801.0"
   },
+  "cis8Binding": {
+    "namespace": "near:testnet",
+    "keyType": "ed25519",
+    "publicKeyHex": "be83f8c7d7f23b657053d1a17d69f302a0584beaf87bb30bc6f57e3cf629617a",
+    "nearAccount": "penny-tobi.testnet",
+    "txHash": "aece7c753e9f3ce20cadd88940f6d19cc89ba802bba57a36c0f8946638e1580d",
+    "explorer": "https://ccdexplorer.io/testnet/transaction/aece7c753e9f3ce20cadd88940f6d19cc89ba802bba57a36c0f8946638e1580d"
+  },
   "agents": [
     {
       "slug": "penny",
@@ -21,6 +29,14 @@
         "register": "https://ccdexplorer.io/testnet/transaction/6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b",
         "pin": "https://ccdexplorer.io/testnet/transaction/3d52e2e26098cef61dd818892bf182cfb842a4a3b6e7f8c3668b5fbf7f6a06e4",
         "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9Wd81dn3JwiAs6agks?network=testnet"
+      },
+      "externalReference": {
+        "namespace": "near:testnet",
+        "keyType": "ed25519",
+        "publicKeyHex": "be83f8c7d7f23b657053d1a17d69f302a0584beaf87bb30bc6f57e3cf629617a",
+        "nearAccount": "penny-tobi.testnet",
+        "txHash": "890530761e1b1194a37f71f27b8f4f3fec60dce2a5ab6f0412bde8a35c31c62c",
+        "explorer": "https://ccdexplorer.io/testnet/transaction/890530761e1b1194a37f71f27b8f4f3fec60dce2a5ab6f0412bde8a35c31c62c"
       }
     },
     {

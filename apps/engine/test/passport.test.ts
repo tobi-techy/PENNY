@@ -72,6 +72,41 @@ describe('passport pages', () => {
     expect(html).toContain('<link rel="stylesheet" href="/agents/passport.css" />');
   });
 
+  test('the CIS-8 binding shows on the agent that carries it, and only there', async () => {
+    // Penny has a bound NEAR key; the others do not, so the row must not leak.
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    const penny = config.agents.find((a: { slug: string }) => a.slug === 'penny');
+    expect(penny.externalReference?.nearAccount).toBe('penny-tobi.testnet');
+
+    const pennyHtml = await routes().page('penny').text();
+    expect(pennyHtml).toContain('Also answers to');
+    expect(pennyHtml).toContain('penny-tobi.testnet');
+    expect(pennyHtml).toContain('near:testnet');
+    expect(pennyHtml).toContain('Key binding');
+
+    const guardHtml = await routes().page('guard').text();
+    expect(guardHtml).not.toContain('Key binding');
+    expect(guardHtml).not.toContain('near:testnet');
+  });
+
+  test('the machine-readable crew summary carries the external reference', async () => {
+    type Summary = {
+      agents: {
+        slug: string;
+        externalReference?: { namespace: string; keyType: string; account?: string };
+      }[];
+    };
+    const body = (await routes().index('application/json').json()) as Summary;
+    const penny = body.agents.find((a) => a.slug === 'penny');
+    expect(penny?.externalReference).toMatchObject({
+      namespace: 'near:testnet',
+      keyType: 'ed25519',
+      account: 'penny-tobi.testnet',
+    });
+    const guard = body.agents.find((a) => a.slug === 'guard');
+    expect(guard?.externalReference).toBeUndefined();
+  });
+
   test('refuses to serve a card whose bytes no longer match the pin', async () => {
     resetPassportCache();
     const dir = await mkdtemp(join(tmpdir(), 'penny-passport-'));

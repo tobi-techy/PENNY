@@ -3,7 +3,7 @@
 Network: testnet (`ccd:4221332d34e1694168c2a0c0b3fd0f27`)
 Owner account: `3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT`
 Contracts: CIS-8004 `<12802,0>`, CIS-8 `<12801,0>`
-Checked: 2026-11-16T12:35:26.334Z
+Checked: 2026-11-16T12:50:19.071Z
 
 ## Badges
 
@@ -22,6 +22,24 @@ Checked: 2026-11-16T12:35:26.334Z
 | Guard | https://penny-passport.vercel.app/agents/guard/agent-card.json | `8414adfb9dc5c6e71e55f284a9690ac09e60e87160ee76522221cf32c2e41ffb` | yes |
 | Invest | https://penny-passport.vercel.app/agents/invest/agent-card.json | `526367d2c3d51e52cdf6540acd8cc640780c3bd97fc4607aceb8e1cef1ea3497` | yes |
 | Mail | https://penny-passport.vercel.app/agents/mail/agent-card.json | `2832e329e65a1dbb584fd7792205cd70968e7d49f41d1218b6987430bc2f1dbe` | yes |
+
+## Cross-chain binding (CIS-8)
+
+CIS-8 records a proven link between this Concordium account and an external key.
+Penny binds its NEAR operator key, so the agent is findable by the address it
+already uses on the other chain, and a counterparty can resolve that address to
+this agent without trusting a website.
+
+Binding: `Active` in `near:testnet`
+([binding](https://ccdexplorer.io/testnet/transaction/aece7c753e9f3ce20cadd88940f6d19cc89ba802bba57a36c0f8946638e1580d))
+
+| Agent | Namespace | Also answers to | Resolves to token | Matches |
+|---|---|---|---|---|
+| Penny | `near:testnet` | penny-tobi.testnet | 1169 | yes |
+
+`owner_of_key` must name the owner account above, and `agent_by_external_reference`
+must return the agent's own token id. Both are read back from the contracts, so
+the binding is proven rather than described.
 
 ## Verify it yourself
 

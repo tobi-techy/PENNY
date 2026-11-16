@@ -148,6 +148,36 @@ async function sendTx(tx, signer) {
   return sdk.TransactionHash.toHexString(await client.sendAccountTransaction(tx, signature));
 }
 
+// Submit a contract update from the owner account and wait for finalisation.
+async function sendContractUpdate(
+  state,
+  signer,
+  { index, subindex, receiveName, parameterHex, energy },
+) {
+  const addr = sdk.AccountAddress.fromBase58(state.address);
+  const nonceInfo = await client.getNextAccountNonce(addr);
+  const nonce = nonceInfo.seqNumber ?? nonceInfo.nonce;
+  const tx = {
+    type: sdk.AccountTransactionType.Update,
+    header: {
+      expiry: sdk.TransactionExpiry.fromDate(new Date(Date.now() + 10 * 60 * 1000)),
+      nonce,
+      sender: addr,
+    },
+    payload: {
+      amount: sdk.CcdAmount.zero(),
+      address: { index, subindex },
+      receiveName: sdk.ReceiveName.fromString(receiveName),
+      message: sdk.Parameter.fromBuffer(Buffer.from(parameterHex, 'hex')),
+      maxContractExecutionEnergy: sdk.Energy.create(BigInt(energy ?? 30000)),
+    },
+  };
+  const hash = await sendTx(tx, signer);
+  const { json } = await finalize(hash, receiveName);
+  assertOk(json, receiveName);
+  return hash;
+}
+
 async function balance(address) {
   const info = await client
     .getAccountInfo(sdk.AccountAddress.fromBase58(address))
@@ -554,20 +584,182 @@ async function stageVerify(slug) {
   log('check:', check.status, JSON.stringify(check.json ?? check.text, null, 2));
 }
 
+// CIS-8 binding: prove that the Concordium account controls an external key
+// (in Penny's case the NEAR operator key), so the agent is reachable by the
+// address it already uses elsewhere.
+//
+// The external key signs the canonical bytes itself and this script is handed
+// only the public key and the signature. The NEAR secret never reaches these
+// scripts and never touches disk.
+//
+//   node scripts/concordium/register.mjs cis8 \
+//     --namespace near:testnet --pubkey <hex> --sig <hex> --near-account penny-tobi.testnet
+async function stageCis8(flags) {
+  const state = loadState();
+  if (!state.address) throw new Error('no account; run the account stage first');
+  const namespace = flags.namespace;
+  const pubkey = flags.pubkey;
+  const sig = flags.sig;
+  if (!namespace || !pubkey || !sig) {
+    throw new Error('cis8 needs --namespace, --pubkey and --sig');
+  }
+
+  // Always re-derive the canonical bytes here rather than trusting a pasted
+  // signature: if the account or namespace changed, the signature will not
+  // verify and the contract will reject it, so fail before spending energy.
+  const canonical = await mcpTool('build_cis8_canonical_bytes', {
+    network: 'testnet',
+    concordium_account: state.address,
+    external_namespace: namespace,
+    external_key_namespace: namespace,
+    external_key_type: 'ed25519',
+    external_public_key_hex: pubkey,
+    proof_scheme: 'solana-ed25519',
+  });
+  log('canonical bytes:', canonical.byte_length, 'bytes, signed by the external key');
+
+  const built = await mcpTool('build_cis8_register', {
+    network: 'testnet',
+    sender: state.address,
+    external_key: { namespace, key_type: 'ed25519', public_key_hex: pubkey },
+    proof: { scheme: 'solana-ed25519', signature_hex: sig },
+    metadata: flags['near-account']
+      ? [{ key: 'near_account', value: flags['near-account'] }]
+      : null,
+  });
+  if (!built.parameter_hex) {
+    throw new Error(`build_cis8_register: ${JSON.stringify(built).slice(0, 300)}`);
+  }
+
+  const seed = loadSeed();
+  if (!seed) throw new Error('no .concordium/seed.txt; run the account stage first');
+  const wallet = sdk.ConcordiumHdWallet.fromHex(seed, 'Testnet');
+  const signer = sdk.buildBasicAccountSigner(wallet.getAccountSigningKey(0, 0, 0).toString('hex'));
+
+  const addr = sdk.AccountAddress.fromBase58(state.address);
+  const nonceInfo = await client.getNextAccountNonce(addr);
+  const nonce = nonceInfo.seqNumber ?? nonceInfo.nonce;
+  const tx = {
+    type: sdk.AccountTransactionType.Update,
+    header: {
+      expiry: sdk.TransactionExpiry.fromDate(new Date(Date.now() + 10 * 60 * 1000)),
+      nonce,
+      sender: addr,
+    },
+    payload: {
+      amount: sdk.CcdAmount.zero(),
+      address: { index: 12801n, subindex: 0n },
+      receiveName: sdk.ReceiveName.fromString(built.receive_name ?? 'CIS-8.registerExternalKey'),
+      message: sdk.Parameter.fromBuffer(Buffer.from(built.parameter_hex, 'hex')),
+      maxContractExecutionEnergy: sdk.Energy.create(BigInt(built.suggested_energy ?? 30000)),
+    },
+  };
+
+  const hash = await sendTx(tx, signer);
+  log('registerExternalKey sent', hash, EXPLORER(hash));
+  const { json } = await finalize(hash, 'cis8');
+  assertOk(json, 'registerExternalKey');
+
+  state.cis8 = {
+    namespace,
+    keyType: 'ed25519',
+    publicKeyHex: pubkey,
+    nearAccount: flags['near-account'] ?? null,
+    txHash: hash,
+  };
+  saveState(state);
+
+  const reg = await mcpTool('owner_of_key', {
+    network: 'testnet',
+    external_key: { namespace, key_type: 'ed25519', public_key_hex: pubkey },
+  });
+  log('owner_of_key:', JSON.stringify(reg));
+  return hash;
+}
+
+// Attach a CIS-8 key to an agent as its external reference, so the agent can be
+// found by the address it already uses on another chain.
+//
+//   node scripts/concordium/register.mjs extref --slug penny \
+//     --namespace near:testnet --pubkey <hex>
+async function stageExternalRef(flags) {
+  const state = loadState();
+  const slug = flags.slug ?? 'penny';
+  const agent = state.agents?.[slug];
+  if (!agent?.tokenId) throw new Error(`no token for ${slug}; run the register stage first`);
+  const namespace = flags.namespace;
+  const pubkey = flags.pubkey;
+  if (!namespace || !pubkey) throw new Error('extref needs --namespace and --pubkey');
+
+  const built = await mcpTool('build_set_external_reference', {
+    network: 'testnet',
+    sender: state.address,
+    token_id: agent.tokenId,
+    external_reference: {
+      contract_address: { index: 12801, subindex: 0 },
+      kind: 'Cis8',
+      key: { namespace, key_type: 'ed25519', public_key_hex: pubkey },
+    },
+  });
+  if (!built.parameter_hex) {
+    throw new Error(`build_set_external_reference: ${JSON.stringify(built).slice(0, 300)}`);
+  }
+
+  const seed = loadSeed();
+  if (!seed) throw new Error('no .concordium/seed.txt; run the account stage first');
+  const wallet = sdk.ConcordiumHdWallet.fromHex(seed, 'Testnet');
+  const signer = sdk.buildBasicAccountSigner(wallet.getAccountSigningKey(0, 0, 0).toString('hex'));
+
+  const hash = await sendContractUpdate(state, signer, {
+    index: 12802n,
+    subindex: 0n,
+    receiveName: built.receive_name ?? 'CIS-8004.setExternalReference',
+    parameterHex: built.parameter_hex,
+    energy: built.suggested_energy,
+  });
+  log('setExternalReference sent', hash, EXPLORER(hash));
+
+  agent.externalReference = {
+    namespace,
+    keyType: 'ed25519',
+    publicKeyHex: pubkey,
+    txHash: hash,
+  };
+  saveState(state);
+
+  const found = await mcpTool('agent_by_external_reference', {
+    network: 'testnet',
+    external_reference: {
+      contract_address: { index: 12801, subindex: 0 },
+      kind: 'Cis8',
+      key: { namespace, key_type: 'ed25519', public_key_hex: pubkey },
+    },
+  });
+  log('agent_by_external_reference ->', JSON.stringify(found).slice(0, 600));
+  return hash;
+}
+
 async function main() {
   const stage = process.argv[2] ?? 'account';
   const slug = process.argv[3] ?? 'penny';
+  const flags = {};
+  for (let i = 2; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg.startsWith('--')) flags[arg.slice(2)] = process.argv[i + 1];
+  }
   if (stage === 'account') await stageAccount();
   else if (stage === 'register') await stageRegister(slug);
   else if (stage === 'pin') await stagePin(slug, process.argv[4]);
   else if (stage === 'verify') await stageVerify(slug);
+  else if (stage === 'cis8') await stageCis8(flags);
+  else if (stage === 'extref') await stageExternalRef(flags);
   else if (stage === 'all') {
     await stageAccount();
     await stageRegister(slug);
     await stageVerify(slug);
   } else {
     console.error(
-      'usage: node scripts/concordium/register.mjs account|register|pin|verify|all [slug] [card-url]',
+      'usage: node scripts/concordium/register.mjs account|register|pin|verify|cis8|extref|all [slug] [card-url]',
     );
     process.exitCode = 1;
   }

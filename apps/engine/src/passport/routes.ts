@@ -10,6 +10,19 @@ import { sha256Hex } from '../lib/crypto.ts';
  * pinned value the route refuses to serve it rather than serve a silent lie.
  */
 
+/**
+ * A CIS-8 binding: the Concordium account has proven it controls an external
+ * key, so this agent is findable by the address it already uses elsewhere.
+ */
+export type ExternalReference = {
+  namespace: string;
+  keyType: string;
+  publicKeyHex: string;
+  nearAccount?: string;
+  txHash: string;
+  explorer?: string;
+};
+
 export type RegisteredAgent = {
   slug: string;
   name: string;
@@ -19,6 +32,7 @@ export type RegisteredAgent = {
   cardSha256: string;
   registerTx: string;
   pinTx: string;
+  externalReference?: ExternalReference;
   explorer: { account: string; register: string; pin: string; verify: string };
 };
 
@@ -178,6 +192,18 @@ export function indexSummary(config: RegistryConfig) {
       cardUrl: a.cardUrl,
       cardSha256: a.cardSha256,
       verifyUrl: a.explorer.verify,
+      ...(a.externalReference
+        ? {
+            externalReference: {
+              namespace: a.externalReference.namespace,
+              keyType: a.externalReference.keyType,
+              publicKeyHex: a.externalReference.publicKeyHex,
+              ...(a.externalReference.nearAccount
+                ? { account: a.externalReference.nearAccount }
+                : {}),
+            },
+          }
+        : {}),
     })),
   };
 }
@@ -186,7 +212,11 @@ export function indexHtml(config: RegistryConfig): string {
   const items = config.agents
     .map(
       (a) => `      <li><a href="/agents/${esc(a.slug)}">${esc(a.name)}</a>
-        <span class="mono">${esc(a.badge)}</span></li>`,
+        <span class="mono">${esc(a.badge)}</span>${
+          a.externalReference?.nearAccount
+            ? `\n        <span class="mono">${esc(a.externalReference.nearAccount)}</span>`
+            : ''
+        }</li>`,
     )
     .join('\n');
   return `<!doctype html>
@@ -221,6 +251,26 @@ export function pageHtml(agent: RegisteredAgent, config: RegistryConfig): string
     ['Registered', agent.registerTx],
     ['Card pinned', agent.pinTx],
   ];
+  // CIS-8: the account proved it holds this key, so the agent also answers to
+  // the address it already uses on another chain. The key algorithm stays off
+  // the page because the copy rules treat its name as jargon.
+  if (agent.externalReference) {
+    const near = agent.externalReference.nearAccount;
+    rows.push([
+      near ? 'Also answers to' : 'Also known as',
+      near ? `${near} (${agent.externalReference.namespace})` : agent.externalReference.namespace,
+    ]);
+  }
+  const links = [
+    `<a href="${esc(agent.explorer.verify)}">Check the badge</a>`,
+    `<a href="/agents/${esc(agent.slug)}/agent-card.json">Agent Card</a>`,
+    `<a href="${esc(agent.explorer.register)}">Registration</a>`,
+    `<a href="${esc(agent.explorer.pin)}">Card pin</a>`,
+  ];
+  if (agent.externalReference?.explorer) {
+    links.push(`<a href="${esc(agent.externalReference.explorer)}">Key binding</a>`);
+  }
+  links.push('<a href="/agents">The whole crew</a>');
   return `<!doctype html>
 ${head(`${agent.name} — verified by Concordium`, `${agent.name} carries a Verified by Concordium badge in the CIS-8004 agent registry.`)}
 <body>
@@ -233,11 +283,7 @@ ${head(`${agent.name} — verified by Concordium`, `${agent.name} carries a Veri
 ${rows.map(([k, v]) => `      <dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('\n')}
     </dl>
     <div class="links">
-      <a href="${esc(agent.explorer.verify)}">Check the badge</a>
-      <a href="/agents/${esc(agent.slug)}/agent-card.json">Agent Card</a>
-      <a href="${esc(agent.explorer.register)}">Registration</a>
-      <a href="${esc(agent.explorer.pin)}">Card pin</a>
-      <a href="/agents">The whole crew</a>
+      ${links.join('\n      ')}
     </div>
     <p class="note">The badge proves the owner account published this card and controls it. It does not prove the agent is safe, correct, or honest, and it is not a payment guarantee.</p>
   </div>

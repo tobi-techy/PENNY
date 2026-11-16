@@ -130,6 +130,66 @@ for (const agent of config.agents) {
   for (const issue of pinIssues) console.log(`     pin: ${issue}`);
 }
 
+// The CIS-8 binding claims the Concordium account controls an external key, and
+// that an agent is therefore findable by its other-chain address. Both halves
+// are checked rather than trusted: the contract's own answer, and the reverse
+// lookup that a counterparty would actually perform.
+async function auditBinding(config) {
+  const binding = config.cis8Binding;
+  if (!binding) return { present: false, ok: false, issues: [], rows: [] };
+
+  const externalKey = {
+    namespace: binding.namespace,
+    key_type: binding.keyType,
+    public_key_hex: binding.publicKeyHex,
+  };
+  const issues = [];
+
+  const registration = await mcpTool('owner_of_key', {
+    network: 'testnet',
+    external_key: externalKey,
+  });
+  if (!registration || registration.owner !== config.ownerAccount) {
+    issues.push(
+      `owner_of_key returned ${registration?.owner ?? 'nothing'}, not ${config.ownerAccount}`,
+    );
+  }
+  if (registration && registration.status !== 'Active') {
+    issues.push(`CIS-8 registration is ${registration.status}, not Active`);
+  }
+
+  const rows = [];
+  for (const agent of config.agents) {
+    if (!agent.externalReference) continue;
+    const found = await mcpTool('agent_by_external_reference', {
+      network: 'testnet',
+      external_reference: {
+        contract_address: { index: 12801, subindex: 0 },
+        kind: 'Cis8',
+        key: externalKey,
+      },
+    });
+    if (found?.token_id !== agent.tokenId) {
+      issues.push(
+        `${agent.name}: external key resolves to token ${found?.token_id ?? 'nothing'}, not ${agent.tokenId}`,
+      );
+    }
+    rows.push({
+      name: agent.name,
+      namespace: agent.externalReference.namespace,
+      account: agent.externalReference.nearAccount ?? '—',
+      resolvesTo: found?.token_id ?? 'nothing',
+      ok: found?.token_id === agent.tokenId,
+    });
+  }
+  return { present: true, ok: issues.length === 0, issues, rows, registration };
+}
+
+const binding = await auditBinding(config);
+if (binding.present && !binding.ok) allOk = false;
+console.log(`${binding.ok ? 'PASS' : 'FAIL'} cis8 binding`);
+for (const issue of binding.issues) console.log(`     cis8: ${issue}`);
+
 const badgeRows = results
   .map(({ agent, ok, check, pinIssues }) => {
     const c = check?.checks ?? {};
@@ -144,10 +204,43 @@ const cardRows = results
   )
   .join('\n');
 
-const failures = results
-  .filter(({ ok }) => !ok)
-  .map(({ agent, error }) => `- ${agent.name}: ${error ?? 'one or more checks failed'}`)
-  .join('\n');
+const failures = [
+  ...results
+    .filter(({ ok }) => !ok)
+    .map(({ agent, error }) => `- ${agent.name}: ${error ?? 'one or more checks failed'}`),
+  ...(binding.present && !binding.ok ? binding.issues.map((i) => `- CIS-8: ${i}`) : []),
+].join('\n');
+
+const bindingRows = binding.present
+  ? binding.rows
+      .map(
+        (r) =>
+          `| ${r.name} | \`${r.namespace}\` | ${r.account} | ${r.resolvesTo} | ${r.ok ? 'yes' : 'no'} |`,
+      )
+      .join('\n')
+  : '';
+
+const bindingSection = binding.present
+  ? `
+## Cross-chain binding (CIS-8)
+
+CIS-8 records a proven link between this Concordium account and an external key.
+Penny binds its NEAR operator key, so the agent is findable by the address it
+already uses on the other chain, and a counterparty can resolve that address to
+this agent without trusting a website.
+
+Binding: \`${binding.registration?.status ?? 'unknown'}\` in \`${config.cis8Binding.namespace}\`
+([binding](${config.cis8Binding.explorer}))
+
+| Agent | Namespace | Also answers to | Resolves to token | Matches |
+|---|---|---|---|---|
+${bindingRows}
+
+\`owner_of_key\` must name the owner account above, and \`agent_by_external_reference\`
+must return the agent's own token id. Both are read back from the contracts, so
+the binding is proven rather than described.
+`
+  : '';
 
 const proof = `# Concordium registration proof
 
@@ -167,7 +260,7 @@ ${badgeRows}
 | Agent | Card URL | SHA-256 | Served bytes match |
 |---|---|---|---|
 ${cardRows}
-
+${bindingSection}
 ## Verify it yourself
 
 \`\`\`bash

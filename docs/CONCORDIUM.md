@@ -156,17 +156,30 @@ The script is idempotent. It reads the state file first, skips an agent whose ca
 
 ### 5.3 Penny CIS-8 binding, operator NEAR key
 
-Bind the NEAR key that the engine actually uses as its operator/app account. Do not bind a user key.
+**Done on testnet, 16 Nov 2026.** Bound key: `ed25519` `be83f8c7d7f23b657053d1a17d69f302a0584beaf87bb30bc6f57e3cf629617a`, which controls the NEAR testnet account `penny-tobi.testnet` (full access, verified through the NEAR indexer rather than assumed).
 
-1. Read `NEAR_APP_PRIVATE_KEY` locally in the ops script. Derive the ed25519 public key. Do not print the private key.
-2. `build_cis8_canonical_bytes` with `network`, `concordium_account=<owner>`, `external_namespace=near:testnet`, `external_key_namespace=near:testnet`, `external_key_type=ed25519`, `external_public_key_hex=<32-byte hex>`, `proof_scheme=solana-ed25519`.
-3. Sign the canonical bytes with the NEAR ed25519 key. Submit the signature hex.
-4. `build_cis8_register` with the key, proof, and sender. Sign and submit.
-5. `build_set_external_reference` on the Penny agent token with `kind: Cis8`, the CIS-8 contract `<12801,0>`, and the key fields. Sign and submit.
-6. Rebuild the Penny card so it carries the external reference, re-host, and re-pin.
-7. Verify `owner_of_key` and `agent_by_external_reference` both point to Penny.
+Binding transaction: [`aece7c75…580d`](https://ccdexplorer.io/testnet/transaction/aece7c753e9f3ce20cadd88940f6d19cc89ba802bba57a36c0f8946638e1580d).
+Attached to Penny's agent token: [`8905307…c62c`](https://ccdexplorer.io/testnet/transaction/890530761e1b1194a37f71f27b8f4f3fec60dce2a5ab6f0412bde8a35c31c62c).
+
+**What was bound, precisely.** This is the *relayer* operator key, not the app key and not a user key. The relayer is the account Penny's backend operates to submit signed delegate actions, so it is the address Penny genuinely appears as on NEAR. The metadata field `near_account = penny-tobi.testnet` records that on chain. Do not describe this as the user's wallet; it is the operator's.
+
+Procedure, as executed:
+
+1. Derive the ed25519 public key from the operator key locally. The private key never leaves the machine and is never written to a file.
+2. `build_cis8_canonical_bytes` with `network=testnet`, `concordium_account=<owner>`, `external_namespace=near:testnet`, `external_key_namespace=near:testnet`, `external_key_type=ed25519`, `external_public_key_hex=<32-byte hex>`, `proof_scheme=solana-ed25519`. Produces 195 bytes.
+3. Sign those bytes with the NEAR ed25519 key. The signature is 64 bytes.
+4. `node scripts/concordium/register.mjs cis8 --namespace near:testnet --pubkey <hex> --sig <hex> --near-account penny-tobi.testnet`. Builds and submits `CIS-8.registerExternalKey`.
+5. `node scripts/concordium/register.mjs extref --slug penny --namespace near:testnet --pubkey <hex>`. Builds and submits `CIS-8004.setExternalReference`.
+6. `node scripts/concordium/export-config.mjs` records the binding in `config/concordium-agents.json`.
+7. `node scripts/concordium/verify.mjs` reads both back from the contracts.
+
+The scripts take only the **public key and the signature**. They never receive the NEAR private key, so a compromised working copy cannot sign as the operator.
 
 Use `near:testnet` while the engine runs NEAR testnet. Production changes to `near:mainnet` and re-binds the production operator key. The registry chain catalogue lists `near:mainnet` with key type `ed25519` and proof scheme `solana-ed25519`; NEAR is a first-class ecosystem there, not a workaround.
+
+Only Penny carries the external reference. Binding all four agents to one key would make `agent_by_external_reference` ambiguous, and the lookup is the whole point.
+
+**Not yet done:** the Agent Card does not yet carry the external reference. Editing a card changes its bytes and therefore its pinned hash, so card changes are batched into a single re-pin once the x402 endpoint exists (see `docs/CONCORDIUM-AGENT-PAYMENTS.md`).
 
 ## 6. Engine integration
 
