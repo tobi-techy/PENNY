@@ -114,3 +114,48 @@ Steps 1–2 are the ones that turn the rubric from 2-of-3 into 3-of-3. Step 3 is
 ## Cost of getting this wrong
 
 The failure mode is a bolted-on payment demo that a judge reads as decorative — traffic in test tokens that proves a loop closed, not a payment. The defence is the coupling: the payment is only possible because the registry supplied the address and only permitted because the badge check passed. If a version of this can run with those two steps deleted, it is not deep enough.
+
+## Build status, 16 Nov 2026
+
+Built in `services/x402/`, outside the Bun workspace so it can carry `@concordium/web-sdk` 12 without disturbing the 9.2.0 pin the registration scripts depend on.
+
+| Piece | State |
+| --- | --- |
+| Self-hosted facilitator (`src/facilitator.mjs`) | Working. Serves `/supported`, `/verify`, `/settle`, `/health`; announces `feePayer` = owner account |
+| Badge-gated seller (`src/server.mjs`) | Working. Returns 402 for free, `payTo` resolved from Guard's on-chain `agentWallet`, refuses unverified buyers |
+| Paying agent (`src/pay.mjs`) | Working up to settlement; see blocker below |
+| Penny engine tool | Not built |
+| Agent Card `x402Support` | Still `false` |
+
+### What is proven
+
+- The facilitator starts, registers `exact` on `ccd:4221332d…`, and reports `feePayer`.
+- `GET /guard/review` answers **402** with a correct `PAYMENT-REQUIRED` header: 500,000 atomic CCD, `payTo` equal to Guard's registry `agentWallet`, `feePayer` equal to the sponsor.
+- The badge gate refuses a payer with no badge **before** any payment is processed, and fails closed when the registry is unreachable. Both paths were observed live.
+- The client builds and signs a sponsored transfer; it never holds CCD for gas.
+
+### The blocker, precisely
+
+Settlement is rejected with `sponsor_as_sender`. x402's rule 9 requires the sponsor to be neither the payer nor the payee, and this testnet setup has exactly **one** account: the owner is simultaneously sponsor, payer, and `payTo`. That is not a code defect; it is the single-account testnet artifact.
+
+It cannot be worked around by config. Fixing it needs **three** distinct accounts: sponsor, payer, and Guard's payment wallet.
+
+The clean way to create them without touching `.concordium/state.json` (which holds the identity and seed for all four registered agents, and must not be clobbered) is to run the existing account stage from a scratch working directory, since `STATE_DIR` is resolved from the process cwd:
+
+```bash
+mkdir -p /tmp/x402-sponsor && cd /tmp/x402-sponsor
+node <repo>/scripts/concordium/register.mjs account   # writes ./.concordium/ here
+```
+
+Then point the service at the extra accounts:
+
+```bash
+PENNY_CONCORDIUM_SEED=/tmp/x402-sponsor/.concordium/seed.txt \
+PENNY_X402_SPONSOR=<sponsor address> \
+  node src/facilitator.mjs
+```
+
+and set Guard's `payTo` to the third account, ideally as a real CIS-8004 `setAgentWallet` (step 5 of the build order) so the payment address is genuinely the agent's rather than an override.
+
+Each stage needs its own faucet drop. Until that is done, the loop is verified up to the point of settlement and no further.
+
