@@ -1,0 +1,91 @@
+{
+  "network": "testnet",
+  "chainId": "ccd:4221332d34e1694168c2a0c0b3fd0f27",
+  "ownerAccount": "3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+  "contracts": {
+    "cis8004": "12802.0",
+    "cis8": "12801.0"
+  },
+  "cis8Binding": {
+    "namespace": "near:testnet",
+    "keyType": "ed25519",
+    "publicKeyHex": "be83f8c7d7f23b657053d1a17d69f302a0584beaf87bb30bc6f57e3cf629617a",
+    "nearAccount": "penny-tobi.testnet",
+    "txHash": "aece7c753e9f3ce20cadd88940f6d19cc89ba802bba57a36c0f8946638e1580d",
+    "explorer": "https://ccdexplorer.io/testnet/transaction/aece7c753e9f3ce20cadd88940f6d19cc89ba802bba57a36c0f8946638e1580d"
+  },
+  "agents": [
+    {
+      "slug": "penny",
+      "name": "Penny",
+      "tokenId": "1169",
+      "badge": "JyP9Wd81dn3JwiAs6agks",
+      "cardUrl": "https://penny-passport.vercel.app/agents/penny/agent-card.json",
+      "cardSha256": "3484d6ce155fac839e27dceaf9ff6e98f6df71ec6af5b1f1c2131dc245f25e44",
+      "registerTx": "6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b",
+      "pinTx": "3d52e2e26098cef61dd818892bf182cfb842a4a3b6e7f8c3668b5fbf7f6a06e4",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/6336cd403b406d1f2026d75bb619a5f167cbd1345318d4c64dc3d879c222b38b",
+        "pin": "https://ccdexplorer.io/testnet/transaction/3d52e2e26098cef61dd818892bf182cfb842a4a3b6e7f8c3668b5fbf7f6a06e4",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9Wd81dn3JwiAs6agks?network=testnet"
+      },
+      "externalReference": {
+        "namespace": "near:testnet",
+        "keyType": "ed25519",
+        "publicKeyHex": "be83f8c7d7f23b657053d1a17d69f302a0584beaf87bb30bc6f57e3cf629617a",
+        "nearAccount": "penny-tobi.testnet",
+        "txHash": "890530761e1b1194a37f71f27b8f4f3fec60dce2a5ab6f0412bde8a35c31c62c",
+        "explorer": "https://ccdexplorer.io/testnet/transaction/890530761e1b1194a37f71f27b8f4f3fec60dce2a5ab6f0412bde8a35c31c62c"
+      }
+    },
+    {
+      "slug": "guard",
+      "name": "Guard",
+      "tokenId": "1170",
+      "badge": "JyP9WeDVZoYEmqQfdWWtd",
+      "cardUrl": "https://penny-passport.vercel.app/agents/guard/agent-card.json",
+      "cardSha256": "8414adfb9dc5c6e71e55f284a9690ac09e60e87160ee76522221cf32c2e41ffb",
+      "registerTx": "c48114d5e1cc4b378ecd7eb38b4c8de997c8f16ccfa3d9aa69054b0080c6d634",
+      "pinTx": "6d91db5cad09a03de2a2da90506dcf9f797597d5105ec7694eab9799ca4a45af",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/c48114d5e1cc4b378ecd7eb38b4c8de997c8f16ccfa3d9aa69054b0080c6d634",
+        "pin": "https://ccdexplorer.io/testnet/transaction/6d91db5cad09a03de2a2da90506dcf9f797597d5105ec7694eab9799ca4a45af",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9WeDVZoYEmqQfdWWtd?network=testnet"
+      }
+    },
+    {
+      "slug": "invest",
+      "name": "Invest",
+      "tokenId": "1171",
+      "badge": "JyP9WfJyVq3AbxeVcM9Sp",
+      "cardUrl": "https://penny-passport.vercel.app/agents/invest/agent-card.json",
+      "cardSha256": "526367d2c3d51e52cdf6540acd8cc640780c3bd97fc4607aceb8e1cef1ea3497",
+      "registerTx": "4c8578f65e304502c79d08567d4706f008378520205212acccf5da8c1573f6f7",
+      "pinTx": "276456886bc419defe58d7ec7ba899d35d3c3b4b3be394ac61989a0e6b889db2",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/4c8578f65e304502c79d08567d4706f008378520205212acccf5da8c1573f6f7",
+        "pin": "https://ccdexplorer.io/testnet/transaction/276456886bc419defe58d7ec7ba899d35d3c3b4b3be394ac61989a0e6b889db2",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9WfJyVq3AbxeVcM9Sp?network=testnet"
+      }
+    },
+    {
+      "slug": "mail",
+      "name": "Mail",
+      "tokenId": "1172",
+      "badge": "JyP9WgQTRrY6S5tFdiQi3",
+      "cardUrl": "https://penny-passport.vercel.app/agents/mail/agent-card.json",
+      "cardSha256": "2832e329e65a1dbb584fd7792205cd70968e7d49f41d1218b6987430bc2f1dbe",
+      "registerTx": "b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb",
+      "pinTx": "c917db85fae9b4da692cb1571944f425141e67012dc1c1eed5f13600bda50c97",
+      "explorer": {
+        "account": "https://ccdexplorer.io/testnet/account/3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+        "register": "https://ccdexplorer.io/testnet/transaction/b9b681a54ace7250183ebe752bab15be6114a381ae785f9b5e418c22481426eb",
+        "pin": "https://ccdexplorer.io/testnet/transaction/c917db85fae9b4da692cb1571944f425141e67012dc1c1eed5f13600bda50c97",
+        "verify": "https://agent-registry-mcp.concordium.com/v1/check-badge/JyP9WgQTRrY6S5tFdiQi3?network=testnet"
+      }
+    }
+  ]
+}

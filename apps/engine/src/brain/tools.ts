@@ -49,6 +49,15 @@ async function propose(ctx: ToolContext, plan: MoneyPlan) {
 
 const empty = z.object({}).strict();
 const InvestInput = z.object({ portfolioId: z.enum(INVEST_ASSETS), amountUsd: Decimal }).strict();
+const VerifyAgentInput = z
+  .object({
+    badge: z.string().min(1).optional(),
+    account: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((v) => Boolean(v.badge ?? v.account), {
+    message: 'give a badge or a Concordium account',
+  });
 const ManageCommitmentsInput = z.discriminatedUnion('action', [
   z.object({ action: z.literal('list') }).strict(),
   z.object({ action: z.literal('pause'), name: z.string().min(1).max(80) }).strict(),
@@ -105,6 +114,77 @@ export function builtinTools(): ToolDef<never>[] {
     execute: async (ctx, plan) => {
       const g = await ctx.approvals.checkGuard(ctx.userId, plan, ctx.bot);
       return { decision: g.decision, reasons: g.reasons };
+    },
+  });
+  add({
+    id: 'quote_agent_service',
+    description:
+      'Ask another agent what it charges for its paid service, and say so in plain words. Reads the price only; never pays. Use before offering to buy anything from another agent.',
+    risk: 'read',
+    input: empty,
+    execute: async (ctx) => {
+      if (!ctx.x402) return { ok: false, error: 'agent payments are off' };
+      const q = await ctx.x402.quote(ctx.x402.serviceUrl);
+      if (!q.ok) return q;
+      if (!q.needsPayment) return { ok: true, free: true };
+      return {
+        ok: true,
+        free: false,
+        priceCcd: q.amountCcd,
+        priceAtomic: q.amountAtomic,
+        asset: q.asset,
+        payTo: q.payTo,
+        network: q.network,
+        ...(q.description ? { what: q.description } : {}),
+        note: 'Read-only price check. Nothing has been paid.',
+      };
+    },
+  });
+  add({
+    id: 'verify_agent',
+    description:
+      'Check whether another agent carries a valid Verified by Concordium badge. Pass the badge string or the owner Concordium account. Returns verified, invalid, revoked, unknown, or unavailable with the public evidence. Read-only; never moves money.',
+    risk: 'read',
+    input: VerifyAgentInput,
+    execute: async (ctx, input) => {
+      if (!ctx.concordium) return { ok: false, error: 'concordium verification is off' };
+      if (input.badge) {
+        const result = await ctx.concordium.verifyBadge(input.badge);
+        return {
+          ok: true,
+          verdict: result.verdict,
+          subject: result.badge,
+          network: result.network,
+          checkedAt: result.checkedAt,
+          owner: result.check.ownerAccount,
+          status: result.check.status,
+          agentUri: result.check.agentUri,
+          checks: result.check.checks,
+          issues: result.check.issues,
+          ...(result.error ? { error: result.error } : {}),
+        };
+      }
+      if (!input.account) return { ok: false, error: 'give a badge or a Concordium account' };
+      // An account answers with every agent it owns, so report the roll-up.
+      const owner = await ctx.concordium.verifyOwner(input.account);
+      return {
+        ok: true,
+        verdict: owner.verdict,
+        subject: owner.account,
+        network: owner.network,
+        checkedAt: owner.checkedAt,
+        agentCount: owner.agents.length,
+        validCount: owner.validCount,
+        invalidCount: owner.invalidCount,
+        agents: owner.agents.map((a) => ({
+          tokenId: a.tokenId,
+          status: a.status,
+          agentUri: a.agentUri,
+          valid: a.badgeValid,
+          issues: a.issues,
+        })),
+        ...(owner.error ? { error: owner.error } : {}),
+      };
     },
   });
   add({

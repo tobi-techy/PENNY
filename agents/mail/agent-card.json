@@ -1,0 +1,101 @@
+{
+  "name": "Mail",
+  "description": "Mail is Penny's inbox and bills agent. It finds bills in mail, drafts replies, prepares payments, and sets reminders. Sending and paying still need the user's approval.",
+  "url": "https://penny-passport.vercel.app/agents/mail/agent-card.json",
+  "version": "1.0.0",
+  "defaultInputModes": [
+    "text/markdown",
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "text/markdown",
+    "application/json"
+  ],
+  "authentication": {
+    "schemes": []
+  },
+  "skills": [
+    {
+      "id": "find-bills",
+      "name": "Find bills",
+      "description": "Find bills and due dates in connected mail.",
+      "tags": [
+        "bills",
+        "email"
+      ]
+    },
+    {
+      "id": "draft-email",
+      "name": "Draft an email",
+      "description": "Draft an email or reply for the user to review.",
+      "tags": [
+        "email",
+        "draft"
+      ]
+    },
+    {
+      "id": "prepare-payment",
+      "name": "Prepare a bill payment",
+      "description": "Prepare a bill payment for Guard and Face ID approval.",
+      "tags": [
+        "bills",
+        "payment"
+      ]
+    },
+    {
+      "id": "reminders",
+      "name": "Manage reminders",
+      "description": "Set, list, and cancel reminders.",
+      "tags": [
+        "reminders"
+      ]
+    }
+  ],
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "extensions": [
+      {
+        "uri": "https://docs.concordium.com/a2a-extensions/concordium-badge/v1",
+        "description": "Verified by Concordium badge — on-chain agent identity in a CIS-8004 registry",
+        "required": false,
+        "params": {
+          "tokenAddress": "ccd:4221332d34e1694168c2a0c0b3fd0f27/cis-2:JyP9WgQTRrY6S5tFdiQi3",
+          "owner": {
+            "account": "ccd:4221332d34e1694168c2a0c0b3fd0f27:3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT"
+          },
+          "agentWallet": "ccd:4221332d34e1694168c2a0c0b3fd0f27:3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+          "contracts": {
+            "cis8004": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0",
+            "cis8": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12801.0"
+          },
+          "services": {
+            "repository": "https://github.com/tobi-techy/PENNY"
+          },
+          "verify": "Resolve tokenAddress via CIS-8004 agent_of; confirm owner + status=Active + card SHA-256 == metadata_hash.",
+          "verification": {
+            "service": "Concordium Agent Registry",
+            "verifyUrl": "https://agent-registry-mcp.concordium.com/v1/badge-check/JyP9WgQTRrY6S5tFdiQi3",
+            "mcp": "https://agent-registry-mcp.concordium.com/mcp",
+            "docs": "https://docs.concordium.com/en/mainnet/technical-reference/agent-registry/concordium-badge.html"
+          }
+        }
+      }
+    ]
+  },
+  "provider": {
+    "organization": "Penny",
+    "url": "https://github.com/tobi-techy/PENNY"
+  },
+  "documentationUrl": "https://github.com/tobi-techy/PENNY",
+  "registrations": [
+    {
+      "agentId": 1172,
+      "agentRegistry": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0"
+    }
+  ],
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "image": "https://raw.githubusercontent.com/tobi-techy/PENNY/main/brand/assets/bot-mail.svg",
+  "active": true,
+  "x402Support": false
+}

@@ -21,6 +21,8 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
     toolIds: [
       'get_balances',
       'check_guard',
+      'verify_agent',
+      'quote_agent_service',
       'propose_send',
       'propose_split',
       'remember',
@@ -57,7 +59,7 @@ export const BUILT_IN_BOTS: { slug: string; name: string; toolIds: string[] }[] 
       'send_setup_link',
     ],
   },
-  { slug: 'guard', name: 'Guard', toolIds: ['check_guard', 'recall'] },
+  { slug: 'guard', name: 'Guard', toolIds: ['check_guard', 'verify_agent', 'recall'] },
   {
     slug: 'mail',
     name: 'Mail',

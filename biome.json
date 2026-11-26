@@ -13,6 +13,9 @@
       "!design",
       "!brand",
       "!**/test/fixtures",
+      "!agents",
+      "!apps/engine/public-static",
+      "!.concordium",
       "!.perch"
     ]
   },

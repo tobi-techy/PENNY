@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { chainAdapterFromEnv, OneClickClient, PriceFeed, toBaseUnits } from '@penny/chain';
+import { ConcordiumClient } from '@penny/concordium';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createEngine, type Engine } from './app.ts';
@@ -9,6 +10,7 @@ import { NearAiEmbedder, nearAiModels } from './brain/model.ts';
 import type { MarketPort } from './brain/registry.ts';
 import { createRegistry, FakeMarket } from './brain/tools.ts';
 import { LangfuseTracer, noopTracer } from './brain/tracing.ts';
+import { quoteService } from './brain/x402.ts';
 import { renderCardPng } from './cards/render.ts';
 import { ComposioConnector } from './connectors/composio.ts';
 import { createPgliteDb, createPostgresDb, migratePostgres } from './db/client.ts';
@@ -164,6 +166,20 @@ if (env.NEAR_RPC_URL) {
   invest = new FakeInvest(undefined, (quoteId, dep) => fake.investDeposits.set(quoteId, dep));
 }
 
+const concordium =
+  env.CONCORDIUM_VERIFY === 'on'
+    ? new ConcordiumClient({
+        baseUrl: env.CONCORDIUM_MCP_URL,
+        network: env.CONCORDIUM_NETWORK,
+      })
+    : undefined;
+
+// Price checks only. Paying a peer agent is not wired yet; see brain/x402.ts.
+const x402 =
+  env.X402_QUOTE === 'on'
+    ? { quote: (url: string) => quoteService(url), serviceUrl: env.X402_SERVICE_URL }
+    : undefined;
+
 // /demo: demo accounts are never created on chain, so the decorator answers the
 // "is this key on this account" read from enrollment and refuses to broadcast.
 // Production accounts pass straight through to the real adapter.
@@ -189,6 +205,8 @@ const engine = createEngine({
   ...(privacy ? { privacy } : {}),
   embedder: nearCfg ? new NearAiEmbedder(nearCfg) : new FakeEmbedder(),
   market,
+  ...(concordium ? { concordium } : {}),
+  ...(x402 ? { x402 } : {}),
   ...(invest ? { invest } : {}),
   relayerMaxDepositYocto,
   registry: createRegistry(),
@@ -251,6 +269,7 @@ log.info(
     dryRun: env.DRY_RUN,
     relayLive: env.relayLive,
     composio: Boolean(env.COMPOSIO_API_KEY),
+    concordium: Boolean(concordium),
     teeAttestation: env.NEARAI_ATTESTATION,
     port: env.PORT,
   },

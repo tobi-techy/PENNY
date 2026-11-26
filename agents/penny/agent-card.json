@@ -1,0 +1,123 @@
+{
+  "name": "Penny",
+  "description": "Penny is the lead agent of a non-custodial money crew in iMessage. It routes plain-text asks to specialist agents, builds typed plans, and requires Face ID before any money moves.",
+  "url": "https://penny-passport.vercel.app/agents/penny/agent-card.json",
+  "version": "1.0.0",
+  "defaultInputModes": [
+    "text/markdown",
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "text/markdown",
+    "application/json"
+  ],
+  "authentication": {
+    "schemes": []
+  },
+  "skills": [
+    {
+      "id": "send-money",
+      "name": "Send money",
+      "description": "Prepare a USDC or NEAR send for Face ID approval.",
+      "tags": [
+        "payments",
+        "near"
+      ]
+    },
+    {
+      "id": "check-balances",
+      "name": "Check balances",
+      "description": "Read balances and recent activity.",
+      "tags": [
+        "read"
+      ]
+    },
+    {
+      "id": "split-a-bill",
+      "name": "Split a bill",
+      "description": "Prepare a split for approval without moving money first.",
+      "tags": [
+        "bills"
+      ]
+    },
+    {
+      "id": "review-bills",
+      "name": "Review bills",
+      "description": "Find, list, and close bills.",
+      "tags": [
+        "bills"
+      ]
+    },
+    {
+      "id": "reminders",
+      "name": "Manage reminders",
+      "description": "Set, list, and cancel reminders.",
+      "tags": [
+        "reminders"
+      ]
+    },
+    {
+      "id": "remember",
+      "name": "Remember a preference",
+      "description": "Remember durable preferences the user shares.",
+      "tags": [
+        "memory"
+      ]
+    },
+    {
+      "id": "route-crew",
+      "name": "Route to the crew",
+      "description": "Route an ask to Invest, Guard, Mail, Finance, or Errand.",
+      "tags": [
+        "routing"
+      ]
+    }
+  ],
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "extensions": [
+      {
+        "uri": "https://docs.concordium.com/a2a-extensions/concordium-badge/v1",
+        "description": "Verified by Concordium badge — on-chain agent identity in a CIS-8004 registry",
+        "required": false,
+        "params": {
+          "tokenAddress": "ccd:4221332d34e1694168c2a0c0b3fd0f27/cis-2:JyP9Wd81dn3JwiAs6agks",
+          "owner": {
+            "account": "ccd:4221332d34e1694168c2a0c0b3fd0f27:3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT"
+          },
+          "agentWallet": "ccd:4221332d34e1694168c2a0c0b3fd0f27:3ewJGpdgo6NcDt36tmhnakMv9YB1qBQNPQBAinEJy9T1dpujfT",
+          "contracts": {
+            "cis8004": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0",
+            "cis8": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12801.0"
+          },
+          "services": {
+            "repository": "https://github.com/tobi-techy/PENNY"
+          },
+          "verify": "Resolve tokenAddress via CIS-8004 agent_of; confirm owner + status=Active + card SHA-256 == metadata_hash.",
+          "verification": {
+            "service": "Concordium Agent Registry",
+            "verifyUrl": "https://agent-registry-mcp.concordium.com/v1/badge-check/JyP9Wd81dn3JwiAs6agks",
+            "mcp": "https://agent-registry-mcp.concordium.com/mcp",
+            "docs": "https://docs.concordium.com/en/mainnet/technical-reference/agent-registry/concordium-badge.html"
+          }
+        }
+      }
+    ]
+  },
+  "provider": {
+    "organization": "Penny",
+    "url": "https://github.com/tobi-techy/PENNY"
+  },
+  "documentationUrl": "https://github.com/tobi-techy/PENNY",
+  "registrations": [
+    {
+      "agentId": 1169,
+      "agentRegistry": "ccd:4221332d34e1694168c2a0c0b3fd0f27:12802.0"
+    }
+  ],
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "image": "https://raw.githubusercontent.com/tobi-techy/PENNY/main/brand/assets/penny-idle.svg",
+  "active": true,
+  "x402Support": false
+}

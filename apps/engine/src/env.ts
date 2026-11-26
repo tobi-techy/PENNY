@@ -116,6 +116,15 @@ const BaseEnv = z.object({
   /** Turns on the testnet proof routes for `bun run prove`. Refused on mainnet. */
   PENNY_PROVE_SECRET: optionalStr,
 
+  /** Concordium Agent Registry badge checks. off = no verify_agent tool. */
+  CONCORDIUM_VERIFY: z.enum(['on', 'off']).default('off'),
+  CONCORDIUM_MCP_URL: z.url().default('https://agent-registry-mcp.concordium.com'),
+  CONCORDIUM_NETWORK: z.enum(['testnet', 'mainnet']).default('testnet'),
+
+  /** Agent-to-agent service prices over x402. off = no quote_agent_service tool. */
+  X402_QUOTE: z.enum(['on', 'off']).default('off'),
+  X402_SERVICE_URL: z.url().default('http://localhost:4020/guard/review'),
+
   /**
    * Serves the public /demo: a judge gets a throwaway thread that runs the real
    * Guard and approval code against an account that is never created on chain.
