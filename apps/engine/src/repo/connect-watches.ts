@@ -8,13 +8,13 @@ export class ConnectWatchesRepo {
   constructor(private readonly db: Db) {}
 
   /** Start (or restart) waiting for a user to connect a toolkit. */
-  async watch(userId: string, toolkit: string, expiresAt: Date): Promise<void> {
+  async watch(userId: string, toolkit: string, expiresAt: Date, cardId?: string): Promise<void> {
     await this.db
       .insert(connectWatches)
-      .values({ userId, toolkit, status: 'waiting', expiresAt })
+      .values({ userId, toolkit, status: 'waiting', expiresAt, cardId: cardId ?? null })
       .onConflictDoUpdate({
         target: [connectWatches.userId, connectWatches.toolkit],
-        set: { status: 'waiting', expiresAt },
+        set: { status: 'waiting', expiresAt, cardId: cardId ?? null },
       });
   }
 

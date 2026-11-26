@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CardPage } from './CardPage.tsx';
 import { tokenFromPath } from './cardView.ts';
+import { DemoPage } from './DemoPage.tsx';
 import { SetupPage } from './SetupPage.tsx';
 import './styles.css';
 
@@ -17,6 +18,8 @@ if (root) {
         <main>
           <p>This card is too old. Ask Penny again for a fresh one.</p>
         </main>
+      ) : path.startsWith('/demo') ? (
+        <DemoPage />
       ) : (
         <SetupPage />
       )}

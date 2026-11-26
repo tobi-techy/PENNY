@@ -36,12 +36,32 @@ Penny is **iMessage-first**. There is no feed, no dashboard, no tab bar to learn
 
 **No decorative emoji.** Penny uses none unless the user sent one first, and never on money or card messages. Check marks and envelopes are words, not symbols.
 
+### Message shape
+Penny texts like a person, not a help desk.
+
+- **One thought per bubble.** Most replies are one or two sentences, under 240 characters. A longer answer becomes two to four short texts, never a wall.
+- **Answer first.** No "sure", "of course", "happy to help", "great question", or restating the question. No sign-off and no "let me know".
+- **No lists by default.** Steps, options and comparisons are the exception, and only when the user asked for them.
+- **One question at most**, and only when Penny needs it to act.
+- **Nothing is dropped.** If a reply is long, the server splits it at sentence boundaries; links and code stay whole.
+
 ### Rhythm of a move
 1. User text.
 2. One-line reply, sometimes one line of thinking ("checking your cap first…").
 3. Optional crew line when it matters (Guard: "$38 of $100 used this week").
 4. The card.
 5. After approval, the card edits itself. A short closing line only when there is something to say ("done. it's in. I'll tell you sunday how it's doing.").
+
+### When Penny texts first
+
+Penny can start a thread, but only about something real and still open. The rules are part of the product, not the model's mood.
+
+- **One thing, once.** A follow-up names one open thread in the user's words ("still want me to book the dentist?"), gives an easy out ("no rush"), and never says "just following up".
+- **Daylight only.** Nothing proactive between 20:00 and 08:00 in the user's time zone. Penny learns the zone when the user says where they are; until then she uses `PENNY_TIMEZONE` (Africa/Lagos by default). One follow-up a day by default, two at most. Never while the user is actively talking.
+- **Let it go.** No answer means the loop goes quiet. Two unanswered nudges and Penny drops it. A reply raises her autonomy; silence lowers it.
+- **The user is in charge.** "be quiet" stops proactive texts, "be normal" restores the default, "be more proactive" allows up to two a day. These are commands, handled without the model.
+- **Never on money.** A follow-up may remind the user that a card is waiting, but it never claims a move happened, never retries a failed action, and never replaces Guard or Face ID.
+- **Quiet evidence.** The text says what is known ("the quote's still open") and nothing more. If Penny does not know whether something worked, she says so or stays quiet.
 
 ### Tapbacks and moods
 Moods come from events, never from the model's whims.
@@ -102,6 +122,9 @@ Mood changes words, tapbacks and card art only. It never changes a limit, a rout
 | Weekly check-in | mint `#8FE4CC` | no (read-only) |
 | Write (post, email or message as you) | indigo `#8B8CF0` | yes |
 | New bot | amber `#E8C766` | yes if it has write or money tools |
+| Bills found | orange `#FEA247` | no (read-only) |
+| Connect app / set up | blue `#6EA1D6` | no (a link, not an action) |
+| Unfreeze | guard pink `#F6A8F0` | yes (the one card that turns keys back on) |
 
 A bot's own cards use the bot's colour once it exists; the amber "new bot" card is the ask to create it.
 
@@ -134,6 +157,13 @@ Rules:
 
 ### Invest
 Pick a portfolio card → tap one → Invest card → Face ID → steps → done. If the quote expires, the pill becomes "Get a new quote".
+
+### Recurring bills
+1. First bill: "new bill: DStv: ₦18,400, due sat 14 nov. i'll remind you, and watch for the next one."
+2. Next month: "DStv again: ₦18,400, due sat 14 nov. same as last month. i'll remind you." A price change replaces the middle sentence with "that's ₦3,000 more than last month."
+3. After face ID: "paid. DStv, ₦18,400. i've crossed it off and cancelled the reminder. next one expected around tue 8 dec."
+4. If the next bill never arrives, one check at 09:00: "i expected your DStv bill around tue 8 dec. nothing in your inbox yet. if it's gone for good, say stop watching DStv." A few days later, one quieter line: "still no DStv bill. i'll leave it here in case it's late."
+5. "stop watching DStv" pauses it. The receipt and the list stay; nothing is deleted.
 
 ### Guard block
 Guard card replaces the money card. "Not me" freezes the agent and asks you to review. "Allow once" needs Face ID and logs it.

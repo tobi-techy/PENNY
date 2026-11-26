@@ -58,6 +58,11 @@ const VerifyAgentInput = z
   .refine((v) => Boolean(v.badge ?? v.account), {
     message: 'give a badge or a Concordium account',
   });
+const ManageCommitmentsInput = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('list') }).strict(),
+  z.object({ action: z.literal('pause'), name: z.string().min(1).max(80) }).strict(),
+  z.object({ action: z.literal('resume'), name: z.string().min(1).max(80) }).strict(),
+]);
 /** Accepts both `2026-11-14T18:00:00+01:00` and minute precision `2026-11-14T18:00+01:00`. */
 const ReminderAt = z
   .string()
@@ -195,7 +200,7 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'find_bills',
     description:
-      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail and share the link.",
+      "Check the user's connected Gmail for bills (read-only), save new ones, and return every open bill with payee, amount, due date and billId. A bill with repeat true is the same obligation as before: say so and use its comparison instead of calling it new. New bills due later get an automatic reminder the day before. If it says not connected, call connect_app for gmail; it sends the card.",
     risk: 'read',
     input: empty,
     execute: async (ctx) => {
@@ -207,18 +212,42 @@ export function builtinTools(): ToolDef<never>[] {
       return {
         ok: true,
         newCount: r.newBills.length,
-        bills: open.map((b) => ({ ...b, isNew: fresh.has(b.billId) })),
+        bills: open.map((b) => {
+          const c = r.contexts[b.billId];
+          return {
+            ...b,
+            isNew: fresh.has(b.billId),
+            ...(c?.repeat
+              ? { repeat: true, ...(c.repeatLine ? { comparison: c.repeatLine } : {}) }
+              : {}),
+          };
+        }),
       };
     },
   });
   add({
     id: 'list_bills',
     description:
-      'List open bills Penny already knows about (no inbox read). Soonest due first. Use find_bills to check the inbox for new ones.',
+      'List open bills Penny already knows about (no inbox read). Soonest due first. Use find_bills to check the inbox for new ones, and manage_commitments for the recurring obligations behind them.',
     risk: 'read',
     input: empty,
     execute: async (ctx) =>
       ctx.bills ? { ok: true, bills: await ctx.bills.open(ctx.userId) } : { ok: false },
+  });
+  add({
+    id: 'manage_commitments',
+    description:
+      "See and control the recurring bills Penny watches between emails (DStv, rent, power). list names every obligation with the last amount, rhythm and next expected date. pause stops all unprompted follow-ups for one; resume starts them again. This only changes Penny's own watching: no money moves, and the user does not need Face ID.",
+    risk: 'read',
+    input: ManageCommitmentsInput,
+    execute: async (ctx, i) => {
+      if (!ctx.commitments) return { ok: false, text: 'commitments are not set up' };
+      if (i.action === 'list')
+        return { ok: true, text: await ctx.commitments.describe(ctx.userId) };
+      return i.action === 'pause'
+        ? ctx.commitments.pause(ctx.userId, i.name)
+        : ctx.commitments.resume(ctx.userId, i.name);
+    },
   });
   add({
     id: 'close_bill',
@@ -256,7 +285,7 @@ export function builtinTools(): ToolDef<never>[] {
   add({
     id: 'connect_app',
     description:
-      'Connect an outside app (gmail, github) for this user. If already connected, says so. Otherwise returns a link: share tellUser verbatim. Penny watches for the connection and texts the user herself when it is live (for gmail she also checks for bills), so do not ask them to say done.',
+      "Connect the user's gmail or github. If already connected, says so. Otherwise Penny sends a connect card in the thread; never put a URL in your reply. Penny watches for the connection and texts the user herself when it is live (for gmail she also checks for bills), so do not ask them to say done.",
     risk: 'read',
     input: z.object({ toolkit: z.enum(['gmail', 'github']) }).strict(),
     execute: async (ctx, i) => {
@@ -268,26 +297,23 @@ export function builtinTools(): ToolDef<never>[] {
       );
       if (r.status === 'connected') return { ok: true, connected: true, toolkit: i.toolkit };
       if (r.status === 'link') {
-        await ctx.onboarding?.watchConnect(ctx.userId, i.toolkit, {
-          link: r.redirectUrl,
-          space: ctx.space,
-        });
+        // The card is the link. If it cannot be sent, say so; never hand the raw
+        // provider URL to the model, or it will paste it into the thread.
+        const sent = Boolean(ctx.onboarding);
+        if (ctx.onboarding) {
+          await ctx.onboarding.watchConnect(ctx.userId, i.toolkit, {
+            link: r.redirectUrl,
+            space: ctx.space,
+          });
+        }
         const what =
           i.toolkit === 'gmail'
             ? "i only read, and nothing gets sent from it without your ok. i'll text you the moment it's connected."
             : "i'll text you the moment it's connected.";
-        // With onboarding wired, the link arrives as its own card; keep the raw
-        // URL out of the sentence so iMessage renders a preview instead of text.
-        const tellUser = ctx.onboarding
-          ? `i sent you a link to connect your ${i.toolkit}. tap the card above.\n${what}`
-          : `tap to connect your ${i.toolkit}: ${r.redirectUrl}\n${what}`;
-        return {
-          ok: false,
-          connected: false,
-          toolkit: i.toolkit,
-          connectUrl: r.redirectUrl,
-          tellUser,
-        };
+        const tellUser = sent
+          ? `i sent you a connect card for ${i.toolkit}. tap it and approve.\n${what}`
+          : 'i could not send the connect card just now. try again in a moment.';
+        return { ok: false, connected: false, toolkit: i.toolkit, sentCard: sent, tellUser };
       }
       return { ok: false, connected: false, error: r.reason };
     },
@@ -343,6 +369,19 @@ export function builtinTools(): ToolDef<never>[] {
     risk: 'read',
     input: z.object({ query: z.string().min(1).max(200) }).strict(),
     execute: async (ctx, i) => ctx.memory.recall(ctx.userId, i.query, 5),
+  });
+  add({
+    id: 'close_open_loop',
+    description:
+      'Close an open follow-up from your follow-up list once the user has settled it (done) or said to drop it. Use the loop id shown in your context.',
+    risk: 'read', // Penny's own memory; no outside effect
+    input: z
+      .object({ loopId: z.string().min(1).max(80), status: z.enum(['done', 'dropped']) })
+      .strict(),
+    execute: async (ctx, i) =>
+      ctx.followup
+        ? { ok: await ctx.followup.close(ctx.userId, i.loopId, i.status) }
+        : { ok: false, error: 'follow-up tracking is not set up' },
   });
   add({
     id: 'set_mood',

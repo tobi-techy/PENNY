@@ -5,10 +5,11 @@ import { FROZEN_TEXT } from '../src/approvals/service.ts';
 import { BUILT_IN_BOTS } from '../src/brain/bots.ts';
 import { createRegistry } from '../src/brain/tools.ts';
 import { APPROVAL_POLICY, needsApproval } from '../src/cards/policy.ts';
-import { renderCardPng } from '../src/cards/render.ts';
-import { linkSubcaptionStates, pickChannel } from '../src/cards/sender.ts';
+import { buildCardSvg, renderCardPng } from '../src/cards/render.ts';
+import { CardSender, linkSubcaptionStates, pickChannel } from '../src/cards/sender.ts';
 import { FakeConnector } from '../src/connectors/composio.ts';
-import { FREEZE_REPLY, freezeCommand, UNFREEZE_REPLY } from '../src/inbound.ts';
+import { FREEZE_REPLY, freezeCommand, UNFREEZE_REPLY, WELCOME_TEXT } from '../src/inbound.ts';
+import { sha256Hex } from '../src/lib/crypto.ts';
 import { createLogger } from '../src/lib/logger.ts';
 import type { DeviceRow } from '../src/repo/users.ts';
 import {
@@ -75,9 +76,10 @@ describe('needsApproval: one policy table, never the model', () => {
     expect(needsApproval({ tool: 'set_reminder', risk: 'money' })).toBe(true);
   });
   test('buttons: undo/edit/pick/open never need Face ID; send and approve do', () => {
-    for (const b of ['undo', 'edit', 'pick', 'open', 'decline', 'renew', 'freeze'])
+    for (const b of ['undo', 'edit', 'pick', 'open', 'decline', 'renew', 'freeze', 'dismiss'])
       expect(needsApproval({ button: b })).toBe(false);
     expect(needsApproval({ button: 'send' })).toBe(true);
+    expect(needsApproval({ button: 'pay' })).toBe(true);
     expect(needsApproval({ button: 'approve' })).toBe(true);
     expect(needsApproval({ button: 'something_new' })).toBe(true);
   });
@@ -620,6 +622,65 @@ describe('plain tone', () => {
     await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what can you do? 🎉'));
     expect(t.messaging.texts.at(-1)?.text).toBe('on it 🎉');
   });
+  test('a long answer lands as a few short texts', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554104');
+    const long =
+      'mail found three bills this week. nepa is the big one at $84, due friday. the internet bill is $22 and the water bill is $14. if you want, finance can line up all three so you only approve once. otherwise i can remind you the day before each one is due.';
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: long }]),
+    );
+    const before = t.messaging.texts.length;
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'what bills do i have?'));
+    const sent = t.messaging.texts
+      .slice(before)
+      .map((x) => x.text)
+      .filter((x) => x !== WELCOME_TEXT);
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.join(' ').replace(/\s+/g, ' ')).toBe(long);
+    for (const text of sent) expect(text.length).toBeLessThanOrEqual(240);
+  });
+
+  test('a later bubble failure keeps the turn from replaying', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554105');
+    const long =
+      'mail found three bills this week. nepa is the big one at $84, due friday. the internet bill is $22 and the water bill is $14. if you want, finance can line up all three so you only approve once. otherwise i can remind you the day before each one is due.';
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: long }]),
+    );
+    const before = t.messaging.texts.length;
+    const original = t.messaging.sendText.bind(t.messaging);
+    let sends = 0;
+    t.messaging.sendText = async (space, text) => {
+      sends += 1;
+      if (sends === 2) throw new Error('second bubble down');
+      await original(space, text);
+    };
+    try {
+      await handleInbound(
+        { ...inboundDeps(), onboarding: { welcome: async () => true } as never },
+        inbound(f.space.userHandle, 'what bills do i have?'),
+      );
+    } finally {
+      t.messaging.sendText = original;
+    }
+    expect(sends).toBe(2);
+    expect(t.messaging.texts.slice(before)).toHaveLength(1);
+  });
+
+  test('a raw connect link never reaches the thread', async () => {
+    const { handleInbound } = await import('../src/inbound.ts');
+    const f = await enrolledUser(t, '+15554103');
+    t.setModels(
+      scriptedModel([{ tool: 'route', input: { bot: 'penny', reason: 'x' } }]),
+      scriptedModel([{ text: 'tap to connect your gmail (https://connect.example/gmail)' }]),
+    );
+    await handleInbound(inboundDeps(), inbound(f.space.userHandle, 'connect my gmail'));
+    expect(t.messaging.texts.at(-1)?.text).not.toContain('https://');
+  });
 });
 
 function inboundDeps() {
@@ -652,3 +713,94 @@ function inbound(handle: string, text: string) {
     },
   } as never;
 }
+
+describe('info done cards show their outcome in the picture', () => {
+  test('a connected info card gets the same settled pill as the live card', () => {
+    const card = Card.parse({
+      id: 'crd_01JC0000000000000000000000',
+      userId: 'usr_01JC0000000000000000000000',
+      agent: 'penny',
+      kind: 'info',
+      type: 'connect',
+      title: 'Gmail connected',
+      lines: [{ label: 'Status', value: 'Connected' }],
+      buttons: [],
+      state: 'done',
+      createdAt: '2026-11-05T19:00:00.000Z',
+    });
+    expect(buildCardSvg(card, new Date('2026-11-05T19:00:00.000Z'))).toContain('>Connected<');
+  });
+});
+
+describe('cards survive a restart', () => {
+  const deps = () => ({
+    cards: t.engine.repos.cards,
+    users: t.engine.repos.users,
+    messaging: t.messaging,
+    publicBaseUrl: 'https://penny.test',
+    log: createLogger('silent'),
+    now: () => t.clock.now,
+  });
+
+  test('a link card update mints a fresh working URL after the token cache is gone', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15550177');
+    const space = { spaceId: 'any;-;+15550177', userHandle: '+15550177', phone: '+1PENNY' };
+    const sent = await new CardSender(deps()).send({
+      userId: user.id,
+      space,
+      agent: 'penny',
+      kind: 'info',
+      type: 'connect',
+      title: 'Connect Gmail',
+      lines: [{ value: 'Penny can watch your Gmail' }],
+      buttons: [],
+      state: 'ready',
+    });
+    const oldToken = tokenFromUrl(sent.url);
+
+    // a new process: no memory of the token or the message
+    const updated = await new CardSender(deps()).update(sent.card.id, {
+      state: 'done',
+      title: 'Gmail connected',
+      lines: [{ label: 'Status', value: 'Connected' }],
+      buttons: [],
+    });
+    expect(updated?.state).toBe('done');
+    const freshToken = tokenFromUrl(t.messaging.texts.at(-1)?.text);
+    expect(freshToken).not.toBe(oldToken);
+    expect((await t.engine.repos.cards.byTokenHash(sha256Hex(freshToken)))?.id).toBe(sent.card.id);
+    expect(await t.engine.repos.cards.byTokenHash(sha256Hex(oldToken))).toBeNull();
+  });
+
+  test('a live card edit uses the persisted message id and space', async () => {
+    const user = await t.engine.repos.users.findOrCreateByHandle('+15550178');
+    const space = { spaceId: 'any;-;+15550178', userHandle: '+15550178' };
+    const row = await t.engine.repos.cards.create({
+      userId: user.id,
+      agent: 'penny',
+      kind: 'info',
+      type: 'connect',
+      title: 'Connect Gmail',
+      amount: null,
+      lines: [{ value: 'Penny can watch your Gmail' }],
+      buttons: [],
+      state: 'ready',
+      approvalId: null,
+      tokenHash: sha256Hex('not-a-real-token'),
+      tokenExpiresAt: new Date(t.clock.now.getTime() + 60_000),
+      payload: null,
+      channel: 'live',
+      messageRef: 'imsg-123',
+      space,
+      expiresAt: null,
+    });
+    const before = t.messaging.edits.length;
+    await new CardSender(deps()).update(row.id, {
+      state: 'done',
+      title: 'Gmail connected',
+      buttons: [],
+    });
+    const edit = t.messaging.edits[before];
+    expect(edit?.handle).toMatchObject({ cardId: row.id, ref: 'imsg-123', space });
+  });
+});

@@ -82,6 +82,8 @@ export type SchedulerJobDeps = {
   expireApprovals: (now: Date) => Promise<unknown>;
   /** Send reminders that are due (each exactly once). */
   fireReminders?: (now: Date) => Promise<unknown>;
+  /** Follow up on one open loop per user when the deterministic gate allows. */
+  followupTick?: (now: Date) => Promise<unknown>;
   refreshRelayed?: () => Promise<unknown>;
   /** Release approvals stuck in `signed` after a relay that never reported back. */
   reconcileStuckSigned?: () => Promise<unknown>;
@@ -90,8 +92,12 @@ export type SchedulerJobDeps = {
   weeklyReflection?: (now: Date) => Promise<void>;
   /** Check connected inboxes for new bills and tell the user. */
   scanBills?: () => Promise<void>;
+  /** One quiet check when an expected bill has not arrived. */
+  commitmentFollowUps?: (now: Date) => Promise<unknown>;
   /** Notice apps the user just connected (after a connect link) and follow up. */
   checkConnections?: () => Promise<void>;
+  /** Delete expired /demo sessions and the throwaway users behind them. */
+  pruneDemoSessions?: (olderThan: Date) => Promise<unknown>;
 };
 
 /** Default Phase 1 jobs. Weekly reflection is weekly; the rest are hygiene. */
@@ -114,6 +120,14 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
       run: async (now) => d.pruneIdempotency(new Date(now.getTime() - DAY)),
     },
   ];
+  if (d.pruneDemoSessions) {
+    const prune = d.pruneDemoSessions;
+    jobs.push({
+      name: 'prune_demo_sessions',
+      everyMs: HOUR,
+      run: async (now) => void (await prune(now)),
+    });
+  }
   if (d.refreshRelayed) {
     jobs.push({
       name: 'chain_status_poller',
@@ -140,12 +154,30 @@ export function defaultJobs(d: SchedulerJobDeps): ScheduledJob[] {
     // One live Composio call per pending watch: minute-scale, not tick-scale.
     jobs.push({ name: 'check_connections', everyMs: 60_000, run: d.checkConnections });
   }
+  if (d.followupTick) {
+    // A DB query for due loops, no model. The model runs only after the gate.
+    const tick = d.followupTick;
+    jobs.push({
+      name: 'followup_due',
+      everyMs: 60_000,
+      anchorOnStart: true,
+      run: async (now) => void (await tick(now)),
+    });
+  }
   if (d.scanBills) {
     jobs.push({
       name: 'scan_bills',
       everyMs: 6 * HOUR,
       anchorOnStart: true,
       run: d.scanBills,
+    });
+  }
+  if (d.commitmentFollowUps) {
+    // The service itself only texts inside the 09:00 local hour, once per cycle.
+    jobs.push({
+      name: 'commitment_followups',
+      everyMs: 15 * 60_000,
+      run: async (now) => void (await d.commitmentFollowUps?.(now)),
     });
   }
   if (d.weeklyReflection) {

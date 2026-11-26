@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "plain": { "color": "#B1C3D8", "tag": "● PENNY" },
+  "types": [
+    { "type": "invest", "color": "#6EA1D6", "tag": "↗ INVEST", "settled": "Bought" },
+    { "type": "pick", "color": "#6EA1D6", "tag": "◇ PICK ONE", "settled": "Done" },
+    { "type": "send", "color": "#4FD57F", "tag": "→ SEND", "settled": "Sent" },
+    { "type": "pay_bill", "color": "#FEA247", "tag": "✉ BILL", "settled": "Paid" },
+    { "type": "request", "color": "#B77DF8", "tag": "⇄ SPLIT", "settled": "Done" },
+    { "type": "errand", "color": "#FA78B2", "tag": "✦ ERRAND", "settled": "Hired" },
+    { "type": "guard_block", "color": "#FC5855", "tag": "■ BLOCKED", "settled": "Blocked" },
+    { "type": "checkin", "color": "#8FE4CC", "tag": "◎ THIS WEEK", "settled": "Done" },
+    { "type": "write", "color": "#8B8CF0", "tag": "✎ WRITE", "settled": "Sent" },
+    { "type": "new_bot", "color": "#E8C766", "tag": "✳ NEW BOT", "settled": "Created" },
+    { "type": "reminder", "color": "#8FE4CC", "tag": "◷ REMINDER", "settled": "Done" },
+    { "type": "email_draft", "color": "#8B8CF0", "tag": "✉ DRAFT", "settled": "Sent" },
+    { "type": "plan", "color": "#B77DF8", "tag": "☰ PLAN", "settled": "Done" },
+    { "type": "found", "color": "#FEA247", "tag": "◉ FOUND IT", "settled": "Found" },
+    { "type": "done", "color": "#4FD57F", "tag": "✓ DONE", "settled": "Done" },
+    { "type": "unfreeze", "color": "#F6A8F0", "tag": "◆ UNFREEZE", "settled": "Unfrozen" },
+    { "type": "connect", "color": "#6EA1D6", "tag": "⇢ CONNECT", "settled": "Connected" },
+    { "type": "setup", "color": "#6EA1D6", "tag": "◈ SET UP", "settled": "Set up" }
+  ],
+  "pills": {
+    "ready": "Approve with Face ID",
+    "approving": "Approving…",
+    "sent": "Sent",
+    "expired": "Get a new card",
+    "blocked": "Not me"
+  }
+}

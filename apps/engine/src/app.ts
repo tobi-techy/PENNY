@@ -13,14 +13,17 @@ import { BotService } from './brain/bots.ts';
 import { Crew } from './brain/crew.ts';
 import { type Embedder, MemoryService } from './brain/memory.ts';
 import { MoodService } from './brain/mood.ts';
+import { ProactiveService } from './brain/proactive.ts';
 import { ReflectionService } from './brain/reflection.ts';
 import type { MarketPort, ToolRegistry } from './brain/registry.ts';
 import { noopTracer, type Tracer } from './brain/tracing.ts';
 import { CardActions } from './cards/actions.ts';
 import { CardSender, toCardDto } from './cards/sender.ts';
+import { CommitmentsService } from './commitments/service.ts';
 import type { ConnectorPort } from './connectors/composio.ts';
 import type { Db } from './db/client.ts';
 import { EnrollService } from './devices/enroll.ts';
+import { buildDemoRoutes } from './http/demo.ts';
 import { buildProveRoutes } from './http/prove.ts';
 import { buildRoutes } from './http/routes.ts';
 import {
@@ -46,7 +49,10 @@ import { ApprovalsRepo } from './repo/approvals.ts';
 import { BillsRepo } from './repo/bills.ts';
 import { BotsRepo, MessagesRepo, MoodsRepo } from './repo/bots.ts';
 import { CardsRepo, PasskeysRepo, RemindersRepo } from './repo/cards.ts';
+import { CommitmentsRepo } from './repo/commitments.ts';
 import { ConnectWatchesRepo } from './repo/connect-watches.ts';
+import { DemoRepo } from './repo/demo.ts';
+import { FollowUpRepo } from './repo/followup.ts';
 import {
   AttestChallengesRepo,
   GuardDecisionsRepo,
@@ -104,8 +110,15 @@ export type EngineDeps = {
   renderCardImage?: (card: import('@penny/shared').Card) => Promise<Uint8Array>;
   /** Explorer base for receipts, e.g. https://testnet.nearblocks.io */
   explorerBaseUrl?: string;
+  /** App account the crew's agent sub-accounts hang off (NEAR_APP_ACCOUNT_ID). */
+  appAccountId?: string;
   /** Testnet proof routes (scripts/prove.ts). Only set from env on testnet. */
   proveSecret?: string;
+  /**
+   * Public /demo (PENNY_DEMO=1). Off unless set; refused on mainnet at boot.
+   * Demo users get a throwaway account that is never created on chain.
+   */
+  demo?: { maxTurns: number; sessionsPerHour: number; guardContract?: string };
   /** Test hook: no real waits between live-card edit retries. */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -139,10 +152,13 @@ export function createEngine(d: EngineDeps) {
     idempotency: new IdempotencyRepo(d.db),
     guardDecisions: new GuardDecisionsRepo(d.db),
     bills: new BillsRepo(d.db),
+    commitments: new CommitmentsRepo(d.db),
     connectWatches: new ConnectWatchesRepo(d.db),
     cards: new CardsRepo(d.db),
     passkeys: new PasskeysRepo(d.db),
     reminders: new RemindersRepo(d.db),
+    followup: new FollowUpRepo(d.db),
+    demo: new DemoRepo(d.db),
   };
   const timeZone = d.timeZone ?? DEFAULT_TIME_ZONE;
   const cardSender = new CardSender({
@@ -157,6 +173,16 @@ export function createEngine(d: EngineDeps) {
   });
   const mood = new MoodService(repos.moods);
   const memory = new MemoryService(d.db, d.embedder);
+  const proactive = new ProactiveService({
+    followup: repos.followup,
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    model: d.models.chat,
+    timeZone,
+    now,
+    log: d.log,
+  });
 
   let approvals: ApprovalService | null = null;
   const botService = new BotService({
@@ -185,6 +211,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
     ...(d.explorerBaseUrl ? { explorerBaseUrl: d.explorerBaseUrl } : {}),
+    ...(d.appAccountId ? { appAccountId: d.appAccountId } : {}),
     ...(d.mainnetMaxPerTxUsd ? { mainnetMaxPerTxUsd: d.mainnetMaxPerTxUsd } : {}),
     ...(d.mainnetMaxDailyUsd ? { mainnetMaxDailyUsd: d.mainnetMaxDailyUsd } : {}),
     ...(d.relayerMaxDepositYocto !== undefined
@@ -226,14 +253,26 @@ export function createEngine(d: EngineDeps) {
     },
     (userId): Promise<void> => onboarding.onEnrolled(userId),
   );
+  const commitments = new CommitmentsService({
+    commitments: repos.commitments,
+    bills: repos.bills,
+    users: repos.users,
+    messages: repos.messages,
+    messaging: d.messaging,
+    log: d.log,
+    timeZone,
+    now,
+  });
   const bills = new BillsService({
     bills: repos.bills,
     reminders: repos.reminders,
     users: repos.users,
     messages: repos.messages,
     messaging: d.messaging,
+    commitments,
     ...(d.connectors ? { connectors: d.connectors } : {}),
     approvals: repos.approvals,
+    cards: cardSender,
     billers: resolveBillers({ demoPayTo: d.demoBillerAccount }),
     explorerTxUrl: `${d.explorerBaseUrl ?? (d.chainNetwork === 'testnet' ? 'https://testnet.nearblocks.io' : 'https://nearblocks.io')}/txns/`,
     log: d.log,
@@ -268,6 +307,7 @@ export function createEngine(d: EngineDeps) {
     approvals,
     memory,
     mood,
+    followup: proactive,
     market: d.market,
     ...(d.concordium ? { concordium: d.concordium } : {}),
     ...(d.x402 ? { x402: d.x402 } : {}),
@@ -280,6 +320,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     ...(d.privacy ? { privacy: d.privacy } : {}),
     bills,
+    commitments,
     onboarding,
     timeZone,
     now,
@@ -290,6 +331,25 @@ export function createEngine(d: EngineDeps) {
     approvals,
     reminders: repos.reminders,
     bots: repos.bots,
+    // Pay on a found bill becomes the same pay_bill approval Face ID knows how to sign.
+    payBill: async ({ userId, billId, space, card }) => {
+      const p = await bills.paymentPlan(userId, billId);
+      if (!p.ok) return { decision: 'block', reasons: [p.reason] };
+      return approvals.createMoneyApproval({
+        userId,
+        bot: null,
+        plan: p.plan,
+        space,
+        facts: p.facts,
+        fromCard: { id: card.id, tokenHash: card.tokenHash },
+        quiet: true,
+      });
+    },
+    // "Not mine" never moves money: it only closes the saved bill.
+    dismissBill: async (userId, billId) => {
+      const r = await bills.close(userId, billId, 'dismissed');
+      return r.ok ? { ok: true } : { ok: false, error: r.error };
+    },
     now,
     log: d.log,
   });
@@ -311,6 +371,8 @@ export function createEngine(d: EngineDeps) {
   // The SPA needs its own bundle and stylesheet; the strict API CSP would block both.
   app.use('/setup', webPageCsp());
   app.use('/a/:id', webPageCsp());
+  app.use('/demo', webPageCsp());
+  app.use('/demo/*', webPageCsp());
   const renderPng =
     d.renderCardImage ??
     (async (card: import('@penny/shared').Card) => {
@@ -319,6 +381,34 @@ export function createEngine(d: EngineDeps) {
     });
   // /setup is a picture link card too (sent before the user has any app).
   const base = d.publicBaseUrl.replace(/\/$/, '');
+
+  // Public demo: the SPA shell. Its own page, not a card link: a judge opens it.
+  if (d.demo) {
+    app.get('/demo', async (c) => {
+      const index = join(webDist, 'index.html');
+      c.header('cache-control', 'no-store');
+      if (!existsSync(index)) {
+        return c.html(
+          '<!doctype html><meta name="robots" content="noindex"><h1>The demo is not built yet.</h1>',
+          503,
+        );
+      }
+      return c.html(await readFile(index, 'utf8'));
+    });
+    // Optional: the 60 s film, so a judge on a browser without a passkey still sees
+    // the flow. Copied by the web build from apps/web/public/; absent is fine.
+    app.get('/demo/film.mp4', async (c) => {
+      const film = join(webDist, 'demo-film.mp4');
+      if (!existsSync(film)) return c.json({ error: 'not_found' }, 404);
+      return new Response(await readFile(film), {
+        headers: {
+          'content-type': 'video/mp4',
+          'cache-control': 'public, max-age=3600',
+          'accept-ranges': 'none',
+        },
+      });
+    });
+  }
   app.get('/setup', async (c) => {
     const { linkPageHtml, SETUP_CARD } = await import('./cards/page.ts');
     const index = join(webDist, 'index.html');
@@ -495,6 +585,7 @@ export function createEngine(d: EngineDeps) {
     log: d.log,
     publicBaseUrl: d.publicBaseUrl,
     approvals,
+    proactive,
   };
   app.route(
     '/',
@@ -516,15 +607,40 @@ export function createEngine(d: EngineDeps) {
     }),
   );
 
+  // Public demo: same pipeline, throwaway account, no broadcast. Mounted after the
+  // API routes so its own /v1/demo/* limiter applies first.
+  if (d.demo) {
+    app.route(
+      '/',
+      buildDemoRoutes({
+        demo: repos.demo,
+        users: repos.users,
+        enroll,
+        inbound: inboundDeps,
+        cards: cardSender,
+        cardsRepo: repos.cards,
+        log: d.log,
+        now,
+        maxTurns: d.demo.maxTurns,
+        sessionsPerHour: d.demo.sessionsPerHour,
+        ...(d.demo.guardContract ? { guardContract: d.demo.guardContract } : {}),
+        ...(d.explorerBaseUrl ? { explorerBaseUrl: d.explorerBaseUrl } : {}),
+      }),
+    );
+  }
+
   const reflection = new ReflectionService({ users: repos.users, bots: repos.bots, memory });
   const scheduler = new Scheduler(
     defaultJobs({
       expireApprovals: () => approvals.expireDue(),
       fireReminders: (at: Date) => bills.sendDue(at),
+      commitmentFollowUps: (at: Date) => commitments.followUps(at),
+      followupTick: (at: Date) => proactive.tick(at),
       refreshRelayed: () => approvals.refreshRelayed(),
       reconcileStuckSigned: () => approvals.reconcileStuckSigned(),
       pruneWebhookEvents: (olderThan) => repos.webhookEvents.prune(olderThan),
       pruneIdempotency: (olderThan) => repos.idempotency.prune(olderThan),
+      ...(d.demo ? { pruneDemoSessions: (now: Date) => repos.demo.prune(now) } : {}),
       weeklyReflection: async (now) => {
         await reflection.reflectWeekly(now);
       },
@@ -549,6 +665,7 @@ export function createEngine(d: EngineDeps) {
     services: {
       approvals,
       bills,
+      commitments,
       onboarding,
       bots: botService,
       cards: cardSender,
@@ -557,6 +674,7 @@ export function createEngine(d: EngineDeps) {
       enroll,
       mood,
       memory,
+      proactive,
       reflection,
       scheduler,
     },

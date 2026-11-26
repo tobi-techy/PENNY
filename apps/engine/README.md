@@ -36,11 +36,11 @@ Mainnet boot is refused until the real `ChainPort` from `packages/chain` is wire
 
 SQL migrations live in `drizzle/` and are applied at boot (in-memory pglite in dev, Postgres when `DATABASE_URL` is set). Run `bunx drizzle-kit generate` after editing `src/db/schema.ts`.
 
-- A fresh database runs the whole set in order: `0000..0009`, ending with the last migration (`0009`, which adds the approvals bill-claim column/index and reminder retry fields). The set is additive, so a database already at main's `0007_card_status_line` can apply `0008` and `0009`.
+- A fresh database runs the whole set in order: `0000..0011`, ending with `0011` (recurring commitments and bill links); `0010` adds followups, open loops and proactive messages. The set is additive, so a database already at `0009` can apply `0010` and `0011`.
 - A database that ran an earlier shape of this branch cannot be upgraded by the merged journal. Drizzle decides what to apply from each migration's recorded `when` timestamp, and the numbering changed when main was merged in. Two shapes were observed:
   - last migration `0004`/`0005` from before the merge (`when` 1794169088366): main's `0005_live_cards` looks already applied and is skipped, then `0006_reissue_once` aborts because the `reissued_from` column is missing.
   - a database from merge commit `9725f57`: the branch's `0006` was recorded with `when` 1794173982204, so main's `0006` and `0007` are skipped for good. The `reissued_from` partial index and `cards.status_line` are then missing, and the engine fails at run time.
-- For either shape, drop and recreate the database, then run `0000..0009` from empty. There is no repair path; only a fresh database is supported.
+- For either shape, drop and recreate the database, then run `0000..0011` from empty. There is no repair path; only a fresh database is supported.
 
 ## Layout
 
@@ -49,13 +49,18 @@ src/env.ts                 zod env, fails closed; relayLive = mainnet && DRY_RUN
 src/db/                    Drizzle schema (all contract tables + bots), pglite/postgres clients
 drizzle/                   SQL migrations (pgvector ext, append-only trigger on approval_events)
 src/guard/policy.ts        pure Guard: per-tx, rolling daily, allowlist, new-recipient, assets, quote freshness, velocity, bot caps
+src/guard/onchain.ts       shared Guard contract gate: owner allowance, paused/revoked/expired, allowlist, caps (pure)
 src/guard/bot-policy.ts    pure rules for create_bot (risk -> plain confirm | Face ID)
 src/approvals/             state machine, cardToken, ApprovalService (create, submit, decline, status, expiry)
 src/brain/registry.ts      tool registry: id, description, zod input, risk read|write|money; per-bot enforcement
 src/brain/tools.ts         built-in tools (money tools only produce typed IntentPlans -> Guard -> card)
 src/brain/bots.ts          built-in crew seeded as rows; create_bot drafting/confirm/activation
 src/brain/crew.ts          router (picks among the user's active bots) + bot runner (Vercel AI SDK)
+src/brain/followup.ts      pure proactivity gate: score, quiet hours, due loops, loop parsing (`loop | when | text`)
+src/brain/proactive.ts     due-loop scheduler: gate -> one model sentence or SKIP -> text; reply calibration
+src/repo/followup.ts       followups, open_loops, proactive_messages
 src/brain/model.ts         NEAR AI Cloud provider + embedder
+src/lib/reply.ts           trim chat filler and split long replies into short bubbles
 src/brain/{mood,memory,tracing}.ts
 src/ports/                 ChainPort, MessagingPort (+ fakes), Spectrum iMessage adapter
 src/photon/verify.ts       Spectrum webhook HMAC check

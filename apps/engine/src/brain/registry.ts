@@ -38,9 +38,15 @@ export type ToolContext = {
   approvals: ApprovalService;
   connectors?: ConnectorPort;
   bills?: BillsService;
+  /** Recurring obligations Penny watches between bills. */
+  commitments?: import('../commitments/service.ts').CommitmentsService;
   onboarding?: OnboardingService;
   memory: MemoryService;
   mood: MoodService;
+  /** Open loops: the live turn can settle one so no follow-up repeats it. */
+  followup?: {
+    close(userId: string, id: string, status: 'done' | 'dropped'): Promise<boolean>;
+  };
   market: MarketPort;
   /** Read-only Concordium badge checks. Absent when CONCORDIUM_VERIFY is off. */
   concordium?: ConcordiumClient;

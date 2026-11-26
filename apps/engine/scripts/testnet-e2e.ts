@@ -39,7 +39,7 @@ try {
 }
 const guardId = adapter.guardContract;
 if (!guardId) {
-  console.log('3. PENNY_GUARD_CONTRACT unset: on-chain autopilot off, skipping Guard checks');
+  console.log('3. PENNY_GUARD_CONTRACT unset: the shared Guard check is off, skipping it');
 } else {
   const guard = new GuardContract({ rpc: adapter.rpc, contractId: guardId, mode: adapter.mode });
   const dryPolicy = await guard.setPolicy(user, `invest.${user}`, {

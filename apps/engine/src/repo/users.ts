@@ -33,6 +33,21 @@ export class UsersRepo {
     return r ?? null;
   }
 
+  /** A /demo session's user. Deleted by the sweeper; its account is never created on chain. */
+  async markDemo(userId: string): Promise<void> {
+    await this.db.update(users).set({ isDemo: true }).where(eq(users.id, userId));
+  }
+
+  /** True only for a demo user's borrowed account id. Gates every demo chain shortcut. */
+  async isDemoAccount(accountId: string): Promise<boolean> {
+    const [r] = await this.db
+      .select({ isDemo: users.isDemo })
+      .from(users)
+      .where(eq(users.accountId, accountId))
+      .limit(1);
+    return r?.isDemo === true;
+  }
+
   async findOrCreateByHandle(handle: string): Promise<UserRow> {
     const [existing] = await this.db.select().from(users).where(eq(users.handle, handle)).limit(1);
     if (existing) return existing;

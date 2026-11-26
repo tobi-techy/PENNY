@@ -79,7 +79,7 @@ const BaseEnv = z.object({
   ),
   /**
    * The single shared Guard contract (contracts/guard), e.g. guard.penny.testnet.
-   * Unset = on-chain autopilot off and guardFor() returns undefined.
+   * Unset = the shared Guard check is off and guardFor() returns undefined.
    */
   PENNY_GUARD_CONTRACT: optionalStr.refine(
     (v) => v === undefined || /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(v),
@@ -124,6 +124,23 @@ const BaseEnv = z.object({
   /** Agent-to-agent service prices over x402. off = no quote_agent_service tool. */
   X402_QUOTE: z.enum(['on', 'off']).default('off'),
   X402_SERVICE_URL: z.url().default('http://localhost:4020/guard/review'),
+
+  /**
+   * Serves the public /demo: a judge gets a throwaway thread that runs the real
+   * Guard and approval code against an account that is never created on chain.
+   * Refused on mainnet.
+   */
+  PENNY_DEMO: flag.default('0'),
+  /** Model turns per demo session. Caps what one visitor can spend. */
+  PENNY_DEMO_MAX_TURNS: z.coerce.number().int().positive().max(100).default(20),
+  /** Demo sessions opened per IP per hour. */
+  PENNY_DEMO_SESSIONS_PER_HOUR: z.coerce.number().int().positive().max(500).default(30),
+
+  /**
+   * Run pending Postgres migrations before boot. Off by default: a container host
+   * with no release step turns it on, and a rolling deploy races only itself.
+   */
+  MIGRATE_ON_BOOT: flag.default('0'),
 
   RATE_LIMIT_PER_IP_PER_MIN: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_PER_USER_PER_MIN: z.coerce.number().int().positive().default(30),
@@ -170,6 +187,15 @@ export const EnvSchema = BaseEnv.superRefine((env, ctx) => {
       code: 'custom',
       path: ['PENNY_PROVE_SECRET'],
       message: 'use at least 32 characters',
+    });
+  }
+  // The demo never moves money, but it does hand out approvals, and on mainnet
+  // that would mean real cards against a real policy. Keep it off mainnet.
+  if (env.PENNY_DEMO === '1' && env.PENNY_ENV === 'mainnet') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PENNY_DEMO'],
+      message: 'the public demo is refused on mainnet',
     });
   }
   // Card links and passkeys (origin + rpId) are built from PUBLIC_BASE_URL, never from a

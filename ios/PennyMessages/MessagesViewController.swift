@@ -90,7 +90,7 @@ final class MessagesViewController: MSMessagesAppViewController {
         let baseURL = config.engineURL ?? URL(string: "https://localhost")!
         let newModel = ApprovalCardModel(
             token: token,
-            client: EngineClient(baseURL: baseURL),
+            client: ApprovalCardClientAdapter(client: EngineClient(baseURL: baseURL)),
             signer: DeviceKeyStore.shared,
             expectedAccountId: config.accountId,
             deviceId: config.deviceId

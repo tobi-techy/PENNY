@@ -11,8 +11,8 @@ import type { ApprovalCard, CardHandle, MessagingPort, SpaceRef } from './messag
  * changes edit the same message: space.send(edit(content, sentMessage)).
  *
  * The sent message record (with its mini app session) is needed for edit(), so
- * it is kept in memory keyed by card id. LIMITATION: after a restart an in-place
- * edit is impossible; CardSender falls back to sending a fresh card.
+ * it is kept in memory keyed by card id. The message id is also persisted with
+ * the card, so after a restart `space.getMessage(id)` restores the edit target.
  */
 
 export type SpectrumConfig = {
@@ -26,9 +26,10 @@ export type SpectrumConfig = {
 };
 
 // Minimal structural types so SDK types don't leak through the engine.
-type SentMessage = unknown;
+type SentMessage = { id?: string };
 type SpectrumSpace = {
   send: (...content: unknown[]) => Promise<SentMessage>;
+  getMessage?: (id: string) => Promise<SentMessage | undefined>;
   startTyping?: () => Promise<void>;
   stopTyping?: () => Promise<void>;
 };
@@ -140,16 +141,21 @@ export class SpectrumMessaging implements MessagingPort {
     const s = await this.space(ref);
     const message = await s.send(this.content(card));
     this.sent.set(card.cardId, { space: ref, message, url: card.url });
-    return { cardId: card.cardId, ref: card.cardId };
+    const messageId = typeof message.id === 'string' ? message.id : card.cardId;
+    return { cardId: card.cardId, ref: messageId, space: ref };
   }
 
   async editCard(handle: CardHandle, card: ApprovalCard): Promise<void> {
     const prev = this.sent.get(handle.cardId);
-    if (!prev) throw new Error('card session not in memory; caller should send a fresh card');
+    const space = handle.space ?? prev?.space;
+    if (!space) throw new Error('card has no space; caller should send a fresh card');
     const { sdk } = await this.init();
-    const s = await this.space(prev.space);
+    const s = await this.space(space);
+    // After a restart the in-memory record is gone: fetch the message by its id.
+    const message = prev?.message ?? (await s.getMessage?.(handle.ref));
+    if (!message) throw new Error('card message not found; caller should send a fresh card');
     // keep the original URL: the extension keys the bubble by it
-    const next = { ...card, url: prev.url };
-    await s.send(sdk.edit(this.content(next), prev.message));
+    const next = { ...card, url: prev?.url ?? card.url };
+    await s.send(sdk.edit(this.content(next), message));
   }
 }

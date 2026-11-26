@@ -35,6 +35,15 @@ export class CardActions {
       approvals: ApprovalService;
       reminders: RemindersRepo;
       bots: BotsRepo;
+      /** Turn a found bill into a pay_bill approval (Guard runs inside). */
+      payBill?: (input: {
+        userId: string;
+        billId: string;
+        space: NonNullable<CardRow['space']>;
+        card: CardRow;
+      }) => Promise<{ decision: string; reasons?: string[] }>;
+      /** Mark a saved bill not mine, without touching money. */
+      dismissBill?: (userId: string, billId: string) => Promise<{ ok: boolean; error?: string }>;
       now: () => Date;
       log: Logger;
     },
@@ -64,6 +73,55 @@ export class CardActions {
     // Policy decides, not the card: approve happens only through Face ID endpoints.
     if (button.action === 'approve' || button.action === 'unfreeze') {
       throw new ApprovalError(409, 'use_face_id', 'approve with Face ID');
+    }
+    if (button.action === 'pay') {
+      const billId = typeof payload.billId === 'string' ? payload.billId : null;
+      if (!billId || !row.space || !this.d.payBill) {
+        throw new ApprovalError(409, 'not_payable', 'nothing to pay here');
+      }
+      // Same card, same URL: the found bill becomes a Face ID approval in place.
+      if (!(await this.d.cards.claimForApproval(row.id))) {
+        throw new ApprovalError(409, 'already_paid', 'this bill is already waiting for Face ID');
+      }
+      let r: { decision: string; reasons?: string[] };
+      try {
+        r = await this.d.payBill({
+          userId: row.userId,
+          billId,
+          space: row.space,
+          card: row,
+        });
+      } catch (e) {
+        await this.d.cards.update(row.id, { kind: 'info' });
+        throw e;
+      }
+      if (r.decision !== 'allow_with_approval') {
+        await this.d.cards.update(row.id, { kind: 'info' });
+        throw new ApprovalError(409, 'blocked', r.reasons?.[0] ?? "i can't pay this bill yet");
+      }
+      const fresh = await this.d.cards.get(row.id);
+      return { card: toCardDto(fresh ?? row) };
+    }
+    if (button.action === 'dismiss') {
+      const billId = typeof payload.billId === 'string' ? payload.billId : null;
+      if (!billId || !this.d.dismissBill) {
+        throw new ApprovalError(409, 'not_dismissable', 'nothing to dismiss here');
+      }
+      const r = await this.d.dismissBill(row.userId, billId);
+      if (!r.ok) {
+        throw new ApprovalError(409, 'could_not_dismiss', r.error ?? "couldn't dismiss that bill");
+      }
+      const card = await this.d.sender.update(
+        row.id,
+        {
+          state: 'done',
+          type: 'done',
+          title: 'Bill dismissed',
+          buttons: [],
+        },
+        { subcaption: 'dismissed.' },
+      );
+      return { card: card ?? toCardDto(row) };
     }
     if (needsApproval({ button: button.action })) {
       // send: the draft becomes an approval card (same card, same URL)

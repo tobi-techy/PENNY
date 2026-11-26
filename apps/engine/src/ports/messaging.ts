@@ -20,7 +20,8 @@ export type ApprovalCard = {
 };
 export type LiveCard = ApprovalCard;
 
-export type CardHandle = { cardId: string; ref: string };
+/** Where a live card went. Persisted so a restarted engine can find it again. */
+export type CardHandle = { cardId: string; ref: string; space?: SpaceRef };
 
 export interface MessagingPort {
   sendText(space: SpaceRef, text: string): Promise<void>;

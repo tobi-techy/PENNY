@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  serial,
   text,
   timestamp,
   uniqueIndex,
@@ -34,6 +35,11 @@ export const users = pgTable(
     enrolledDryRun: boolean('enrolled_dry_run').notNull().default(false),
     /** Set by "freeze": every approval fails until the user texts "unfreeze". */
     frozenAt: ts('frozen_at'),
+    /**
+     * A /demo session's throwaway user. Its account id is never created on chain, so
+     * chain writes are refused for it (ports/demo-chain.ts) and the sweeper deletes it.
+     */
+    isDemo: boolean('is_demo').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('users_handle_uq').on(t.handle), uniqueIndex('users_slug_uq').on(t.slug)],
@@ -412,6 +418,84 @@ export const moods = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.botSlug] })],
 );
 
+/**
+ * How proactive Penny is allowed to be with this user. A score, not a switch:
+ * a reply to a follow-up moves it up, silence moves it down, "be quiet" sets it
+ * to zero. Quiet hours are local time. See brain/followup.ts.
+ */
+export const followups = pgTable('followups', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => users.id),
+  score: integer('score').notNull().default(50),
+  quietStart: text('quiet_start').notNull().default('20:00'),
+  quietEnd: text('quiet_end').notNull().default('08:00'),
+  /** IANA zone for quiet hours; null = the engine's PENNY_TIMEZONE. */
+  timezone: text('timezone'),
+  createdAt: createdAt(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
+/**
+ * A thread the user left open: something Penny offered, a decision they did not
+ * make, a goal they mentioned, an errand in flight. The scheduler follows up at
+ * most twice, in daylight, the way an assistant would. Never a to-do app.
+ */
+export const openLoops = pgTable(
+  'open_loops',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    kind: text('kind', { enum: ['asked', 'decision', 'goal', 'errand'] }).notNull(),
+    /** Short noun phrase, e.g. "book the dentist". Shown to the model, never the user raw. */
+    summary: text('summary').notNull(),
+    source: text('source', { enum: ['turn', 'user'] })
+      .notNull()
+      .default('turn'),
+    status: text('status', { enum: ['open', 'done', 'dropped'] })
+      .notNull()
+      .default('open'),
+    dueAt: ts('due_at').notNull(),
+    nudgeCount: integer('nudge_count').notNull().default(0),
+    lastNudgedAt: ts('last_nudged_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('open_loops_user_idx').on(t.userId, t.status, t.dueAt),
+    index('open_loops_due_idx').on(t.status, t.dueAt),
+  ],
+);
+
+/**
+ * Every text Penny sent first. Outcomes are how the follow-up calibration works:
+ * replied (good), ignored (too eager), stopped (quiet).
+ */
+export const proactiveMessages = pgTable(
+  'proactive_messages',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    text: text('text').notNull(),
+    loopIds: text('loop_ids').array().notNull().default(sql`'{}'::text[]`),
+    sentAt: ts('sent_at').notNull().defaultNow(),
+    repliedAt: ts('replied_at'),
+    settledAt: ts('settled_at'),
+    outcome: text('outcome', { enum: ['pending', 'replied', 'ignored', 'stopped'] })
+      .notNull()
+      .default('pending'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('proactive_user_idx').on(t.userId, t.sentAt),
+    index('proactive_pending_idx').on(t.outcome, t.sentAt),
+  ],
+);
+
 export const soulsChangelog = pgTable('souls_changelog', {
   id: text('id').primaryKey(),
   botId: text('bot_id').notNull(),
@@ -477,12 +561,95 @@ export const bills = pgTable(
       .notNull()
       .default('open'),
     notifiedAt: ts('notified_at'),
+    /** The recurring obligation this bill belongs to, when Penny has seen one before. */
+    commitmentId: text('commitment_id').references(() => commitments.id),
     createdAt: createdAt(),
   },
   (t) => [
     uniqueIndex('bills_user_source_uq').on(t.userId, t.sourceKey),
     index('bills_user_status_idx').on(t.userId, t.status),
+    index('bills_commitment_idx').on(t.commitmentId),
   ],
+);
+
+/**
+ * One recurring obligation per biller (or payee when the biller is unknown):
+ * the thing that survives from the first email to the next bill, the receipt,
+ * and the month after. Penny follows up on it unprompted. It moves no money.
+ */
+export const commitments = pgTable(
+  'commitments',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    /** Stable identity: biller:<id> or payee:<normalized name>:<currency>. */
+    key: text('key').notNull(),
+    billerId: text('biller_id'),
+    payeeName: text('payee_name').notNull(),
+    currency: text('currency', { enum: ['NGN', 'USD'] }),
+    /** Inferred from the gap between bill emails: weekly, monthly or yearly. */
+    cadence: text('cadence', { enum: ['weekly', 'monthly', 'yearly'] }),
+    /** The observed gap in days, for "last month" wording and diagnostics. */
+    cadenceDays: integer('cadence_days'),
+    lastBillId: text('last_bill_id'),
+    lastAmount: text('last_amount'),
+    lastDueOn: text('last_due_on'),
+    /** YYYY-MM-DD of the latest bill email, used to predict the next one. */
+    lastReceivedOn: text('last_received_on'),
+    /** The date the next bill email is expected, YYYY-MM-DD. */
+    nextExpectedOn: text('next_expected_on'),
+    seenCount: integer('seen_count').notNull().default(1),
+    paidCount: integer('paid_count').notNull().default(0),
+    lastPaidAt: ts('last_paid_at'),
+    lastPaidAmount: text('last_paid_amount'),
+    lastReceiptTx: text('last_receipt_tx'),
+    status: text('status', { enum: ['active', 'paused'] })
+      .notNull()
+      .default('active'),
+    /** The expected date already texted about, so one cycle never repeats. */
+    lastExpectedFor: text('last_expected_for'),
+    /** The expected date already marked late, so the nudge is sent once. */
+    lastMissingFor: text('last_missing_for'),
+    lastFollowUpAt: ts('last_follow_up_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('commitments_user_key_uq').on(t.userId, t.key),
+    index('commitments_user_status_idx').on(t.userId, t.status),
+    index('commitments_followup_idx').on(t.status, t.nextExpectedOn),
+  ],
+);
+
+/** Append-only history of what Penny noticed and did for each commitment. */
+export const commitmentEvents = pgTable(
+  'commitment_events',
+  {
+    id: text('id').primaryKey(),
+    commitmentId: text('commitment_id')
+      .notNull()
+      .references(() => commitments.id),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    kind: text('kind', {
+      enum: [
+        'opened',
+        'bill',
+        'amount_changed',
+        'paid',
+        'expected',
+        'missing',
+        'paused',
+        'resumed',
+      ],
+    }).notNull(),
+    detail: jsonb('detail').$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('commitment_events_idx').on(t.commitmentId, t.createdAt)],
 );
 
 /**
@@ -496,6 +663,8 @@ export const connectWatches = pgTable(
       .notNull()
       .references(() => users.id),
     toolkit: text('toolkit').notNull(),
+    /** The card that carried the link, so its state can change when the app connects. */
+    cardId: text('card_id'),
     status: text('status', { enum: ['waiting', 'connected', 'expired'] })
       .notNull()
       .default('waiting'),
@@ -506,6 +675,48 @@ export const connectWatches = pgTable(
     primaryKey({ columns: [t.userId, t.toolkit] }),
     index('connect_watches_status_idx').on(t.status, t.expiresAt),
   ],
+);
+
+/**
+ * Public demo (/demo). A judge's throwaway thread: it runs the real Guard, the real
+ * approval path and the real card renderer, but the account id is borrowed from
+ * PENNY_DEMO_ACCOUNT and the browser's device key is never added on chain, so an
+ * approval stops at "verified" and is never broadcast (ports/demo-chain.ts).
+ */
+export const demoSessions = pgTable(
+  'demo_sessions',
+  {
+    /** 43-char capability token. The browser holds it; every read is scoped to it. */
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id),
+    conversationId: text('conversation_id'),
+    /** Turns spent, so one session cannot run up an unbounded model bill. */
+    turns: integer('turns').notNull().default(0),
+    expiresAt: ts('expires_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('demo_sessions_expiry_idx').on(t.expiresAt)],
+);
+
+export const demoMessages = pgTable(
+  'demo_messages',
+  {
+    /** Monotonic: keeps send order inside the same millisecond. */
+    seq: serial('seq').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => demoSessions.id, { onDelete: 'cascade' }),
+    direction: text('direction', { enum: ['inbound', 'outbound'] }).notNull(),
+    kind: text('kind', { enum: ['text', 'card', 'typing'] }).notNull(),
+    text: text('text'),
+    /** /a/<token> for kind = card: the browser renders the same card the phone gets. */
+    url: text('url'),
+    cardId: text('card_id'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('demo_messages_session_idx').on(t.sessionId, t.seq)],
 );
 
 export const schema = {
@@ -526,9 +737,16 @@ export const schema = {
   ledgerEntries,
   memories,
   moods,
+  followups,
+  openLoops,
+  proactiveMessages,
   soulsChangelog,
   idempotencyKeys,
   webhookEvents,
   bills,
+  commitments,
+  commitmentEvents,
   connectWatches,
+  demoSessions,
+  demoMessages,
 };

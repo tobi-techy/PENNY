@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { approvalPill, type Card, cardStyle, crewColor } from '@penny/shared';
+import { approvalPill, type Card, cardStyle, crewColor, settledPill } from '@penny/shared';
 
 /**
  * Server-side card picture (1200x630 PNG) for link cards (og:image) and the
@@ -186,15 +186,24 @@ export function buildCardSvg(card: Card, now: Date): string {
   if (card.kind === 'approval') {
     const label = approvalPill(card.state);
     if (card.state === 'ready') pill = { label: label ?? '', bg: '#FFFFFF', fg: '#111519' };
-    else if (card.state === 'sent') pill = { label: 'Sent', bg: C.okBg, fg: C.ok };
+    else if (card.state === 'sent' || card.state === 'done')
+      pill = { label: settledPill(card.type), bg: C.okBg, fg: C.ok };
     else if (card.state === 'blocked') pill = { label: label ?? 'Not me', bg: C.redBg, fg: C.red };
     else if (label) pill = { label, bg: '#FFFFFF1F', fg: C.ink };
     else if (card.state === 'declined')
       pill = { label: 'You said no. Nothing moved.', bg: '#FFFFFF14', fg: C.meta };
     else if (card.state === 'failed')
       pill = { label: "Didn't go through. Nothing moved.", bg: '#FFFFFF14', fg: C.meta };
+  } else if (card.state === 'done' && card.buttons.length === 0) {
+    pill = { label: settledPill(card.type), bg: C.okBg, fg: C.ok };
   } else if (card.buttons.length) {
-    pill = { label: card.buttons.map((b) => b.label).join('  ·  '), bg: '#FFFFFF1F', fg: C.ink };
+    // A Face ID action is the one white pill, exactly as on the live card.
+    const faceId = card.buttons.some((b) => b.action === 'unfreeze');
+    pill = {
+      label: card.buttons.map((b) => b.label).join('  ·  '),
+      bg: faceId ? '#FFFFFF' : '#FFFFFF1F',
+      fg: faceId ? '#111519' : C.ink,
+    };
   }
   if (pill) {
     parts.push(

@@ -11,7 +11,7 @@ export const INFO_CARD_TTL_MS = 24 * 60 * 60_000;
 export const EDIT_BACKOFF_MS = [200, 800, 2_000] as const;
 /** Link cards can't change in place; Penny sends a fresh one for these states only. */
 /** Only the outcome of something the user did; an unanswered card expiring sends nothing. */
-const LINK_RESEND_STATES: ReadonlySet<CardState> = new Set(['sent', 'blocked', 'failed']);
+const LINK_RESEND_STATES: ReadonlySet<CardState> = new Set(['done', 'sent', 'blocked', 'failed']);
 
 export type Channel = 'live' | 'link';
 
@@ -122,7 +122,7 @@ export class CardSender {
     space: SpaceRef;
     toolkit: string;
     connectUrl: string;
-  }): Promise<{ token: string; url: string }> {
+  }): Promise<{ token: string; url: string; cardId: string }> {
     const token = randomToken(32);
     const now = this.d.now();
     const name = input.toolkit === 'gmail' ? 'Gmail' : input.toolkit;
@@ -137,7 +137,7 @@ export class CardSender {
         { label: 'What', value: `Penny can watch your ${name}` },
         { label: 'Promise', value: 'nothing is sent without your ok' },
       ],
-      buttons: [],
+      buttons: [{ id: 'continue', label: 'Continue', action: 'open' }],
       state: 'ready',
       approvalId: null,
       tokenHash: sha256Hex(token),
@@ -148,12 +148,17 @@ export class CardSender {
       expiresAt: null,
     });
     this.remember(row.id, token);
-    return { token, url: `${this.d.publicBaseUrl.replace(/\/$/, '')}/c/${token}` };
+    return { token, url: `${this.d.publicBaseUrl.replace(/\/$/, '')}/c/${token}`, cardId: row.id };
   }
 
-  async send(
-    input: NewCard,
-  ): Promise<{ card: Card; token: string; url: string; channel: Channel; ref?: string }> {
+  async send(input: NewCard): Promise<{
+    card: Card;
+    token: string;
+    url: string;
+    channel: Channel;
+    ref?: string;
+    delivered: boolean;
+  }> {
     const device =
       input.forDevice !== undefined
         ? input.forDevice
@@ -188,8 +193,15 @@ export class CardSender {
     const card = toCardDto(row);
     const url = this.url(tok.token);
     this.remember(row.id, tok.token);
-    const ref = await this.deliver(row, card, url, input.subcaption, true);
-    return { card, token: tok.token, url, channel, ...(ref ? { ref } : {}) };
+    const delivery = await this.deliver(row, card, url, input.subcaption, true);
+    return {
+      card,
+      token: tok.token,
+      url,
+      channel,
+      ...(delivery.ref ? { ref: delivery.ref } : {}),
+      delivered: delivery.delivered,
+    };
   }
 
   /**
@@ -217,7 +229,17 @@ export class CardSender {
     if (!row) return null;
     const card = toCardDto(row);
     const stateChanged = before.state !== row.state;
-    const token = opts.token ?? this.tokens.get(cardId);
+    let token = opts.token ?? this.tokens.get(cardId);
+    // A link card's token is memory-only. After a restart (or cache eviction) mint
+    // a fresh one and replace the hash, so the update still arrives as a card.
+    if (row.channel === 'link' && stateChanged && LINK_RESEND_STATES.has(card.state)) {
+      if (!token && row.space) {
+        token = randomToken(32);
+        const rotated = await this.d.cards.update(cardId, { tokenHash: sha256Hex(token) });
+        if (rotated) this.remember(cardId, token);
+        else token = undefined;
+      }
+    }
     if (row.channel === 'link') {
       if (stateChanged && LINK_RESEND_STATES.has(card.state) && row.space && token) {
         await this.deliver(row, card, this.url(token), opts.subcaption, false);
@@ -263,16 +285,17 @@ export class CardSender {
     url: string,
     subcaption: string | undefined,
     first: boolean,
-  ): Promise<string | undefined> {
+  ): Promise<{ ref?: string; delivered: boolean }> {
     const space = row.space;
-    if (!space) return undefined;
+    if (!space) return { delivered: false };
     if (row.channel === 'link') {
       // iMessage turns the URL into a picture card from the page's Open Graph tags.
       // A version suffix makes iMessage fetch the new picture instead of a cached one.
       const n = (this.linkSends.get(row.id) ?? 0) + 1;
       this.linkSends.set(row.id, n);
-      await this.safeText(space, first ? url : `${url}?v=${card.state}-${n}`);
-      return undefined;
+      return {
+        delivered: await this.safeText(space, first ? url : `${url}?v=${card.state}-${n}`),
+      };
     }
     try {
       const handle = await this.d.messaging.sendCard(
@@ -282,22 +305,23 @@ export class CardSender {
       this.handles.set(row.id, handle);
       // persisted so a restarted engine can still try an in-place edit
       await this.d.cards.update(row.id, { messageRef: handle.ref }).catch(() => null);
-      return handle.ref;
+      return { ref: handle.ref, delivered: true };
     } catch (e) {
       // the live card didn't go out: send the same card as a picture link so the user still gets it
       this.d.log.error(
         { err: (e as Error).message, cardId: row.id },
         'live card failed; sending link',
       );
-      await this.safeText(space, url);
-      return undefined;
+      return { delivered: await this.safeText(space, url) };
     }
   }
 
   private async editLive(row: CardRow, card: Card, subcaption?: string, token?: string) {
     const handle =
       this.handles.get(row.id) ??
-      (row.messageRef ? { cardId: row.id, ref: row.messageRef } : undefined);
+      (row.messageRef
+        ? { cardId: row.id, ref: row.messageRef, ...(row.space ? { space: row.space } : {}) }
+        : undefined);
     const sleep = this.d.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     // The edit keeps the original URL; the url field here is only used for a resend.
     const url = token ? this.url(token) : '';
@@ -327,11 +351,13 @@ export class CardSender {
     }
   }
 
-  private async safeText(space: SpaceRef, text: string) {
+  private async safeText(space: SpaceRef, text: string): Promise<boolean> {
     try {
       await this.d.messaging.sendText(space, text);
+      return true;
     } catch (e) {
       this.d.log.error({ err: (e as Error).message }, 'text send failed');
+      return false;
     }
   }
 }

@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { countdown, pillFor, readCard, styleFor, tokenFromPath } from '../src/cardView.ts';
+import { readFileSync } from 'node:fs';
+import {
+  countdown,
+  pillFor,
+  readCard,
+  settledFor,
+  styleFor,
+  tokenFromPath,
+} from '../src/cardView.ts';
 import { authenticationOptions, registrationOptions } from '../src/keys/passkey.ts';
 
 // a made-up 43-char base64url card token (built, not a literal, so it never looks like a secret)
@@ -20,7 +28,7 @@ describe('link card page', () => {
     });
     expect(c?.lines).toEqual([{ value: 'Take a coat' }]);
     expect(c?.state).toBe('done');
-    expect(styleFor('weather')).toEqual({ color: '#B1C3D8', tag: 'PENNY', known: false });
+    expect(styleFor('weather')).toEqual({ color: '#B1C3D8', tag: '● PENNY', known: false });
     expect(readCard({ lines: [] })).toBeNull();
   });
 
@@ -29,6 +37,46 @@ describe('link card page', () => {
     expect(
       readCard({ title: 'x', receiptUrl: 'https://testnet.nearblocks.io/txns/a' })?.receiptUrl,
     ).toBe('https://testnet.nearblocks.io/txns/a');
+  });
+
+  test('every engine card type has its own style', () => {
+    for (const type of ['connect', 'setup', 'unfreeze', 'found', 'new_bot', 'email_draft']) {
+      expect(styleFor(type).known).toBe(true);
+    }
+    expect(styleFor('connect').tag).toBe('⇢ CONNECT');
+    expect(styleFor('setup').tag).toBe('◈ SET UP');
+    expect(styleFor('unfreeze').tag).toBe('◆ UNFREEZE');
+  });
+
+  test('the checked-in contract fixture matches this page', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL('../../../packages/shared/contracts/card-contract.json', import.meta.url),
+        'utf8',
+      ),
+    ) as {
+      plain: { color: string; tag: string };
+      types: { type: string; color: string; tag: string; settled: string }[];
+      pills: Record<string, string>;
+    };
+    for (const t of fixture.types) {
+      expect(styleFor(t.type)).toEqual({ color: t.color, tag: t.tag, known: true });
+      expect(settledFor(t.type)).toBe(t.settled);
+    }
+    expect(styleFor('weather')).toEqual({ ...fixture.plain, known: false });
+    for (const [state, pill] of Object.entries(fixture.pills)) {
+      expect(pillFor(state as Parameters<typeof pillFor>[0])).toBe(pill);
+    }
+  });
+
+  test('finished cards name their own outcome', () => {
+    expect(settledFor('pay_bill')).toBe('Paid');
+    expect(settledFor('new_bot')).toBe('Created');
+    expect(settledFor('unfreeze')).toBe('Unfrozen');
+    expect(settledFor('found')).toBe('Found');
+    expect(pillFor('sent', 'pay_bill')).toBe('Paid');
+    expect(pillFor('done', 'new_bot')).toBe('Created');
+    expect(pillFor('sent')).toBe('Sent');
   });
 
   test('pills and countdown in plain words', () => {

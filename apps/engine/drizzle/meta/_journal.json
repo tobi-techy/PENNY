@@ -71,6 +71,34 @@
       "when": 1794312926464,
       "tag": "0009_bill_payment_claim",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794406551260,
+      "tag": "0010_tough_lester",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794409901209,
+      "tag": "0011_commitments",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794412000000,
+      "tag": "0012_connect_card",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794416204904,
+      "tag": "0013_amazing_the_spike",
+      "breakpoints": true
     }
   ]
 }

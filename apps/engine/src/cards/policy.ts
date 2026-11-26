@@ -18,10 +18,12 @@ export const APPROVAL_POLICY: Readonly<Record<string, boolean>> = {
   propose_split: false, // a nudge card only; no money moves
   find_bills: false,
   list_bills: false,
+  manage_commitments: false, // watch/pause local commitments; no money moves
   list_reminders: false,
   connect_app: false, // sends the user a link to connect; acts only after they do it themselves
   remember: false,
   recall: false,
+  close_open_loop: false, // settles Penny's own follow-up list
   set_mood: false,
   read_github: false,
   read_x: false,
@@ -60,9 +62,11 @@ const BUTTON_POLICY: Readonly<Record<string, boolean>> = {
   decline: false,
   renew: false,
   freeze: false, // freezing only takes power away; it never needs Face ID
+  dismiss: false, // closes a saved bill inside Penny; no money moves
   send: true,
   approve: true,
   unfreeze: true, // gives power back: Face ID on the card, never a plain press
+  pay: true, // a bill card turns into a Face ID approval card first
 };
 
 export type PolicyAction =

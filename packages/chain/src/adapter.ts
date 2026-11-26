@@ -103,7 +103,7 @@ export interface ChainAdapterOptions {
    * dollar (tUSD) so the same ft_transfer path runs with a token the user owns.
    */
   usdcContract?: string;
-  /** Shared Guard contract (contracts/guard), e.g. guard.penny.testnet. Unset = autopilot off. */
+  /** Shared Guard contract (contracts/guard), e.g. guard.penny.testnet. Unset = no shared Guard check. */
   guardContract?: string;
   now?: () => Date;
 }

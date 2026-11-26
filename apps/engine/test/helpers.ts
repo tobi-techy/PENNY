@@ -9,7 +9,7 @@ import { createPgliteDb, type DbHandle } from '../src/db/client.ts';
 import { createLogger } from '../src/lib/logger.ts';
 import { FakeInvest } from '../src/market/invest.ts';
 import { FakeChain } from '../src/ports/chain.ts';
-import { FakeMessaging, type SpaceRef } from '../src/ports/messaging.ts';
+import { FakeMessaging, type MessagingPort, type SpaceRef } from '../src/ports/messaging.ts';
 
 export const WEBHOOK_SECRET = 'a'.repeat(64);
 
@@ -75,12 +75,15 @@ export async function makeEngine(
     chat?: LanguageModel;
     connectors?: import('../src/connectors/composio.ts').ConnectorPort;
     privacy?: import('../src/brain/attestation.ts').PrivacyGate;
+    /** Wrap the engine's transport (the /demo router does this in production). */
+    messagingWrap?: (inner: FakeMessaging, db: DbHandle) => MessagingPort;
     extra?: Partial<EngineDeps>;
   } = {},
 ): Promise<TestEngine> {
   const db = await createPgliteDb();
   const chain = new FakeChain();
   const messaging = new FakeMessaging();
+  const messagingPort = opts.messagingWrap ? opts.messagingWrap(messaging, db) : messaging;
   const invest = new FakeInvest(
     () => clock.now,
     (quoteId, dep) => chain.investDeposits.set(quoteId, dep),
@@ -94,7 +97,7 @@ export async function makeEngine(
     createEngine({
       db: db.db,
       chain,
-      messaging,
+      messaging: messagingPort,
       models,
       embedder: new FakeEmbedder(),
       market: new FakeMarket(() => clock.now),

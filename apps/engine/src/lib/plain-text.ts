@@ -32,3 +32,26 @@ export function stripEmoji(text: string): string {
 export function hasEmoji(text: string): boolean {
   return /\p{Extended_Pictographic}/u.test(text);
 }
+
+const URL_RE = /\bhttps?:\/\/[^\s<>()]+/gi;
+
+/** URLs the user typed in this turn. */
+export function urlsIn(text: string): string[] {
+  return text.match(URL_RE) ?? [];
+}
+
+/**
+ * Penny sends links as cards. A model reply must not carry a raw URL unless the
+ * user just sent that same URL; strip the rest, then tidy what the removal left.
+ */
+export function stripExternalLinks(text: string, allow: readonly string[] = []): string {
+  const allowed = new Set(allow);
+  return text
+    .replace(URL_RE, (u) => (allowed.has(u) ? u : ''))
+    .replace(/\(\s*\)/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]+([.,!?])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
